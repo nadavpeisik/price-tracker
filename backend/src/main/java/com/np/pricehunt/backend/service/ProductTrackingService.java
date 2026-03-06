@@ -1,5 +1,6 @@
 package com.np.pricehunt.backend.service;
 
+import com.np.pricehunt.backend.client.ScraperClient;
 import com.np.pricehunt.backend.domain.PriceRecord;
 import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.domain.TrackedItem;
@@ -21,14 +22,15 @@ public class ProductTrackingService {
     private final TrackedItemRepository trackedItemRepository;
     private final PriceRecordRepository priceRecordRepository;
     private final PriceExtractionService extractionService;
+    private final ScraperClient scraperClient;
 
     @Transactional
     public String trackNewUrl(String url) {
-        // 1. Mock Scraper Output
-        String mockHtml = "<html><body>Price: $199.99 USD</body></html>";
+        // 1. Scrape the page via the Python scraper service
+        String innerText = scraperClient.scrape(url);
 
-        // 2. AI Extraction - Now uses the DTO correctly
-        PriceInfo info = extractionService.extractPrice(mockHtml);
+        // 2. AI Extraction
+        PriceInfo info = extractionService.extractPrice(innerText);
 
         // 3. Logic: Check if product exists, or create new
         Product product = productRepository.findByNameIgnoreCase("Super Gadget")
