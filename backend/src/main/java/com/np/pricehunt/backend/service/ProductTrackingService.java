@@ -4,16 +4,19 @@ import com.np.pricehunt.backend.client.ScraperClient;
 import com.np.pricehunt.backend.domain.PriceRecord;
 import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.domain.TrackedItem;
-import com.np.pricehunt.backend.dto.PriceInfo;
+import com.np.pricehunt.backend.dto.*;
 import com.np.pricehunt.backend.repository.PriceRecordRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
+import org.springframework.web.server.ResponseStatusException;
 
-import java.time.LocalDateTime;
+import java.net.URI;
+import java.net.URISyntaxException;
 
 @Service
 @RequiredArgsConstructor
@@ -26,39 +29,89 @@ public class ProductTrackingService {
     private final ScraperClient scraperClient;
 
     @Transactional
-    public String trackNewUrl(String url) {
-        // 1. Scrape the page via the Python scraper service
-        String innerText = scraperClient.scrape(url);
-        if (!StringUtils.hasText(innerText)) {
-            return "";
-        }
+    public CreateProductResponse createProduct(CreateProductRequest request) {
+        Product product = productRepository.save(Product.builder()
+                .name(request.name())
+                .build());
+        return new CreateProductResponse(product.getId(), product.getName());
+    }
 
-        // 2. AI Extraction
+    @Transactional
+    public TrackResponse trackUrl(Long productId, TrackRequest request) {
+        Product product = productRepository.findById(productId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found"));
+
+        TrackedItem item = resolveTrackedItem(product, request);
+
+        String innerText = scraperClient.scrape(request.url());
         PriceInfo info = extractionService.extractPrice(innerText);
 
-        // 3. Logic: Check if product exists, or create new
-        Product product = productRepository.findByNameIgnoreCase("Super Gadget")
-                .orElseGet(() -> productRepository.save(Product.builder()
-                        .name("Super Gadget")
-                        .description("AI Extracted Product")
-                        .build()));
-
-        // 4. Create the Shop Link (TrackedItem)
-        TrackedItem item = trackedItemRepository.findByUrl(url)
-                .orElseGet(() -> trackedItemRepository.save(TrackedItem.builder()
-                        .url(url)
-                        .shopName("Auto-Detected Shop")
-                        .product(product)
-                        .build()));
-
-        // 5. Save the History (PriceRecord)
-        priceRecordRepository.save(PriceRecord.builder()
+        PriceRecord record = priceRecordRepository.save(PriceRecord.builder()
                 .price(info.price())
+                .currency(info.currency())
                 .available(info.available())
-                .timestamp(LocalDateTime.now())
                 .trackedItem(item)
                 .build());
 
-        return "Successfully tracking " + product.getName() + " at " + info.price();
+        return buildTrackResponse(product, item, record);
+    }
+
+    @Transactional
+    public TrackResponse updateTrackedItem(Long productId, Long itemId, UpdateTrackedItemRequest request) {
+        TrackedItem item = trackedItemRepository.findById(itemId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found"));
+
+        if (!item.getProduct().getId().equals(productId)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found for this product");
+        }
+
+        if (StringUtils.hasText(request.shopName())) {
+            item.setShopName(request.shopName());
+            trackedItemRepository.save(item);
+        }
+
+        PriceRecord latest = priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item).orElse(null);
+        return buildTrackResponse(item.getProduct(), item, latest);
+    }
+
+    private TrackedItem resolveTrackedItem(Product product, TrackRequest request) {
+        return trackedItemRepository.findByUrl(request.url())
+                .map(existing -> {
+                    if (!existing.getProduct().getId().equals(product.getId())) {
+                        throw new ResponseStatusException(HttpStatus.CONFLICT,
+                                "URL already tracked under product: " + existing.getProduct().getName());
+                    }
+                    return existing;
+                })
+                .orElseGet(() -> trackedItemRepository.save(TrackedItem.builder()
+                        .url(request.url())
+                        .shopName(resolveShopName(request.url(), request.shopName()))
+                        .product(product)
+                        .build()));
+    }
+
+    private String resolveShopName(String url, String providedShopName) {
+        if (StringUtils.hasText(providedShopName)) return providedShopName;
+        try {
+            String host = new URI(url).getHost();
+            if (host == null) return url;
+            return host.replaceFirst("^www\\.", "");
+        } catch (URISyntaxException e) {
+            return url;
+        }
+    }
+
+    private TrackResponse buildTrackResponse(Product product, TrackedItem item, PriceRecord record) {
+        return new TrackResponse(
+                product.getId(),
+                product.getName(),
+                item.getId(),
+                item.getUrl(),
+                item.getShopName(),
+                record != null ? record.getPrice() : null,
+                record != null ? record.getCurrency() : null,
+                record != null && record.isAvailable(),
+                record != null ? record.getTimestamp() : null
+        );
     }
 }
