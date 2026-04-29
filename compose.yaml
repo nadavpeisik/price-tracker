@@ -11,3 +11,8 @@ services:
       - 'POSTGRES_USER=myuser'
     ports:
       - '5432'
+  scraper:
+    build:
+      context: ./scraper
+    ports:
+      - '8001:8001'

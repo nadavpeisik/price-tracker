@@ -23,6 +23,8 @@ public class PriceRecord {
     @Column(precision = 19, scale = 4, nullable = false)
     private BigDecimal price;
 
+    private String currency;
+
     @Column(nullable = false)
     private LocalDateTime timestamp;
 
