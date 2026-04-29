@@ -11,6 +11,7 @@ import com.np.pricehunt.backend.repository.TrackedItemRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 
@@ -28,6 +29,9 @@ public class ProductTrackingService {
     public String trackNewUrl(String url) {
         // 1. Scrape the page via the Python scraper service
         String innerText = scraperClient.scrape(url);
+        if (!StringUtils.hasText(innerText)) {
+            return "";
+        }
 
         // 2. AI Extraction
         PriceInfo info = extractionService.extractPrice(innerText);

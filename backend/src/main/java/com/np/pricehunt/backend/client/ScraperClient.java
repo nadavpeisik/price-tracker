@@ -22,7 +22,7 @@ public class ScraperClient {
                 .body(new ScrapeRequest(url))
                 .retrieve()
                 .body(ScrapeResponse.class);
-        return response.innerText();
+        return response != null ? response.innerText() : "";
     }
 
     private record ScrapeRequest(String url) {}
