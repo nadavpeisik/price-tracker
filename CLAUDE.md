@@ -35,26 +35,45 @@ price-tracker/
 **Flow for the main use case (track a product URL):**
 1. `POST /api/products/track` hits `ProductController`
 2. `ProductTrackingService.trackNewUrl()` orchestrates the workflow (transactional):
-   - Calls `ScraperClient` → `POST http://localhost:8001/scrape` → Python Playwright scraper returns `innerText`
-   - Calls `PriceExtractionService` → `OllamaPriceExtractionService` sends innerText to local Ollama LLM and maps structured JSON response to `PriceInfo` record
+   - Calls `ScraperClient` → `POST http://localhost:8001/scrape` → Python Playwright scraper returns `ScrapeResponse`
+   - Calls `PriceExtractionService` → `PriceExtractionOrchestrator` routes based on `extractionSource` (see waterfall below)
+   - Validates the extracted `PriceInfo` before saving (non-zero, delta check, currency consistency)
    - Upserts `Product` and `TrackedItem` (by URL) in Postgres
-   - Appends a new `PriceRecord` with the extracted price and timestamp
+   - Appends a new `PriceRecord` with the extracted price, timestamp, and `extractionSource`
+
+**Price extraction waterfall** (each tier attempted in order; first success short-circuits):
+```
+Pre-step            — DOM pruning in scraper   → strips nav/footer/ads/scripts from the live DOM
+Tier 1 (STRUCTURED) — JSON-LD / Schema.org     → returns structured PriceData directly; no LLM called
+Tier 2 (SNIPPET)    — CSS/meta selectors       → returns a ~100–500 char snippet; LLM called on snippet
+Tier 3 (FULLTEXT)   — Regex line-filter        → filterLines() reduces pruned innerText to ~2000 chars; LLM called
+```
+The scraper response carries an `extractionSource` enum (`STRUCTURED | SNIPPET | FULLTEXT`) so the backend knows which path to take without inspecting the content.
 
 **Domain model:**
 - `Product` — has many `TrackedItem`s (cascade ALL, orphanRemoval)
 - `TrackedItem` — belongs to a `Product`, has a `url` + `shopName`, has many `PriceRecord`s
-- `PriceRecord` — immutable price snapshot (BigDecimal, LocalDateTime set via `@PrePersist`, availability flag)
-- `PriceInfo` — Java record DTO returned by the AI extraction layer
+- `PriceRecord` — immutable price snapshot (BigDecimal, LocalDateTime set via `@PrePersist`, availability flag, `extractionSource`)
+- `PriceInfo` — Java record DTO carrying `price`, `currency`, `available`, and `extractionSource`
+- `ExtractionSource` — shared enum (`STRUCTURED | SNIPPET | FULLTEXT`) used across `ScrapeResponse`, `PriceInfo`, and `PriceRecord`
 
 **Python scraper service (`scraper/`):**
-- FastAPI app, single endpoint `POST /scrape { "url" }` → `{ "innerText" }`
-- Uses Playwright (headless Chromium) to load the page and return `body.innerText` — raw text only, keeping Ollama context window lean
+- FastAPI app, single endpoint `POST /scrape { "url" }` → `ScrapeResponse { extractionSource, priceData?, snippet?, innerText? }`
+- Runs DOM pruning, then tries Tier 1 (JSON-LD), Tier 2 (CSS selectors), falls back to Tier 3 (pruned innerText)
+- Each tier wrapped in `try/except` — failure falls through to the next tier
 - `ScraperClient.java` (`client/` package) wraps `RestClient` calls to it, URL configured via `scraper.base-url`
 
 **AI integration:**
-- `PriceExtractionService` is an interface; `OllamaPriceExtractionService` is the only implementation
+- `PriceExtractionService` is an interface; `PriceExtractionOrchestrator` is the `@Primary` implementation (routes the waterfall)
+- `OllamaPriceExtractionService` is a plain `@Service` (not the interface impl) — called only for SNIPPET and FULLTEXT paths
 - Uses Spring AI `ChatClient` with structured output to parse LLM responses directly into `PriceInfo`
 - Ollama runs locally via Docker Compose (no external API keys required)
+
+**Validation layer** (in `ProductTrackingService`, before saving `PriceRecord`):
+- Price must be > 0
+- If a prior price exists for the `TrackedItem` **and the currency matches**, new price must not differ by more than 200% (i.e. no more than 3x the previous price) — configurable via `price.validation.max-delta-percent` in `application.properties`
+- Delta check is skipped entirely if the currency changed (cross-currency comparison is meaningless)
+- Currency change is logged as a warning; does not block the save
 
 ## Key Conventions
 
@@ -68,10 +87,14 @@ price-tracker/
 
 **Phase 1 (done):** Synchronous HTTP pipeline — user submits URL → Spring Boot calls Python scraper → Ollama extracts price → stored in Postgres.
 
-**Phase 2 (next):** Kafka async pipeline. Replace synchronous scraper call with:
+**Phase 1.5 (in progress):** Efficient price extraction waterfall — DOM pruning + JSON-LD → CSS selectors → regex-filtered LLM fallback. Eliminates LLM calls for most major e-commerce sites.
+
+**Phase 1.6 (next after waterfall):** Selector caching — when LLM fires, it also returns the CSS selector it found the price in; stored on `TrackedItem`; subsequent checks use the selector directly and skip the waterfall entirely. Self-heals if selector stops returning data.
+
+**Phase 2 (future):** Kafka async pipeline. Replace synchronous scraper call with:
 - Spring Boot publishes `ScrapeRequestedEvent` to `price-tracker.scrape-requests` topic
 - Python scraper consumes, scrapes, publishes `ScrapeCompletedEvent` to `price-tracker.scrape-results`
-- Spring Boot consumes result, calls Ollama, saves `PriceRecord`
+- Spring Boot consumes result, calls Ollama if needed, saves `PriceRecord`
 - `POST /api/products/track` returns `202 Accepted` with a `requestId`
 - `PriceCheckScheduler` (`@Scheduled`) publishes events for all active `TrackedItem`s hourly
 
@@ -79,7 +102,7 @@ price-tracker/
 
 ## Infrastructure
 
-- **Database:** PostgreSQL — credentials in `compose.yaml` (`myuser`/`secret`, db `mydatabase`)
+- **Database:** PostgreSQL — credentials in `compose.yaml` (do not commit credentials to git)
 - **LLM:** Ollama (local, via Docker)
 - **Scraper:** Python FastAPI + Playwright at `localhost:8001` (built from `scraper/Dockerfile` by Docker Compose)
 - **Kafka** — in `pom.xml`, wired up in Phase 2
