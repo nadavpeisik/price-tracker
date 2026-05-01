@@ -43,10 +43,10 @@ price-tracker/
 
 **Price extraction waterfall** (each tier attempted in order; first success short-circuits):
 ```
-Pre-step — DOM pruning in scraper            → strips nav/footer/ads/scripts from the live DOM
-Tier 1   — JSON-LD / Schema.org in scraper   → returns structured PriceData directly; no LLM called
-Tier 2   — CSS/meta selectors in scraper     → returns a ~100–500 char snippet; LLM called on snippet
-Tier 3   — Regex line-filter in backend      → filterLines() reduces pruned innerText to ~2000 chars; LLM called
+Pre-step            — DOM pruning in scraper   → strips nav/footer/ads/scripts from the live DOM
+Tier 1 (STRUCTURED) — JSON-LD / Schema.org     → returns structured PriceData directly; no LLM called
+Tier 2 (SNIPPET)    — CSS/meta selectors       → returns a ~100–500 char snippet; LLM called on snippet
+Tier 3 (FULLTEXT)   — Regex line-filter        → filterLines() reduces pruned innerText to ~2000 chars; LLM called
 ```
 The scraper response carries an `extractionSource` enum (`STRUCTURED | SNIPPET | FULLTEXT`) so the backend knows which path to take without inspecting the content.
 
@@ -71,7 +71,8 @@ The scraper response carries an `extractionSource` enum (`STRUCTURED | SNIPPET |
 
 **Validation layer** (in `ProductTrackingService`, before saving `PriceRecord`):
 - Price must be > 0
-- If a prior price exists for the `TrackedItem`, new price must not differ by more than 500% (hallucination guard)
+- If a prior price exists for the `TrackedItem` **and the currency matches**, new price must not differ by more than 200% (i.e. no more than 3x the previous price) — configurable via `price.validation.max-delta-percent` in `application.properties`
+- Delta check is skipped entirely if the currency changed (cross-currency comparison is meaningless)
 - Currency change is logged as a warning; does not block the save
 
 ## Key Conventions
