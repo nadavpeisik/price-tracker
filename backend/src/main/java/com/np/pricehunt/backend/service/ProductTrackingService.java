@@ -9,18 +9,26 @@ import com.np.pricehunt.backend.repository.PriceRecordRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.net.URI;
 import java.net.URISyntaxException;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ProductTrackingService {
+
+    @Value("${price.validation.max-delta-percent:200}")
+    private int maxDeltaPercent;
 
     private final ProductRepository productRepository;
     private final TrackedItemRepository trackedItemRepository;
@@ -43,13 +51,21 @@ public class ProductTrackingService {
 
         TrackedItem item = resolveTrackedItem(product, request);
 
-        String innerText = scraperClient.scrape(request.url());
-        PriceInfo info = extractionService.extractPrice(innerText);
+        ScrapeResponse scraped = scraperClient.scrape(request.url());
+        PriceInfo info = extractionService.extractPrice(scraped);
+
+        PriceRecord latest = priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item).orElse(null);
+        if (!isValidPrice(info, latest)) {
+            log.warn("Extracted price failed validation — skipping save. url={} price={} currency={} source={}",
+                    request.url(), info.price(), info.currency(), info.extractionSource());
+            return buildTrackResponse(product, item, latest);
+        }
 
         PriceRecord record = priceRecordRepository.save(PriceRecord.builder()
                 .price(info.price())
                 .currency(info.currency())
                 .available(info.available())
+                .extractionSource(info.extractionSource())
                 .trackedItem(item)
                 .build());
 
@@ -99,6 +115,29 @@ public class ProductTrackingService {
         } catch (URISyntaxException e) {
             return url;
         }
+    }
+
+    private boolean isValidPrice(PriceInfo info, PriceRecord previous) {
+        if (info.price() == null || info.price().compareTo(BigDecimal.ZERO) <= 0) {
+            log.warn("Validation failed: price is zero or negative ({})", info.price());
+            return false;
+        }
+        if (previous == null) return true;
+
+        if (!info.currency().equalsIgnoreCase(previous.getCurrency())) {
+            log.warn("Currency changed from {} to {} — skipping delta check", previous.getCurrency(), info.currency());
+            return true;
+        }
+
+        BigDecimal factor = BigDecimal.valueOf(1 + maxDeltaPercent / 100.0);
+        BigDecimal max = previous.getPrice().multiply(factor).setScale(4, RoundingMode.HALF_UP);
+        BigDecimal min = previous.getPrice().divide(factor, 4, RoundingMode.HALF_UP);
+        if (info.price().compareTo(max) > 0 || info.price().compareTo(min) < 0) {
+            log.warn("Validation failed: price {} is outside {}% delta of previous {} {}",
+                    info.price(), maxDeltaPercent, previous.getPrice(), previous.getCurrency());
+            return false;
+        }
+        return true;
     }
 
     private TrackResponse buildTrackResponse(Product product, TrackedItem item, PriceRecord record) {

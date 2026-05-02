@@ -8,6 +8,7 @@ import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import com.np.pricehunt.backend.domain.ExtractionSource;
 
 @Entity
 @Data
@@ -29,6 +30,9 @@ public class PriceRecord {
     private LocalDateTime timestamp;
 
     private boolean available;
+
+    @Enumerated(EnumType.STRING)
+    private ExtractionSource extractionSource;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "tracked_item_id", nullable = false)

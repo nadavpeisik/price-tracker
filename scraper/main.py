@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from enum import Enum
 
 from fastapi import FastAPI, HTTPException
 from playwright.async_api import async_playwright, Browser, Playwright
@@ -6,6 +7,75 @@ from pydantic import BaseModel
 
 playwright_instance: Playwright = None
 browser: Browser = None
+
+# JavaScript run via page.evaluate() to strip noise from the DOM before extraction
+_DOM_PRUNE_SCRIPT = """() => {
+    const selectors = [
+        'nav', 'footer', 'script', 'style', 'noscript',
+        '[class*="cookie"]', '[class*="banner"]', '[class*="ad-"]',
+        '[id*="cookie"]', '[id*="popup"]'
+    ];
+    selectors.forEach(s => document.querySelectorAll(s).forEach(el => el.remove()));
+}"""
+
+# JavaScript run via page.evaluate() to extract structured price data from JSON-LD
+_JSON_LD_SCRIPT = """() => {
+    const scripts = Array.from(document.querySelectorAll('script[type="application/ld+json"]'));
+    for (const script of scripts) {
+        try {
+            const data = JSON.parse(script.textContent);
+            const nodes = Array.isArray(data) ? data : [data];
+            for (const node of nodes) {
+                const items = node['@graph'] ? node['@graph'] : [node];
+                for (const item of items) {
+                    const type = item['@type'];
+                    let offer = null;
+                    if (type === 'Product' || type === 'IndividualProduct') {
+                        offer = item.offers || item.offer;
+                        if (Array.isArray(offer)) offer = offer[0];
+                    } else if (type === 'Offer' || type === 'AggregateOffer') {
+                        offer = item;
+                    }
+                    if (!offer) continue;
+                    const price = offer.price ?? offer.lowPrice;
+                    const currency = offer.priceCurrency;
+                    const availability = offer.availability || '';
+                    if (price != null && currency) {
+                        return {
+                            price: parseFloat(price),
+                            currency: currency,
+                            available: availability.toLowerCase().includes('instock')
+                        };
+                    }
+                }
+            }
+        } catch (e) {}
+    }
+    return null;
+}"""
+
+
+class ExtractionSource(str, Enum):
+    STRUCTURED = "structured"
+    SNIPPET = "snippet"
+    FULLTEXT = "fulltext"
+
+
+class ScrapeRequest(BaseModel):
+    url: str
+
+
+class PriceData(BaseModel):
+    price: float
+    currency: str
+    available: bool
+
+
+class ScrapeResponse(BaseModel):
+    extractionSource: ExtractionSource
+    priceData: PriceData | None = None
+    snippet: str | None = None
+    innerText: str | None = None
 
 
 @asynccontextmanager
@@ -24,12 +94,38 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 
-class ScrapeRequest(BaseModel):
-    url: str
+async def _extract_snippet(page) -> str | None:
+    parts = []
+    for prop in [("product:price:amount", "content"), ("product:price:currency", "content")]:
+        try:
+            el = await page.query_selector(f'meta[property="{prop[0]}"]')
+            if el:
+                val = await el.get_attribute(prop[1])
+                if val and val.strip():
+                    parts.append(val.strip())
+        except Exception:
+            pass
 
+    for itemprop in ["price", "priceCurrency", "availability"]:
+        try:
+            el = await page.query_selector(f'[itemprop="{itemprop}"]')
+            if el:
+                val = await el.get_attribute("content") or await el.inner_text()
+                if val and val.strip():
+                    parts.append(val.strip())
+        except Exception:
+            pass
 
-class ScrapeResponse(BaseModel):
-    innerText: str
+    try:
+        price_els = await page.query_selector_all('[class*="price"]')
+        for el in price_els[:3]:
+            text = await el.inner_text()
+            if text and text.strip():
+                parts.append(text.strip())
+    except Exception:
+        pass
+
+    return " | ".join(parts) if parts else None
 
 
 @app.post("/scrape", response_model=ScrapeResponse)
@@ -38,8 +134,42 @@ async def scrape(request: ScrapeRequest):
     try:
         page = await context.new_page()
         await page.goto(request.url, wait_until="domcontentloaded", timeout=30000)
+
+        # Pre-step: prune noise from DOM before any extraction
+        try:
+            await page.evaluate(_DOM_PRUNE_SCRIPT)
+        except Exception:
+            pass
+
+        # Tier 1: JSON-LD structured data
+        try:
+            result = await page.evaluate(_JSON_LD_SCRIPT)
+            if result:
+                return ScrapeResponse(
+                    extractionSource=ExtractionSource.STRUCTURED,
+                    priceData=PriceData(**result),
+                )
+        except Exception:
+            pass
+
+        # Tier 2: CSS/meta selectors
+        try:
+            snippet = await _extract_snippet(page)
+            if snippet:
+                return ScrapeResponse(
+                    extractionSource=ExtractionSource.SNIPPET,
+                    snippet=snippet,
+                )
+        except Exception:
+            pass
+
+        # Tier 3: pruned innerText fallback
         inner_text = await page.inner_text("body")
-        return ScrapeResponse(innerText=inner_text)
+        return ScrapeResponse(
+            extractionSource=ExtractionSource.FULLTEXT,
+            innerText=inner_text,
+        )
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
