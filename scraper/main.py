@@ -37,14 +37,17 @@ _JSON_LD_SCRIPT = """() => {
                         offer = item;
                     }
                     if (!offer) continue;
-                    const price = offer.price ?? offer.lowPrice;
+                    const rawPrice = offer.price ?? offer.lowPrice;
+                    const cleanPrice = String(rawPrice).replace(/[^0-9.,]/g, '').replace(',', '.');
+                    const price = parseFloat(cleanPrice);
                     const currency = offer.priceCurrency;
                     const availability = offer.availability || '';
-                    if (price != null && currency) {
+                    const inStockUris = ['instock', 'limitedavailability', 'onlineonly', 'presale'];
+                    if (!isNaN(price) && price > 0 && currency) {
                         return {
-                            price: parseFloat(price),
+                            price: price,
                             currency: currency,
-                            available: availability.toLowerCase().includes('instock')
+                            available: inStockUris.some(s => availability.toLowerCase().includes(s))
                         };
                     }
                 }

@@ -58,6 +58,7 @@ public class ProductTrackingService {
         if (!isValidPrice(info, latest)) {
             log.warn("Extracted price failed validation — skipping save. url={} price={} currency={} source={}",
                     request.url(), info.price(), info.currency(), info.extractionSource());
+            // intentional: return last known good price rather than an error, so the caller always gets a usable response
             return buildTrackResponse(product, item, latest);
         }
 
@@ -124,7 +125,7 @@ public class ProductTrackingService {
         }
         if (previous == null) return true;
 
-        if (!info.currency().equalsIgnoreCase(previous.getCurrency())) {
+        if (info.currency() == null || !info.currency().equalsIgnoreCase(previous.getCurrency())) {
             log.warn("Currency changed from {} to {} — skipping delta check", previous.getCurrency(), info.currency());
             return true;
         }

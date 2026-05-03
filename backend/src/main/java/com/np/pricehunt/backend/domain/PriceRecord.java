@@ -8,7 +8,6 @@ import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import com.np.pricehunt.backend.domain.ExtractionSource;
 
 @Entity
 @Data

@@ -36,11 +36,11 @@ public class PriceExtractionOrchestrator implements PriceExtractionService {
         return switch (response.extractionSource()) {
             case STRUCTURED -> mapStructured(response.priceData());
             case SNIPPET -> {
-                PriceInfo raw = ollamaService.extractPriceFromText(response.snippet());
+                OllamaPriceExtractionService.PriceLlmResult raw = ollamaService.extractPriceFromText(response.snippet());
                 yield new PriceInfo(raw.price(), raw.currency(), raw.available(), ExtractionSource.SNIPPET);
             }
             case FULLTEXT -> {
-                PriceInfo raw = ollamaService.extractPriceFromText(filterLines(response.innerText()));
+                OllamaPriceExtractionService.PriceLlmResult raw = ollamaService.extractPriceFromText(filterLines(response.innerText()));
                 yield new PriceInfo(raw.price(), raw.currency(), raw.available(), ExtractionSource.FULLTEXT);
             }
         };
@@ -65,7 +65,7 @@ public class PriceExtractionOrchestrator implements PriceExtractionService {
                 }
                 matched.add(lines[i]);
                 charCount += lines[i].length();
-                if (i + 1 < lines.length) {
+                if (i + 1 < lines.length && !matched.contains(lines[i + 1])) {
                     matched.add(lines[i + 1]);
                     charCount += lines[i + 1].length();
                 }
