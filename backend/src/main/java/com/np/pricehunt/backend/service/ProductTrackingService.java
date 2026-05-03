@@ -52,6 +52,11 @@ public class ProductTrackingService {
         TrackedItem item = resolveTrackedItem(product, request);
 
         ScrapeResponse scraped = scraperClient.scrape(request.url());
+        if (scraped == null) {
+            log.warn("Scraper returned null response for url={}", request.url());
+            PriceRecord latest = priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item).orElse(null);
+            return buildTrackResponse(product, item, latest);
+        }
         PriceInfo info = extractionService.extractPrice(scraped);
 
         PriceRecord latest = priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item).orElse(null);

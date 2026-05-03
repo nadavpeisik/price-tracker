@@ -56,18 +56,18 @@ public class PriceExtractionOrchestrator implements PriceExtractionService {
         String[] lines = innerText.split("\n");
         List<String> matched = new ArrayList<>();
         int charCount = 0;
+        int lastAddedIndex = -1;
 
         for (int i = 0; i < lines.length && matched.size() < MAX_FILTER_LINES && charCount < MAX_FILTER_CHARS; i++) {
             if (PRICE_LINE_PATTERN.matcher(lines[i]).find()) {
-                if (i > 0 && !matched.contains(lines[i - 1])) {
-                    matched.add(lines[i - 1]);
-                    charCount += lines[i - 1].length();
-                }
-                matched.add(lines[i]);
-                charCount += lines[i].length();
-                if (i + 1 < lines.length && !matched.contains(lines[i + 1])) {
-                    matched.add(lines[i + 1]);
-                    charCount += lines[i + 1].length();
+                int start = Math.max(0, i - 1);
+                int end = Math.min(lines.length - 1, i + 1);
+                for (int j = start; j <= end; j++) {
+                    if (j > lastAddedIndex) {
+                        matched.add(lines[j]);
+                        charCount += lines[j].length();
+                        lastAddedIndex = j;
+                    }
                 }
             }
         }

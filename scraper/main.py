@@ -138,13 +138,7 @@ async def scrape(request: ScrapeRequest):
         page = await context.new_page()
         await page.goto(request.url, wait_until="domcontentloaded", timeout=30000)
 
-        # Pre-step: prune noise from DOM before any extraction
-        try:
-            await page.evaluate(_DOM_PRUNE_SCRIPT)
-        except Exception:
-            pass
-
-        # Tier 1: JSON-LD structured data
+        # Tier 1: JSON-LD structured data — must run before DOM pruning, which removes script tags
         try:
             result = await page.evaluate(_JSON_LD_SCRIPT)
             if result:
@@ -152,6 +146,12 @@ async def scrape(request: ScrapeRequest):
                     extractionSource=ExtractionSource.STRUCTURED,
                     priceData=PriceData(**result),
                 )
+        except Exception:
+            pass
+
+        # Pre-step: prune noise from DOM (nav/footer/ads/scripts) before Tier 2 and 3
+        try:
+            await page.evaluate(_DOM_PRUNE_SCRIPT)
         except Exception:
             pass
 
