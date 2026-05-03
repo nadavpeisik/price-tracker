@@ -16,13 +16,12 @@ public class ScraperClient {
                 .build();
     }
 
-    public String scrape(String url) {
-        ScrapeResponse response = restClient.post()
+    public ScrapeResponse scrape(String url) {
+        return restClient.post()
                 .uri("/scrape")
                 .body(new ScrapeRequest(url))
                 .retrieve()
                 .body(ScrapeResponse.class);
-        return response != null ? response.innerText() : "";
     }
 
     private record ScrapeRequest(String url) {}

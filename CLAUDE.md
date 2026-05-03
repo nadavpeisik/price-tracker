@@ -64,7 +64,7 @@ The scraper response carries an `extractionSource` enum (`STRUCTURED | SNIPPET |
 - `ScraperClient.java` (`client/` package) wraps `RestClient` calls to it, URL configured via `scraper.base-url`
 
 **AI integration:**
-- `PriceExtractionService` is an interface; `PriceExtractionOrchestrator` is the `@Primary` implementation (routes the waterfall)
+- `PriceExtractionService` is an interface; `PriceExtractionOrchestrator` is the sole implementation (routes the waterfall)
 - `OllamaPriceExtractionService` is a plain `@Service` (not the interface impl) — called only for SNIPPET and FULLTEXT paths
 - Uses Spring AI `ChatClient` with structured output to parse LLM responses directly into `PriceInfo`
 - Ollama runs locally via Docker Compose (no external API keys required)
@@ -90,6 +90,8 @@ The scraper response carries an `extractionSource` enum (`STRUCTURED | SNIPPET |
 **Phase 1.5 (in progress):** Efficient price extraction waterfall — DOM pruning + JSON-LD → CSS selectors → regex-filtered LLM fallback. Eliminates LLM calls for most major e-commerce sites.
 
 **Phase 1.6 (next after waterfall):** Selector caching — when LLM fires, it also returns the CSS selector it found the price in; stored on `TrackedItem`; subsequent checks use the selector directly and skip the waterfall entirely. Self-heals if selector stops returning data.
+
+**Phase 1.7 (before cloud deploy):** SSRF hardening — add URL validation in the backend (`UrlValidator` component) that rejects private IP ranges (RFC-1918: 10.x, 172.16–31.x, 192.168.x) and cloud metadata endpoints (169.254.169.254, 100.100.100.200) before the scrape request is dispatched. The scheme check (`http`/`https` only) is already in the scraper; the IP blocklist belongs in the backend at the user-input boundary.
 
 **Phase 2 (future):** Kafka async pipeline. Replace synchronous scraper call with:
 - Spring Boot publishes `ScrapeRequestedEvent` to `price-tracker.scrape-requests` topic

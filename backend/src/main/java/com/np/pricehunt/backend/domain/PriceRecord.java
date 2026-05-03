@@ -30,6 +30,9 @@ public class PriceRecord {
 
     private boolean available;
 
+    @Enumerated(EnumType.STRING)
+    private ExtractionSource extractionSource;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "tracked_item_id", nullable = false)
     private TrackedItem trackedItem;
