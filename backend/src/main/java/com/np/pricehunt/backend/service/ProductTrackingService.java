@@ -51,15 +51,15 @@ public class ProductTrackingService {
 
         TrackedItem item = resolveTrackedItem(product, request);
 
+        PriceRecord latest = priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item).orElse(null);
+
         ScrapeResponse scraped = scraperClient.scrape(request.url());
         if (scraped == null) {
             log.warn("Scraper returned null response for url={}", request.url());
-            PriceRecord latest = priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item).orElse(null);
             return buildTrackResponse(product, item, latest);
         }
         PriceInfo info = extractionService.extractPrice(scraped);
 
-        PriceRecord latest = priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item).orElse(null);
         if (!isValidPrice(info, latest)) {
             log.warn("Extracted price failed validation — skipping save. url={} price={} currency={} source={}",
                     request.url(), info.price(), info.currency(), info.extractionSource());
@@ -130,12 +130,16 @@ public class ProductTrackingService {
         }
         if (previous == null) return true;
 
-        if (info.currency() == null || !info.currency().equalsIgnoreCase(previous.getCurrency())) {
+        if (info.currency() == null) {
+            log.warn("Validation failed: LLM returned null currency");
+            return false;
+        }
+        if (!info.currency().equalsIgnoreCase(previous.getCurrency())) {
             log.warn("Currency changed from {} to {} — skipping delta check", previous.getCurrency(), info.currency());
             return true;
         }
 
-        BigDecimal factor = BigDecimal.valueOf(1 + maxDeltaPercent / 100.0);
+        BigDecimal factor = BigDecimal.valueOf(maxDeltaPercent).divide(BigDecimal.valueOf(100), 4, RoundingMode.HALF_UP).add(BigDecimal.ONE);
         BigDecimal max = previous.getPrice().multiply(factor).setScale(4, RoundingMode.HALF_UP);
         BigDecimal min = previous.getPrice().divide(factor, 4, RoundingMode.HALF_UP);
         if (info.price().compareTo(max) > 0 || info.price().compareTo(min) < 0) {

@@ -1,10 +1,10 @@
 package com.np.pricehunt.backend.service;
 
 import com.np.pricehunt.backend.domain.ExtractionSource;
+import com.np.pricehunt.backend.dto.PriceLlmResult;
 import com.np.pricehunt.backend.dto.PriceInfo;
 import com.np.pricehunt.backend.dto.ScrapeResponse;
 import lombok.RequiredArgsConstructor;
-import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -12,7 +12,6 @@ import java.util.List;
 import java.util.regex.Pattern;
 
 @Service
-@Primary
 @RequiredArgsConstructor
 public class PriceExtractionOrchestrator implements PriceExtractionService {
 
@@ -36,17 +35,18 @@ public class PriceExtractionOrchestrator implements PriceExtractionService {
         return switch (response.extractionSource()) {
             case STRUCTURED -> mapStructured(response.priceData());
             case SNIPPET -> {
-                OllamaPriceExtractionService.PriceLlmResult raw = ollamaService.extractPriceFromText(response.snippet());
+                PriceLlmResult raw = ollamaService.extractPriceFromText(response.snippet());
                 yield new PriceInfo(raw.price(), raw.currency(), raw.available(), ExtractionSource.SNIPPET);
             }
             case FULLTEXT -> {
-                OllamaPriceExtractionService.PriceLlmResult raw = ollamaService.extractPriceFromText(filterLines(response.innerText()));
+                PriceLlmResult raw = ollamaService.extractPriceFromText(filterLines(response.innerText()));
                 yield new PriceInfo(raw.price(), raw.currency(), raw.available(), ExtractionSource.FULLTEXT);
             }
         };
     }
 
     private PriceInfo mapStructured(ScrapeResponse.PriceData d) {
+        if (d == null) throw new IllegalStateException("extractionSource=STRUCTURED but priceData is null");
         return new PriceInfo(d.price(), d.currency(), d.available(), ExtractionSource.STRUCTURED);
     }
 

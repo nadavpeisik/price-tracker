@@ -1,15 +1,11 @@
 package com.np.pricehunt.backend.service;
 
+import com.np.pricehunt.backend.dto.PriceLlmResult;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.stereotype.Service;
 
-import java.math.BigDecimal;
-
 @Service
 public class OllamaPriceExtractionService {
-
-    // Narrow DTO used only for LLM structured output — no extractionSource field so Spring AI schema stays clean
-    record PriceLlmResult(BigDecimal price, String currency, boolean available) {}
 
     private final ChatClient chatClient;
 

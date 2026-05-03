@@ -38,7 +38,13 @@ _JSON_LD_SCRIPT = """() => {
                     }
                     if (!offer) continue;
                     const rawPrice = offer.price ?? offer.lowPrice;
-                    const cleanPrice = String(rawPrice).replace(/[^0-9.,]/g, '').replace(',', '.');
+                    const raw = String(rawPrice).replace(/[^0-9.,]/g, '');
+                    const lastDot = raw.lastIndexOf('.');
+                    const lastComma = raw.lastIndexOf(',');
+                    const decimalSep = lastDot > lastComma ? '.' : (lastComma > lastDot ? ',' : null);
+                    const cleanPrice = decimalSep === null
+                        ? raw.replace(/[^0-9]/g, '')
+                        : raw.substring(0, raw.lastIndexOf(decimalSep)).replace(/[^0-9]/g, '') + '.' + raw.substring(raw.lastIndexOf(decimalSep) + 1);
                     const price = parseFloat(cleanPrice);
                     const currency = offer.priceCurrency;
                     const availability = offer.availability || '';
@@ -133,6 +139,9 @@ async def _extract_snippet(page) -> str | None:
 
 @app.post("/scrape", response_model=ScrapeResponse)
 async def scrape(request: ScrapeRequest):
+    if not request.url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="URL must use http or https scheme")
+
     context = await browser.new_context()
     try:
         page = await context.new_page()
