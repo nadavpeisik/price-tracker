@@ -127,15 +127,16 @@ class PriceExtractionOrchestratorTest {
     @Test
     void extractPrice_fulltext_callsLlmWithFilteredText() {
         when(ollamaService.extractPriceFromText(anyString())).thenReturn(STUB_LLM_RESULT);
-        String body = "irrelevant line\n$29.99\nin stock\nmore irrelevant";
+        // lines 0-1 and 5-6 are far enough from any price match that filterLines should drop them
+        String body = "dropped first\nalso dropped\n$29.99\nin stock\nalso dropped\ndropped last";
         ScrapeResponse response = new ScrapeResponse(
                 ExtractionSource.FULLTEXT, null, null, body);
 
         PriceInfo result = orchestrator.extractPrice(response);
 
         assertThat(result.extractionSource()).isEqualTo(ExtractionSource.FULLTEXT);
-        // LLM called with filtered text containing the price-relevant lines
+        // filterLines retains price-relevant lines and their context, drops lines 2+ away from any match
         verify(ollamaService).extractPriceFromText(argThat(text ->
-                text.contains("$29.99") && text.contains("in stock")));
+                text.contains("$29.99") && !text.contains("dropped first") && !text.contains("dropped last")));
     }
 }

@@ -128,12 +128,11 @@ public class ProductTrackingService {
             log.warn("Validation failed: price is zero or negative ({})", info.price());
             return false;
         }
-        if (previous == null) return true;
-
         if (info.currency() == null) {
             log.warn("Validation failed: LLM returned null currency");
             return false;
         }
+        if (previous == null) return true;
         if (!info.currency().equalsIgnoreCase(previous.getCurrency())) {
             log.warn("Currency changed from {} to {} — skipping delta check", previous.getCurrency(), info.currency());
             return true;

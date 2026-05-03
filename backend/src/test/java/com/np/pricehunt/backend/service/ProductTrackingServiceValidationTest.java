@@ -9,9 +9,10 @@ import com.np.pricehunt.backend.dto.*;
 import com.np.pricehunt.backend.repository.PriceRecordRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
-import org.junit.jupiter.api.BeforeEach;X
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -73,7 +74,25 @@ class ProductTrackingServiceValidationTest {
     }
 
     @Test
-    void trackUrl_zeroPricce_skipsave() {
+    void trackUrl_validPrice_noHistory_savesExtractionSource() {
+        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item)).thenReturn(Optional.empty());
+        when(extractionService.extractPrice(scrapeResponse))
+                .thenReturn(new PriceInfo(new BigDecimal("100.00"), "USD", true, ExtractionSource.STRUCTURED));
+        when(priceRecordRepository.save(any())).thenAnswer(inv -> {
+            PriceRecord r = inv.getArgument(0);
+            ReflectionTestUtils.setField(r, "timestamp", LocalDateTime.now());
+            return r;
+        });
+
+        service.trackUrl(1L, new TrackRequest("https://example.com/item", null));
+
+        ArgumentCaptor<PriceRecord> captor = ArgumentCaptor.forClass(PriceRecord.class);
+        verify(priceRecordRepository).save(captor.capture());
+        assertThat(captor.getValue().getExtractionSource()).isEqualTo(ExtractionSource.STRUCTURED);
+    }
+
+    @Test
+    void trackUrl_zeroPrice_skipsSave() {
         when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item)).thenReturn(Optional.empty());
         when(extractionService.extractPrice(scrapeResponse))
                 .thenReturn(new PriceInfo(BigDecimal.ZERO, "USD", true, ExtractionSource.FULLTEXT));
@@ -84,7 +103,7 @@ class ProductTrackingServiceValidationTest {
     }
 
     @Test
-    void trackUrl_negativePricerice_skipsSave() {
+    void trackUrl_negativePrice_skipsSave() {
         when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item)).thenReturn(Optional.empty());
         when(extractionService.extractPrice(scrapeResponse))
                 .thenReturn(new PriceInfo(new BigDecimal("-5.00"), "USD", true, ExtractionSource.FULLTEXT));
@@ -95,7 +114,18 @@ class ProductTrackingServiceValidationTest {
     }
 
     @Test
-    void trackUrl_nullCurrency_skipsSave() {
+    void trackUrl_nullCurrency_noHistory_skipsSave() {
+        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item)).thenReturn(Optional.empty());
+        when(extractionService.extractPrice(scrapeResponse))
+                .thenReturn(new PriceInfo(new BigDecimal("100.00"), null, true, ExtractionSource.FULLTEXT));
+
+        service.trackUrl(1L, new TrackRequest("https://example.com/item", null));
+
+        verify(priceRecordRepository, never()).save(any());
+    }
+
+    @Test
+    void trackUrl_nullCurrency_withHistory_skipsSave() {
         PriceRecord previous = priceRecord("100.00", "USD");
         when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item)).thenReturn(Optional.of(previous));
         when(extractionService.extractPrice(scrapeResponse))
@@ -125,7 +155,7 @@ class ProductTrackingServiceValidationTest {
     }
 
     @Test
-    void trackUrl_priceWithinDelta_saves() {
+    void trackUrl_priceWithinUpperDelta_saves() {
         PriceRecord previous = priceRecord("100.00", "USD");
         when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item)).thenReturn(Optional.of(previous));
         when(extractionService.extractPrice(scrapeResponse))
@@ -142,12 +172,25 @@ class ProductTrackingServiceValidationTest {
     }
 
     @Test
-    void trackUrl_priceExceedsDelta_skipsSave() {
+    void trackUrl_priceExceedsUpperDelta_skipsSave() {
         PriceRecord previous = priceRecord("100.00", "USD");
         when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item)).thenReturn(Optional.of(previous));
         // 400 is 4x previous, exceeds 200% delta (max is 3x)
         when(extractionService.extractPrice(scrapeResponse))
                 .thenReturn(new PriceInfo(new BigDecimal("400.00"), "USD", true, ExtractionSource.FULLTEXT));
+
+        service.trackUrl(1L, new TrackRequest("https://example.com/item", null));
+
+        verify(priceRecordRepository, never()).save(any());
+    }
+
+    @Test
+    void trackUrl_priceBelowLowerDelta_skipsSave() {
+        PriceRecord previous = priceRecord("100.00", "USD");
+        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item)).thenReturn(Optional.of(previous));
+        // 10 is 1/10 of previous; lower bound is 100/3 ≈ 33.33, so 10 is below it
+        when(extractionService.extractPrice(scrapeResponse))
+                .thenReturn(new PriceInfo(new BigDecimal("10.00"), "USD", true, ExtractionSource.FULLTEXT));
 
         service.trackUrl(1L, new TrackRequest("https://example.com/item", null));
 
