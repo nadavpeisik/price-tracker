@@ -45,6 +45,7 @@ class ProductTrackingServiceCrudTest {
     @BeforeEach
     void setUp() {
         ReflectionTestUtils.setField(service, "maxDeltaPercent", 200);
+        ReflectionTestUtils.setField(service, "minRefreshIntervalSeconds", 60);
         product = Product.builder().id(1L).name("Laptop").build();
         item = TrackedItem.builder().id(1L).url("https://amazon.com/dp/1").shopName("amazon.com").product(product).build();
     }
@@ -162,7 +163,35 @@ class ProductTrackingServiceCrudTest {
         verifyNoInteractions(trackedItemRepository, priceRecordRepository);
     }
 
+    @Test
+    void updateProduct_clearsDescription_whenEmptyStringPassed() {
+        product.setDescription("old description");
+        when(productRepository.findById(1L)).thenReturn(Optional.of(product));
+        when(productRepository.save(product)).thenReturn(product);
+
+        service.updateProduct(1L, new UpdateProductRequest(null, ""));
+
+        assertThat(product.getDescription()).isNull();
+    }
+
     // --- refreshTrackedItem ---
+
+    @Test
+    void refreshTrackedItem_recentlyRefreshed_throwsTooManyRequests() {
+        TrackedItem recentItem = TrackedItem.builder().id(1L).url("https://amazon.com/dp/1")
+                .shopName("amazon.com").product(product)
+                .lastChecked(LocalDateTime.now().minusSeconds(10))
+                .build();
+        ReflectionTestUtils.setField(service, "minRefreshIntervalSeconds", 60);
+        when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(recentItem));
+
+        assertThatThrownBy(() -> service.refreshTrackedItem(1L, 1L))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(e -> ((ResponseStatusException) e).getStatusCode())
+                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+
+        verify(scraperClient, never()).scrape(any());
+    }
 
     @Test
     void refreshTrackedItem_notFound_throwsException() {

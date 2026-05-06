@@ -10,6 +10,9 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Entity
+@Table(indexes = {
+    @Index(name = "idx_price_record_item_timestamp", columnList = "tracked_item_id, timestamp DESC")
+})
 @Data
 @Builder
 @NoArgsConstructor

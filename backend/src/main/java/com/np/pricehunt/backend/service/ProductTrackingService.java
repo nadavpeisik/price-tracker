@@ -21,6 +21,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.time.LocalDateTime;
 
 @Slf4j
 @Service
@@ -29,6 +30,9 @@ public class ProductTrackingService {
 
     @Value("${price.validation.max-delta-percent:200}")
     private int maxDeltaPercent;
+
+    @Value("${price.refresh.min-interval-seconds:60}")
+    private int minRefreshIntervalSeconds;
 
     private final ProductRepository productRepository;
     private final TrackedItemRepository trackedItemRepository;
@@ -62,6 +66,11 @@ public class ProductTrackingService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found for this product");
         }
 
+        if (item.getLastChecked() != null &&
+                item.getLastChecked().isAfter(LocalDateTime.now().minusSeconds(minRefreshIntervalSeconds))) {
+            throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "Item was refreshed recently, try again later");
+        }
+
         return scrapeAndSave(item);
     }
 
@@ -92,8 +101,8 @@ public class ProductTrackingService {
         if (StringUtils.hasText(request.name())) {
             product.setName(request.name());
         }
-        if (StringUtils.hasText(request.description())) {
-            product.setDescription(request.description());
+        if (request.description() != null) {
+            product.setDescription(StringUtils.hasText(request.description()) ? request.description() : null);
         }
 
         productRepository.save(product);
@@ -126,7 +135,6 @@ public class ProductTrackingService {
                 .build());
 
         item.setLastChecked(record.getTimestamp());
-        trackedItemRepository.save(item);
 
         return buildTrackResponse(item.getProduct(), item, record);
     }

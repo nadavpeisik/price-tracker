@@ -20,7 +20,10 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.server.ResponseStatusException;
+
+import java.time.temporal.ChronoUnit;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -29,8 +32,11 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.within;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
+import org.mockito.ArgumentCaptor;
 
 @ExtendWith(MockitoExtension.class)
 class ProductQueryServiceTest {
@@ -47,6 +53,7 @@ class ProductQueryServiceTest {
 
     @BeforeEach
     void setUp() {
+        ReflectionTestUtils.setField(service, "defaultWindowDays", 90);
         product = Product.builder().id(1L).name("Laptop").build();
         itemA = TrackedItem.builder().id(1L).url("https://amazon.com/dp/1").shopName("amazon.com").product(product).build();
         itemB = TrackedItem.builder().id(2L).url("https://bestbuy.com/p/1").shopName("bestbuy.com").product(product).build();
@@ -161,45 +168,56 @@ class ProductQueryServiceTest {
         assertThat(detail.trackedItems().get(0).currentPrice()).isNull();
     }
 
-    // --- getPriceHistory date-bound branching ---
+    // --- getPriceHistory windowing ---
 
     @Test
-    void getPriceHistory_noBounds_callsFullHistoryMethod() {
+    void getPriceHistory_noBounds_defaultsToWindowEndingNow() {
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
-        when(priceRecordRepository.findByTrackedItemOrderByTimestampDesc(itemA)).thenReturn(List.of());
+        when(priceRecordRepository.findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(
+                eq(itemA), any(LocalDateTime.class), any(LocalDateTime.class))).thenReturn(List.of());
 
         service.getPriceHistory(1L, 1L, null, null);
 
-        verify(priceRecordRepository).findByTrackedItemOrderByTimestampDesc(itemA);
-        verifyNoMoreInteractions(priceRecordRepository);
+        ArgumentCaptor<LocalDateTime> fromCaptor = ArgumentCaptor.forClass(LocalDateTime.class);
+        ArgumentCaptor<LocalDateTime> toCaptor = ArgumentCaptor.forClass(LocalDateTime.class);
+        verify(priceRecordRepository).findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(
+                eq(itemA), fromCaptor.capture(), toCaptor.capture());
+        assertThat(toCaptor.getValue()).isCloseTo(LocalDateTime.now(), within(5, ChronoUnit.SECONDS));
+        assertThat(fromCaptor.getValue()).isCloseTo(LocalDateTime.now().minusDays(90), within(5, ChronoUnit.SECONDS));
     }
 
     @Test
-    void getPriceHistory_fromOnly_callsGreaterThanEqualMethod() {
+    void getPriceHistory_fromOnly_defaultsToToNow() {
         LocalDateTime from = LocalDateTime.of(2026, 1, 1, 0, 0);
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
-        when(priceRecordRepository.findByTrackedItemAndTimestampGreaterThanEqualOrderByTimestampDesc(itemA, from))
-                .thenReturn(List.of());
+        when(priceRecordRepository.findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(
+                eq(itemA), any(LocalDateTime.class), any(LocalDateTime.class))).thenReturn(List.of());
 
         service.getPriceHistory(1L, 1L, from, null);
 
-        verify(priceRecordRepository).findByTrackedItemAndTimestampGreaterThanEqualOrderByTimestampDesc(itemA, from);
+        ArgumentCaptor<LocalDateTime> toCaptor = ArgumentCaptor.forClass(LocalDateTime.class);
+        verify(priceRecordRepository).findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(
+                eq(itemA), eq(from), toCaptor.capture());
+        assertThat(toCaptor.getValue()).isCloseTo(LocalDateTime.now(), within(5, ChronoUnit.SECONDS));
     }
 
     @Test
-    void getPriceHistory_toOnly_callsLessThanEqualMethod() {
+    void getPriceHistory_toOnly_defaultsFromWindowDaysBefore() {
         LocalDateTime to = LocalDateTime.of(2026, 4, 1, 0, 0);
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
-        when(priceRecordRepository.findByTrackedItemAndTimestampLessThanEqualOrderByTimestampDesc(itemA, to))
-                .thenReturn(List.of());
+        when(priceRecordRepository.findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(
+                eq(itemA), any(LocalDateTime.class), any(LocalDateTime.class))).thenReturn(List.of());
 
         service.getPriceHistory(1L, 1L, null, to);
 
-        verify(priceRecordRepository).findByTrackedItemAndTimestampLessThanEqualOrderByTimestampDesc(itemA, to);
+        ArgumentCaptor<LocalDateTime> fromCaptor = ArgumentCaptor.forClass(LocalDateTime.class);
+        verify(priceRecordRepository).findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(
+                eq(itemA), fromCaptor.capture(), eq(to));
+        assertThat(fromCaptor.getValue()).isEqualTo(to.minusDays(90));
     }
 
     @Test
-    void getPriceHistory_bothBounds_callsBetweenMethod() {
+    void getPriceHistory_bothBounds_usesExplicitBounds() {
         LocalDateTime from = LocalDateTime.of(2026, 1, 1, 0, 0);
         LocalDateTime to = LocalDateTime.of(2026, 4, 1, 0, 0);
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
@@ -209,6 +227,21 @@ class ProductQueryServiceTest {
         service.getPriceHistory(1L, 1L, from, to);
 
         verify(priceRecordRepository).findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(itemA, from, to);
+    }
+
+    @Test
+    void getPriceHistory_rangeExceedsMaxYears_clampsFrom() {
+        LocalDateTime to = LocalDateTime.of(2026, 4, 1, 0, 0);
+        LocalDateTime farBack = to.minusYears(3);
+        LocalDateTime expectedFrom = to.minusYears(2);
+        when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
+        when(priceRecordRepository.findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(
+                eq(itemA), any(LocalDateTime.class), any(LocalDateTime.class))).thenReturn(List.of());
+
+        service.getPriceHistory(1L, 1L, farBack, to);
+
+        verify(priceRecordRepository).findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(
+                itemA, expectedFrom, to);
     }
 
     @Test
@@ -226,10 +259,13 @@ class ProductQueryServiceTest {
     @Test
     void getPriceHistory_mapsExtractionSourceAsString() {
         PriceRecord record = priceRecord(itemA, "100", "USD");
+        LocalDateTime from = LocalDateTime.of(2026, 1, 1, 0, 0);
+        LocalDateTime to = LocalDateTime.of(2026, 4, 1, 0, 0);
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
-        when(priceRecordRepository.findByTrackedItemOrderByTimestampDesc(itemA)).thenReturn(List.of(record));
+        when(priceRecordRepository.findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(itemA, from, to))
+                .thenReturn(List.of(record));
 
-        PriceHistoryResponse response = service.getPriceHistory(1L, 1L, null, null);
+        PriceHistoryResponse response = service.getPriceHistory(1L, 1L, from, to);
 
         assertThat(response.history().get(0).extractionSource()).isEqualTo("STRUCTURED");
     }

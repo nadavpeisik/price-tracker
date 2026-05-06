@@ -9,6 +9,7 @@ import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
@@ -27,6 +28,9 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
 public class ProductQueryService {
+
+    @Value("${price.history.default-window-days:90}")
+    private int defaultWindowDays;
 
     private final ProductRepository productRepository;
     private final TrackedItemRepository trackedItemRepository;
@@ -62,7 +66,17 @@ public class ProductQueryService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found for this product");
         }
 
-        List<PriceRecord> records = fetchPriceHistory(item, from, to);
+        LocalDateTime effectiveTo = (to != null) ? to : LocalDateTime.now();
+        LocalDateTime effectiveFrom = (from != null) ? from : effectiveTo.minusDays(defaultWindowDays);
+
+        LocalDateTime maxFrom = effectiveTo.minusYears(2);
+        if (effectiveFrom.isBefore(maxFrom)) {
+            log.info("Price history range clamped to 2 years for item={}", itemId);
+            effectiveFrom = maxFrom;
+        }
+
+        List<PriceRecord> records = priceRecordRepository
+                .findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(item, effectiveFrom, effectiveTo);
 
         List<PricePointResponse> history = records.stream()
                 .map(r -> new PricePointResponse(
@@ -81,18 +95,6 @@ public class ProductQueryService {
                 .map(item -> new ItemWithLatestPrice(item,
                         priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item).orElse(null)))
                 .toList();
-    }
-
-    private List<PriceRecord> fetchPriceHistory(TrackedItem item, LocalDateTime from, LocalDateTime to) {
-        if (from == null && to == null) {
-            return priceRecordRepository.findByTrackedItemOrderByTimestampDesc(item);
-        } else if (from != null && to != null) {
-            return priceRecordRepository.findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(item, from, to);
-        } else if (from != null) {
-            return priceRecordRepository.findByTrackedItemAndTimestampGreaterThanEqualOrderByTimestampDesc(item, from);
-        } else {
-            return priceRecordRepository.findByTrackedItemAndTimestampLessThanEqualOrderByTimestampDesc(item, to);
-        }
     }
 
     private ProductSummaryResponse toSummaryResponse(Product product, List<ItemWithLatestPrice> pairs) {

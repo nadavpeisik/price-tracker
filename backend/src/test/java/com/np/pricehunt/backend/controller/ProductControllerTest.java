@@ -14,6 +14,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.web.client.RestClientException;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
@@ -144,6 +145,15 @@ class ProductControllerTest {
         mvc.perform(post("/api/products/1/tracked-items/1/refresh"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.currentPrice").value(949.99));
+    }
+
+    @Test
+    void refreshTrackedItem_scraperFails_returns502() throws Exception {
+        when(trackingService.refreshTrackedItem(1L, 1L))
+                .thenThrow(new RestClientException("scraper unreachable"));
+
+        mvc.perform(post("/api/products/1/tracked-items/1/refresh"))
+                .andExpect(status().isBadGateway());
     }
 
     @Test

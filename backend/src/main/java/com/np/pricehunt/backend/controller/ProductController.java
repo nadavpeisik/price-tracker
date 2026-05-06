@@ -30,7 +30,7 @@ public class ProductController {
 
     @GetMapping
     public ResponseEntity<Page<ProductSummaryResponse>> getAllProducts(
-            @PageableDefault(size = 20, sort = "name") Pageable pageable) {
+            @PageableDefault(size = 20, sort = {"name", "id"}) Pageable pageable) {
         return ResponseEntity.ok(queryService.getAllProducts(pageable));
     }
 
