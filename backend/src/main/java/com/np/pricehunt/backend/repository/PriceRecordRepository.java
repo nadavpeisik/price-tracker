@@ -18,10 +18,22 @@ public interface PriceRecordRepository extends JpaRepository<PriceRecord, Long> 
     // 2. Get ONLY the very latest price for a store link
     Optional<PriceRecord> findFirstByTrackedItemOrderByTimestampDesc(TrackedItem trackedItem);
 
-    // 3. Find prices within a specific date range
-    List<PriceRecord> findByTrackedItemAndTimestampBetween(
+    // 3. Find prices within a specific date range, newest first
+    List<PriceRecord> findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(
             TrackedItem trackedItem,
             LocalDateTime start,
             LocalDateTime end
+    );
+
+    // 4. Find prices from a date forward, newest first
+    List<PriceRecord> findByTrackedItemAndTimestampGreaterThanEqualOrderByTimestampDesc(
+            TrackedItem trackedItem,
+            LocalDateTime from
+    );
+
+    // 5. Find prices up to a date, newest first
+    List<PriceRecord> findByTrackedItemAndTimestampLessThanEqualOrderByTimestampDesc(
+            TrackedItem trackedItem,
+            LocalDateTime to
     );
 }

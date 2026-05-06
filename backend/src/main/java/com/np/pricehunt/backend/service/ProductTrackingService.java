@@ -50,21 +50,71 @@ public class ProductTrackingService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found"));
 
         TrackedItem item = resolveTrackedItem(product, request);
+        return scrapeAndSave(item);
+    }
 
+    @Transactional
+    public TrackResponse refreshTrackedItem(Long productId, Long itemId) {
+        TrackedItem item = trackedItemRepository.findById(itemId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found"));
+
+        if (!item.getProduct().getId().equals(productId)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found for this product");
+        }
+
+        return scrapeAndSave(item);
+    }
+
+    @Transactional
+    public void deleteProduct(Long id) {
+        Product product = productRepository.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found"));
+        productRepository.delete(product);
+    }
+
+    @Transactional
+    public void deleteTrackedItem(Long productId, Long itemId) {
+        TrackedItem item = trackedItemRepository.findById(itemId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found"));
+
+        if (!item.getProduct().getId().equals(productId)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found for this product");
+        }
+
+        trackedItemRepository.delete(item);
+    }
+
+    @Transactional
+    public ProductResponse updateProduct(Long id, UpdateProductRequest request) {
+        Product product = productRepository.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found"));
+
+        if (StringUtils.hasText(request.name())) {
+            product.setName(request.name());
+        }
+        if (StringUtils.hasText(request.description())) {
+            product.setDescription(request.description());
+        }
+
+        productRepository.save(product);
+        return new ProductResponse(product.getId(), product.getName(), product.getDescription());
+    }
+
+    private TrackResponse scrapeAndSave(TrackedItem item) {
         PriceRecord latest = priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item).orElse(null);
 
-        ScrapeResponse scraped = scraperClient.scrape(request.url());
+        ScrapeResponse scraped = scraperClient.scrape(item.getUrl());
         if (scraped == null) {
-            log.warn("Scraper returned null response for url={}", request.url());
-            return buildTrackResponse(product, item, latest);
+            log.warn("Scraper returned null response for url={}", item.getUrl());
+            return buildTrackResponse(item.getProduct(), item, latest);
         }
         PriceInfo info = extractionService.extractPrice(scraped);
 
         if (!isValidPrice(info, latest)) {
             log.warn("Extracted price failed validation — skipping save. url={} price={} currency={} source={}",
-                    request.url(), info.price(), info.currency(), info.extractionSource());
+                    item.getUrl(), info.price(), info.currency(), info.extractionSource());
             // intentional: return last known good price rather than an error, so the caller always gets a usable response
-            return buildTrackResponse(product, item, latest);
+            return buildTrackResponse(item.getProduct(), item, latest);
         }
 
         PriceRecord record = priceRecordRepository.save(PriceRecord.builder()
@@ -75,7 +125,10 @@ public class ProductTrackingService {
                 .trackedItem(item)
                 .build());
 
-        return buildTrackResponse(product, item, record);
+        item.setLastChecked(record.getTimestamp());
+        trackedItemRepository.save(item);
+
+        return buildTrackResponse(item.getProduct(), item, record);
     }
 
     @Transactional
