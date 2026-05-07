@@ -24,16 +24,4 @@ public interface PriceRecordRepository extends JpaRepository<PriceRecord, Long> 
             LocalDateTime start,
             LocalDateTime end
     );
-
-    // 4. Find prices from a date forward, newest first
-    List<PriceRecord> findByTrackedItemAndTimestampGreaterThanEqualOrderByTimestampDesc(
-            TrackedItem trackedItem,
-            LocalDateTime from
-    );
-
-    // 5. Find prices up to a date, newest first
-    List<PriceRecord> findByTrackedItemAndTimestampLessThanEqualOrderByTimestampDesc(
-            TrackedItem trackedItem,
-            LocalDateTime to
-    );
 }

@@ -14,6 +14,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -21,7 +22,11 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
 @Service
@@ -39,6 +44,13 @@ public class ProductTrackingService {
     private final PriceRecordRepository priceRecordRepository;
     private final PriceExtractionService extractionService;
     private final ScraperClient scraperClient;
+    private final TransactionTemplate transactionTemplate;
+
+    // Per-process refresh rate-limiter. Survives failed scrapes (which never bump DB lastChecked).
+    // Single-instance only; pre-Phase-2 Kafka. Lost on restart — acceptable: caller gets one free retry.
+    private final Map<Long, Instant> lastRefreshAttempt = new ConcurrentHashMap<>();
+
+    private record ItemSnapshot(Long id, String url) {}
 
     @Transactional
     public CreateProductResponse createProduct(CreateProductRequest request) {
@@ -48,30 +60,48 @@ public class ProductTrackingService {
         return new CreateProductResponse(product.getId(), product.getName());
     }
 
-    @Transactional
     public TrackResponse trackUrl(Long productId, TrackRequest request) {
-        Product product = productRepository.findById(productId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found"));
+        ItemSnapshot snapshot = transactionTemplate.execute(status -> {
+            Product product = productRepository.findById(productId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found"));
+            TrackedItem item = resolveTrackedItem(product, request);
+            return new ItemSnapshot(item.getId(), item.getUrl());
+        });
 
-        TrackedItem item = resolveTrackedItem(product, request);
-        return scrapeAndSave(item);
+        PriceInfo info = doScrape(snapshot.url());
+        return persistResultInTxn(snapshot.id(), info);
     }
 
-    @Transactional
     public TrackResponse refreshTrackedItem(Long productId, Long itemId) {
-        TrackedItem item = trackedItemRepository.findById(itemId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found"));
+        ItemSnapshot snapshot = transactionTemplate.execute(status -> {
+            TrackedItem item = trackedItemRepository.findById(itemId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found"));
+            if (!item.getProduct().getId().equals(productId)) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found for this product");
+            }
+            checkAndStampRefreshAttempt(itemId, item.getLastChecked());
+            return new ItemSnapshot(item.getId(), item.getUrl());
+        });
 
-        if (!item.getProduct().getId().equals(productId)) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found for this product");
-        }
+        PriceInfo info = doScrape(snapshot.url());
+        return persistResultInTxn(snapshot.id(), info);
+    }
 
-        if (item.getLastChecked() != null &&
-                item.getLastChecked().isAfter(LocalDateTime.now().minusSeconds(minRefreshIntervalSeconds))) {
+    // Atomically reads and stamps the in-memory rate-limit map. Falls back to the DB-stored
+    // lastChecked when the process is fresh and the map is empty. Stamp happens before the
+    // scrape, so failed scrapes can't bypass the limit by leaving lastChecked untouched.
+    private void checkAndStampRefreshAttempt(Long itemId, LocalDateTime persistedLastChecked) {
+        Instant now = Instant.now();
+        Instant cutoff = now.minusSeconds(minRefreshIntervalSeconds);
+        Instant kept = lastRefreshAttempt.compute(itemId, (k, prev) ->
+                (prev != null && prev.isAfter(cutoff)) ? prev : now);
+        if (kept != now) {
             throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "Item was refreshed recently, try again later");
         }
-
-        return scrapeAndSave(item);
+        if (persistedLastChecked != null &&
+                persistedLastChecked.isAfter(LocalDateTime.now().minusSeconds(minRefreshIntervalSeconds))) {
+            throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "Item was refreshed recently, try again later");
+        }
     }
 
     @Transactional
@@ -95,6 +125,10 @@ public class ProductTrackingService {
 
     @Transactional
     public ProductResponse updateProduct(Long id, UpdateProductRequest request) {
+        if (request.name() == null && request.description() == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "At least one field is required");
+        }
+
         Product product = productRepository.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found"));
 
@@ -105,38 +139,48 @@ public class ProductTrackingService {
             product.setDescription(StringUtils.hasText(request.description()) ? request.description() : null);
         }
 
-        productRepository.save(product);
         return new ProductResponse(product.getId(), product.getName(), product.getDescription());
     }
 
-    private TrackResponse scrapeAndSave(TrackedItem item) {
-        PriceRecord latest = priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item).orElse(null);
-
-        ScrapeResponse scraped = scraperClient.scrape(item.getUrl());
+    // Phase 2: external HTTP call. Deliberately runs outside any DB transaction so we don't
+    // pin a Hikari connection while waiting on the scraper.
+    private PriceInfo doScrape(String url) {
+        ScrapeResponse scraped = scraperClient.scrape(url);
         if (scraped == null) {
-            log.warn("Scraper returned null response for url={}", item.getUrl());
-            return buildTrackResponse(item.getProduct(), item, latest);
+            log.warn("Scraper returned null response for url={}", url);
+            return null;
         }
-        PriceInfo info = extractionService.extractPrice(scraped);
+        return extractionService.extractPrice(scraped);
+    }
 
-        if (!isValidPrice(info, latest)) {
-            log.warn("Extracted price failed validation — skipping save. url={} price={} currency={} source={}",
-                    item.getUrl(), info.price(), info.currency(), info.extractionSource());
-            // intentional: return last known good price rather than an error, so the caller always gets a usable response
-            return buildTrackResponse(item.getProduct(), item, latest);
-        }
+    // Phase 3: validate + persist in a fresh, short-lived transaction.
+    private TrackResponse persistResultInTxn(Long itemId, PriceInfo info) {
+        return transactionTemplate.execute(status -> {
+            TrackedItem item = trackedItemRepository.findById(itemId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found"));
+            PriceRecord latest = priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item).orElse(null);
 
-        PriceRecord record = priceRecordRepository.save(PriceRecord.builder()
-                .price(info.price())
-                .currency(info.currency())
-                .available(info.available())
-                .extractionSource(info.extractionSource())
-                .trackedItem(item)
-                .build());
+            if (info == null || !isValidPrice(info, latest)) {
+                if (info != null) {
+                    log.warn("Extracted price failed validation — skipping save. url={} price={} currency={} source={}",
+                            item.getUrl(), info.price(), info.currency(), info.extractionSource());
+                }
+                // intentional: return last known good price rather than an error, so the caller always gets a usable response
+                return buildTrackResponse(item.getProduct(), item, latest);
+            }
 
-        item.setLastChecked(record.getTimestamp());
+            PriceRecord record = priceRecordRepository.save(PriceRecord.builder()
+                    .price(info.price())
+                    .currency(info.currency().toUpperCase(Locale.ROOT))
+                    .available(info.available())
+                    .extractionSource(info.extractionSource())
+                    .trackedItem(item)
+                    .build());
 
-        return buildTrackResponse(item.getProduct(), item, record);
+            item.setLastChecked(record.getTimestamp());
+
+            return buildTrackResponse(item.getProduct(), item, record);
+        });
     }
 
     @Transactional

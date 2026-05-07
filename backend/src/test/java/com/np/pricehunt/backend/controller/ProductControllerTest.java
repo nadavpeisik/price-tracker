@@ -10,6 +10,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -62,6 +63,20 @@ class ProductControllerTest {
                 .andExpect(status().isOk());
 
         verify(queryService).getAllProducts(argThat(p -> p.getPageNumber() == 2 && p.getPageSize() == 5));
+    }
+
+    @Test
+    void getAllProducts_userSortWithoutId_appendsIdTiebreaker() throws Exception {
+        when(queryService.getAllProducts(any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of()));
+
+        mvc.perform(get("/api/products").param("sort", "name,asc"))
+                .andExpect(status().isOk());
+
+        verify(queryService).getAllProducts(argThat(p -> {
+            Sort.Order idOrder = p.getSort().getOrderFor("id");
+            return idOrder != null && p.getSort().getOrderFor("name") != null;
+        }));
     }
 
     @Test
@@ -184,7 +199,7 @@ class ProductControllerTest {
     }
 
     @Test
-    void getPriceHistory_withBothParams_passesBoTHToService() throws Exception {
+    void getPriceHistory_withBothParams_passesBothToService() throws Exception {
         PriceHistoryResponse history = new PriceHistoryResponse(1L, "amazon.com", "https://amazon.com/dp/123", List.of());
         when(queryService.getPriceHistory(eq(1L), eq(1L), any(LocalDateTime.class), any(LocalDateTime.class)))
                 .thenReturn(history);

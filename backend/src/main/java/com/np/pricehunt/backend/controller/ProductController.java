@@ -5,7 +5,9 @@ import com.np.pricehunt.backend.service.ProductQueryService;
 import com.np.pricehunt.backend.service.ProductTrackingService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
@@ -31,7 +33,14 @@ public class ProductController {
     @GetMapping
     public ResponseEntity<Page<ProductSummaryResponse>> getAllProducts(
             @PageableDefault(size = 20, sort = {"name", "id"}) Pageable pageable) {
-        return ResponseEntity.ok(queryService.getAllProducts(pageable));
+        return ResponseEntity.ok(queryService.getAllProducts(withStableSort(pageable)));
+    }
+
+    // Caller-provided ?sort overrides @PageableDefault entirely; append `id` so pagination stays deterministic.
+    private static Pageable withStableSort(Pageable p) {
+        if (p.getSort().getOrderFor("id") != null) return p;
+        Sort sort = p.getSort().and(Sort.by(Sort.Order.asc("id")));
+        return PageRequest.of(p.getPageNumber(), p.getPageSize(), sort);
     }
 
     @GetMapping("/{id}")

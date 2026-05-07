@@ -40,7 +40,7 @@ public class ProductQueryService {
     private record ItemWithLatestPrice(TrackedItem item, PriceRecord latest) {}
 
     public Page<ProductSummaryResponse> getAllProducts(Pageable pageable) {
-        // N+1 is bounded by page size — acceptable at this scale; future opt: JPQL fetch join
+        // N+1: O(pageSize × storesPerProduct). Acceptable at current scale; revisit with JPQL fetch join when traffic grows.
         return productRepository.findAll(pageable).map(product -> {
             List<ItemWithLatestPrice> pairs = fetchItemsWithLatestPrices(product);
             return toSummaryResponse(product, pairs);

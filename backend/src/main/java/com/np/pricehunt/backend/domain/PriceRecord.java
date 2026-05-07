@@ -10,6 +10,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Entity
+// `timestamp DESC` honored by Hibernate 6+ on Postgres; older providers ignore the column order silently.
 @Table(indexes = {
     @Index(name = "idx_price_record_item_timestamp", columnList = "tracked_item_id, timestamp DESC")
 })

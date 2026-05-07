@@ -107,26 +107,6 @@ class PriceRecordRepositoryTest {
         assertThat(results.get(1).getTimestamp()).isEqualTo(t1);
     }
 
-    @Test
-    void findGreaterThanEqual_returnsFromDateInclusive_orderedDesc() {
-        List<PriceRecord> results = priceRecordRepository
-                .findByTrackedItemAndTimestampGreaterThanEqualOrderByTimestampDesc(item, t2);
-
-        assertThat(results).hasSize(2);
-        assertThat(results.get(0).getTimestamp()).isEqualTo(t3);
-        assertThat(results.get(1).getTimestamp()).isEqualTo(t2);
-    }
-
-    @Test
-    void findLessThanEqual_returnsUpToDateInclusive_orderedDesc() {
-        List<PriceRecord> results = priceRecordRepository
-                .findByTrackedItemAndTimestampLessThanEqualOrderByTimestampDesc(item, t2);
-
-        assertThat(results).hasSize(2);
-        assertThat(results.get(0).getTimestamp()).isEqualTo(t2);
-        assertThat(results.get(1).getTimestamp()).isEqualTo(t1);
-    }
-
     private PriceRecord record(String price, LocalDateTime timestamp) {
         return record(item, price, timestamp);
     }

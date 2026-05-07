@@ -17,6 +17,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
@@ -36,6 +38,7 @@ class ProductTrackingServiceCrudTest {
     @Mock private PriceRecordRepository priceRecordRepository;
     @Mock private PriceExtractionService extractionService;
     @Mock private ScraperClient scraperClient;
+    @Mock private TransactionTemplate transactionTemplate;
 
     @InjectMocks private ProductTrackingService service;
 
@@ -46,6 +49,11 @@ class ProductTrackingServiceCrudTest {
     void setUp() {
         ReflectionTestUtils.setField(service, "maxDeltaPercent", 200);
         ReflectionTestUtils.setField(service, "minRefreshIntervalSeconds", 60);
+        // Run transactionTemplate callbacks inline so phase splits are exercised end-to-end.
+        lenient().when(transactionTemplate.execute(any())).thenAnswer(inv -> {
+            TransactionCallback<?> cb = inv.getArgument(0);
+            return cb.doInTransaction(null);
+        });
         product = Product.builder().id(1L).name("Laptop").build();
         item = TrackedItem.builder().id(1L).url("https://amazon.com/dp/1").shopName("amazon.com").product(product).build();
     }
@@ -125,7 +133,6 @@ class ProductTrackingServiceCrudTest {
     @Test
     void updateProduct_updatesName() {
         when(productRepository.findById(1L)).thenReturn(Optional.of(product));
-        when(productRepository.save(product)).thenReturn(product);
 
         ProductResponse response = service.updateProduct(1L, new UpdateProductRequest("New Name", null));
 
@@ -136,7 +143,6 @@ class ProductTrackingServiceCrudTest {
     @Test
     void updateProduct_ignoresBlankName() {
         when(productRepository.findById(1L)).thenReturn(Optional.of(product));
-        when(productRepository.save(product)).thenReturn(product);
 
         service.updateProduct(1L, new UpdateProductRequest("  ", null));
 
@@ -146,7 +152,6 @@ class ProductTrackingServiceCrudTest {
     @Test
     void updateProduct_updatesDescription() {
         when(productRepository.findById(1L)).thenReturn(Optional.of(product));
-        when(productRepository.save(product)).thenReturn(product);
 
         service.updateProduct(1L, new UpdateProductRequest(null, "A great laptop"));
 
@@ -156,7 +161,6 @@ class ProductTrackingServiceCrudTest {
     @Test
     void updateProduct_returnsLightweightResponse_doesNotFetchTrackedItems() {
         when(productRepository.findById(1L)).thenReturn(Optional.of(product));
-        when(productRepository.save(product)).thenReturn(product);
 
         service.updateProduct(1L, new UpdateProductRequest("New Name", null));
 
@@ -167,11 +171,29 @@ class ProductTrackingServiceCrudTest {
     void updateProduct_clearsDescription_whenEmptyStringPassed() {
         product.setDescription("old description");
         when(productRepository.findById(1L)).thenReturn(Optional.of(product));
-        when(productRepository.save(product)).thenReturn(product);
 
         service.updateProduct(1L, new UpdateProductRequest(null, ""));
 
         assertThat(product.getDescription()).isNull();
+    }
+
+    @Test
+    void updateProduct_doesNotCallSave_dirtyCheckingFlushes() {
+        when(productRepository.findById(1L)).thenReturn(Optional.of(product));
+
+        service.updateProduct(1L, new UpdateProductRequest("New Name", null));
+
+        verify(productRepository, never()).save(any());
+    }
+
+    @Test
+    void updateProduct_allFieldsNull_returns400() {
+        assertThatThrownBy(() -> service.updateProduct(1L, new UpdateProductRequest(null, null)))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(e -> ((ResponseStatusException) e).getStatusCode())
+                .isEqualTo(HttpStatus.BAD_REQUEST);
+
+        verify(productRepository, never()).findById(any());
     }
 
     // --- refreshTrackedItem ---
@@ -234,5 +256,46 @@ class ProductTrackingServiceCrudTest {
 
         verify(scraperClient).scrape(item.getUrl());
         assertThat(response.currentPrice()).isEqualByComparingTo("899.99");
+    }
+
+    @Test
+    void refreshTrackedItem_secondAttemptAfterFailedScrape_throwsTooManyRequests() {
+        // First attempt: scraper returns null. lastChecked never bumped on the entity, but the
+        // in-memory rate-limiter is stamped during Phase 1. Second attempt must hit the cap.
+        when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
+        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item)).thenReturn(Optional.empty());
+        when(scraperClient.scrape(item.getUrl())).thenReturn(null);
+
+        TrackResponse first = service.refreshTrackedItem(1L, 1L);
+        assertThat(first.currentPrice()).isNull();
+
+        assertThatThrownBy(() -> service.refreshTrackedItem(1L, 1L))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(e -> ((ResponseStatusException) e).getStatusCode())
+                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+
+        verify(scraperClient, times(1)).scrape(item.getUrl());
+    }
+
+    @Test
+    void scrapeAndPersist_normalizesCurrencyToUppercase() {
+        ScrapeResponse scraped = new ScrapeResponse(ExtractionSource.STRUCTURED,
+                new ScrapeResponse.PriceData(new BigDecimal("100.00"), "usd", true), null, null);
+        when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
+        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item)).thenReturn(Optional.empty());
+        when(scraperClient.scrape(item.getUrl())).thenReturn(scraped);
+        when(extractionService.extractPrice(scraped))
+                .thenReturn(new PriceInfo(new BigDecimal("100.00"), "usd", true, ExtractionSource.STRUCTURED));
+        when(priceRecordRepository.save(any())).thenAnswer(inv -> {
+            PriceRecord r = inv.getArgument(0);
+            ReflectionTestUtils.setField(r, "timestamp", LocalDateTime.now());
+            return r;
+        });
+
+        service.refreshTrackedItem(1L, 1L);
+
+        org.mockito.ArgumentCaptor<PriceRecord> captor = org.mockito.ArgumentCaptor.forClass(PriceRecord.class);
+        verify(priceRecordRepository).save(captor.capture());
+        assertThat(captor.getValue().getCurrency()).isEqualTo("USD");
     }
 }
