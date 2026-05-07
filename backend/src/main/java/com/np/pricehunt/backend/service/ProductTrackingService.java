@@ -24,6 +24,7 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -92,14 +93,17 @@ public class ProductTrackingService {
     // scrape, so failed scrapes can't bypass the limit by leaving lastChecked untouched.
     private void checkAndStampRefreshAttempt(Long itemId, LocalDateTime persistedLastChecked) {
         Instant now = Instant.now();
+        LocalDateTime nowLdt = LocalDateTime.ofInstant(now, ZoneOffset.UTC);
         Instant cutoff = now.minusSeconds(minRefreshIntervalSeconds);
+
+        if (persistedLastChecked != null &&
+                persistedLastChecked.isAfter(nowLdt.minusSeconds(minRefreshIntervalSeconds))) {
+            throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "Item was refreshed recently, try again later");
+        }
+
         Instant kept = lastRefreshAttempt.compute(itemId, (k, prev) ->
                 (prev != null && prev.isAfter(cutoff)) ? prev : now);
         if (kept != now) {
-            throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "Item was refreshed recently, try again later");
-        }
-        if (persistedLastChecked != null &&
-                persistedLastChecked.isAfter(LocalDateTime.now().minusSeconds(minRefreshIntervalSeconds))) {
             throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "Item was refreshed recently, try again later");
         }
     }
@@ -127,6 +131,9 @@ public class ProductTrackingService {
     public ProductResponse updateProduct(Long id, UpdateProductRequest request) {
         if (request.name() == null && request.description() == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "At least one field is required");
+        }
+        if (request.name() != null && !StringUtils.hasText(request.name())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Name cannot be blank");
         }
 
         Product product = productRepository.findById(id)

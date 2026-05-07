@@ -141,12 +141,24 @@ class ProductTrackingServiceCrudTest {
     }
 
     @Test
-    void updateProduct_ignoresBlankName() {
-        when(productRepository.findById(1L)).thenReturn(Optional.of(product));
+    void updateProduct_blankName_returns400() {
+        assertThatThrownBy(() -> service.updateProduct(1L, new UpdateProductRequest("  ", null)))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(e -> ((ResponseStatusException) e).getStatusCode())
+                .isEqualTo(HttpStatus.BAD_REQUEST);
 
-        service.updateProduct(1L, new UpdateProductRequest("  ", null));
+        verify(productRepository, never()).findById(any());
+    }
 
-        assertThat(product.getName()).isEqualTo("Laptop");
+    @Test
+    void updateProduct_blankNameWithDescription_returns400_noPartialUpdate() {
+        assertThatThrownBy(() -> service.updateProduct(1L, new UpdateProductRequest("  ", "A great laptop")))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(e -> ((ResponseStatusException) e).getStatusCode())
+                .isEqualTo(HttpStatus.BAD_REQUEST);
+
+        verify(productRepository, never()).findById(any());
+        assertThat(product.getDescription()).isNull();
     }
 
     @Test
