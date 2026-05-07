@@ -17,6 +17,8 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -34,6 +36,7 @@ class ProductTrackingServiceValidationTest {
     @Mock private PriceRecordRepository priceRecordRepository;
     @Mock private PriceExtractionService extractionService;
     @Mock private ScraperClient scraperClient;
+    @Mock private TransactionTemplate transactionTemplate;
 
     @InjectMocks
     private ProductTrackingService service;
@@ -51,8 +54,13 @@ class ProductTrackingServiceValidationTest {
         scrapeResponse = new ScrapeResponse(ExtractionSource.STRUCTURED,
                 new ScrapeResponse.PriceData(new BigDecimal("100.00"), "USD", true), null, null);
 
+        lenient().when(transactionTemplate.execute(any())).thenAnswer(inv -> {
+            TransactionCallback<?> cb = inv.getArgument(0);
+            return cb.doInTransaction(null);
+        });
         when(productRepository.findById(1L)).thenReturn(Optional.of(product));
         when(trackedItemRepository.findByUrl(any())).thenReturn(Optional.of(item));
+        when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
         when(scraperClient.scrape(any())).thenReturn(scrapeResponse);
     }
 
