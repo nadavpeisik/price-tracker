@@ -1,6 +1,8 @@
 package com.np.pricehunt.backend.client;
 
+import com.np.pricehunt.backend.config.CorrelationIdFilter;
 import com.np.pricehunt.backend.dto.ScrapeResponse;
+import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -19,8 +21,10 @@ public class ScraperClient {
     }
 
     public ScrapeResponse scrape(String url) {
+        String correlationId = MDC.get(CorrelationIdFilter.MDC_KEY);
         return restClient.post()
                 .uri("/scrape")
+                .header(CorrelationIdFilter.HEADER, correlationId != null ? correlationId : "")
                 .body(new ScrapeRequest(url))
                 .retrieve()
                 .body(ScrapeResponse.class);

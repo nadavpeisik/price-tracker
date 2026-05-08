@@ -1,12 +1,32 @@
+import contextvars
+import logging
+import uuid
 from contextlib import asynccontextmanager
 from enum import Enum
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from playwright.async_api import async_playwright, Browser, Playwright
 from pydantic import BaseModel
 
 playwright_instance: Playwright = None
 browser: Browser = None
+
+_correlation_id: contextvars.ContextVar[str] = contextvars.ContextVar("correlation_id", default="-")
+
+
+class CorrelationIdLogFilter(logging.Filter):
+    def filter(self, record):
+        record.correlation_id = _correlation_id.get()
+        return True
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(correlation_id)s] %(levelname)s %(name)s - %(message)s",
+)
+logging.getLogger().addFilter(CorrelationIdLogFilter())
+for handler in logging.getLogger().handlers:
+    handler.addFilter(CorrelationIdLogFilter())
 
 # JavaScript run via page.evaluate() to strip noise from the DOM before extraction
 _DOM_PRUNE_SCRIPT = """() => {
@@ -101,6 +121,18 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+
+@app.middleware("http")
+async def correlation_id_middleware(request: Request, call_next):
+    cid = request.headers.get("X-Correlation-ID") or str(uuid.uuid4())
+    token = _correlation_id.set(cid)
+    try:
+        response = await call_next(request)
+        response.headers["X-Correlation-ID"] = cid
+        return response
+    finally:
+        _correlation_id.reset(token)
 
 
 async def _extract_snippet(page) -> str | None:
