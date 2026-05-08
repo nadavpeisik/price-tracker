@@ -154,12 +154,13 @@ class ProductControllerTest {
     void refreshTrackedItem_returnsTrackResponse() throws Exception {
         TrackResponse response = new TrackResponse(
                 1L, "Laptop", 1L, "https://amazon.com/dp/123", "amazon.com",
-                new BigDecimal("949.99"), "USD", true, LocalDateTime.now(), null);
+                new BigDecimal("949.99"), "USD", true, LocalDateTime.now(), ExtractionSource.FULLTEXT);
         when(trackingService.refreshTrackedItem(1L, 1L)).thenReturn(response);
 
         mvc.perform(post("/api/products/1/tracked-items/1/refresh"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.currentPrice").value(949.99));
+                .andExpect(jsonPath("$.currentPrice").value(949.99))
+                .andExpect(jsonPath("$.extractionSource").value("FULLTEXT"));
     }
 
     @Test

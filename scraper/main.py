@@ -13,20 +13,21 @@ browser: Browser = None
 
 _correlation_id: contextvars.ContextVar[str] = contextvars.ContextVar("correlation_id", default="-")
 
+_original_log_record_factory = logging.getLogRecordFactory()
 
-class CorrelationIdLogFilter(logging.Filter):
-    def filter(self, record):
-        record.correlation_id = _correlation_id.get()
-        return True
 
+def _log_record_factory(*args, **kwargs):
+    record = _original_log_record_factory(*args, **kwargs)
+    record.correlation_id = _correlation_id.get()
+    return record
+
+
+logging.setLogRecordFactory(_log_record_factory)
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(correlation_id)s] %(levelname)s %(name)s - %(message)s",
 )
-logging.getLogger().addFilter(CorrelationIdLogFilter())
-for handler in logging.getLogger().handlers:
-    handler.addFilter(CorrelationIdLogFilter())
 
 # JavaScript run via page.evaluate() to strip noise from the DOM before extraction
 _DOM_PRUNE_SCRIPT = """() => {

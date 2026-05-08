@@ -7,6 +7,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
+import java.util.UUID;
+
 @Component
 public class ScraperClient {
 
@@ -24,7 +26,7 @@ public class ScraperClient {
         String correlationId = MDC.get(CorrelationIdFilter.MDC_KEY);
         return restClient.post()
                 .uri("/scrape")
-                .header(CorrelationIdFilter.HEADER, correlationId != null ? correlationId : "")
+                .header(CorrelationIdFilter.HEADER, correlationId != null ? correlationId : UUID.randomUUID().toString())
                 .body(new ScrapeRequest(url))
                 .retrieve()
                 .body(ScrapeResponse.class);
