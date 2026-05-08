@@ -10,8 +10,10 @@ public class ScraperClient {
 
     private final RestClient restClient;
 
-    public ScraperClient(@Value("${scraper.base-url}") String baseUrl) {
-        this.restClient = RestClient.builder()
+    public ScraperClient(
+            @Value("${scraper.base-url}") String baseUrl,
+            RestClient.Builder restClientBuilder) {
+        this.restClient = restClientBuilder
                 .baseUrl(baseUrl)
                 .build();
     }
