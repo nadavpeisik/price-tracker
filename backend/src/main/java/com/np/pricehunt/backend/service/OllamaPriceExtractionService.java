@@ -10,25 +10,27 @@ public class OllamaPriceExtractionService {
     private final ChatClient chatClient;
 
     public OllamaPriceExtractionService(ChatClient.Builder builder) {
-        this.chatClient = builder.build();
+        this.chatClient = builder
+                .defaultSystem("""
+                        You are a specialized e-commerce data extraction engine.
+                        Your output is deterministic and follows the provided schema exactly.
+                        """)
+                .build();
     }
 
     public PriceLlmResult extractPriceFromText(String text) {
         return chatClient.prompt()
                 .user(u -> u.text("""
-                        Role: Expert e-commerce data extractor.
-                        Task: Identify the PRIMARY price for the product. Ignore original/crossed-out prices if a sale price is present.
+                        # TASK
+                        Extract the PRIMARY current price from the product text below.
 
-                        Text:
+                        # RULES
+                        1. Currency symbols and codes: $ → USD, € → EUR, £ → GBP, ₪ → ILS.
+                        2. Ignore original/MSRP/crossed-out prices when a sale price is present.
+                        3. Set available = true ONLY if the text indicates "in stock", "add to cart", or equivalent.
+
+                        # DATA
                         {text}
-
-                        Instructions:
-                        1. Look for currency symbols ($, €, £) and ISO currency codes.
-                        2. Identify if the item is in stock.
-                        3. Return ONLY valid JSON, no explanation.
-
-                        Response format:
-                        {"price": number, "currency": "ISO 4217 code", "available": boolean}
                         """).param("text", text))
                 .call()
                 .entity(PriceLlmResult.class);
