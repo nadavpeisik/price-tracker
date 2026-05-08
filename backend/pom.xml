@@ -117,16 +117,32 @@
 	</dependencyManagement>
 
 	<profiles>
+		<!-- Silences Netty's native DNS resolver warning on Apple Silicon Macs -->
 		<profile>
-			<id>macos-dev</id>
+			<id>macos-aarch64</id>
 			<activation>
-				<os><family>mac</family></os>
+				<os><family>mac</family><arch>aarch64</arch></os>
 			</activation>
 			<dependencies>
 				<dependency>
 					<groupId>io.netty</groupId>
 					<artifactId>netty-resolver-dns-native-macos</artifactId>
 					<classifier>osx-aarch_64</classifier>
+					<scope>runtime</scope>
+				</dependency>
+			</dependencies>
+		</profile>
+		<!-- Silences Netty's native DNS resolver warning on Intel Macs -->
+		<profile>
+			<id>macos-x86_64</id>
+			<activation>
+				<os><family>mac</family><arch>x86_64</arch></os>
+			</activation>
+			<dependencies>
+				<dependency>
+					<groupId>io.netty</groupId>
+					<artifactId>netty-resolver-dns-native-macos</artifactId>
+					<classifier>osx-x86_64</classifier>
 					<scope>runtime</scope>
 				</dependency>
 			</dependencies>
