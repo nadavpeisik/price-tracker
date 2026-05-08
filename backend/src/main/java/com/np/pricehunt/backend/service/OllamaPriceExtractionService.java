@@ -26,6 +26,8 @@ public class OllamaPriceExtractionService {
 
         PriceLlmResult result = chatClient.prompt()
                 .user(u -> u.text("""
+                        /no_think
+
                         # TASK
                         Extract the PRIMARY current price from the product text below.
 
