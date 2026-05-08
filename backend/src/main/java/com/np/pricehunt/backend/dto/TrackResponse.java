@@ -1,5 +1,7 @@
 package com.np.pricehunt.backend.dto;
 
+import com.np.pricehunt.backend.domain.ExtractionSource;
+
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
@@ -12,5 +14,6 @@ public record TrackResponse(
         BigDecimal currentPrice,
         String currency,
         boolean available,
-        LocalDateTime lastChecked
+        LocalDateTime lastChecked,
+        ExtractionSource extractionSource
 ) {}

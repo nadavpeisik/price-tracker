@@ -271,7 +271,8 @@ public class ProductTrackingService {
                 record != null ? record.getPrice() : null,
                 record != null ? record.getCurrency() : null,
                 record != null && record.isAvailable(),
-                record != null ? record.getTimestamp() : null
+                record != null ? record.getTimestamp() : null,
+                record != null ? record.getExtractionSource() : null
         );
     }
 }
