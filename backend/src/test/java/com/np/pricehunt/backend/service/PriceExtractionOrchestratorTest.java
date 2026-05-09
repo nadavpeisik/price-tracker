@@ -155,6 +155,42 @@ class PriceExtractionOrchestratorTest {
     }
 
     @Test
+    void extractPrice_snippet_fastModelThrows_retriesWithAccurateModel() {
+        String snippet = "malformed-json-trigger";
+        when(ollamaService.extractPriceFromText(snippet, SNIPPET_MODEL))
+                .thenThrow(new RuntimeException("JSON parse error"));
+        when(ollamaService.extractPriceFromText(snippet, FULLTEXT_MODEL)).thenReturn(STUB_LLM_RESULT);
+        ScrapeResponse response = new ScrapeResponse(
+                ExtractionSource.SNIPPET, null, snippet, null);
+
+        PriceInfo result = orchestrator.extractPrice(response);
+
+        assertThat(result.extractionSource()).isEqualTo(ExtractionSource.SNIPPET);
+        assertThat(result.price()).isEqualByComparingTo("29.99");
+        verify(ollamaService).extractPriceFromText(snippet, SNIPPET_MODEL);
+        verify(ollamaService).extractPriceFromText(snippet, FULLTEXT_MODEL);
+    }
+
+    @Test
+    void extractPrice_snippet_bothModelsInvalid_returnsResultWithNulls() {
+        String snippet = "ambiguous";
+        PriceLlmResult invalid = new PriceLlmResult(null, null, false);
+        when(ollamaService.extractPriceFromText(snippet, SNIPPET_MODEL)).thenReturn(invalid);
+        when(ollamaService.extractPriceFromText(snippet, FULLTEXT_MODEL)).thenReturn(invalid);
+        ScrapeResponse response = new ScrapeResponse(
+                ExtractionSource.SNIPPET, null, snippet, null);
+
+        PriceInfo result = orchestrator.extractPrice(response);
+
+        assertThat(result.extractionSource()).isEqualTo(ExtractionSource.SNIPPET);
+        assertThat(result.price()).isNull();
+        assertThat(result.currency()).isNull();
+        assertThat(result.available()).isFalse();
+        verify(ollamaService).extractPriceFromText(snippet, SNIPPET_MODEL);
+        verify(ollamaService).extractPriceFromText(snippet, FULLTEXT_MODEL);
+    }
+
+    @Test
     void extractPrice_fulltext_callsLlmWithFilteredTextAndAccurateModel() {
         when(ollamaService.extractPriceFromText(anyString(), eq(FULLTEXT_MODEL))).thenReturn(STUB_LLM_RESULT);
         // lines 0-1 and 5-6 are far enough from any price match that filterLines should drop them

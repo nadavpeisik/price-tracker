@@ -46,9 +46,18 @@ public class PriceExtractionOrchestrator implements PriceExtractionService {
             case STRUCTURED -> mapStructured(response.priceData());
             case SNIPPET -> {
                 String text = response.snippet();
-                PriceLlmResult raw = ollamaService.extractPriceFromText(text, snippetModel);
-                if (!isValidLlmResult(raw)) {
-                    log.info("SNIPPET fast model returned invalid result, retrying with accurate model");
+                PriceLlmResult raw;
+                try {
+                    raw = ollamaService.extractPriceFromText(text, snippetModel);
+                    if (!isValidLlmResult(raw)) {
+                        log.info("SNIPPET fast model returned invalid result {}, retrying with accurate model", raw);
+                        raw = ollamaService.extractPriceFromText(text, fulltextModel);
+                    }
+                } catch (Exception e) {
+                    // Small models occasionally emit malformed JSON, which makes Spring AI's
+                    // structured-output parser throw. Treat that the same as an invalid result.
+                    log.warn("SNIPPET fast model threw {}: {} — retrying with accurate model",
+                            e.getClass().getSimpleName(), e.getMessage());
                     raw = ollamaService.extractPriceFromText(text, fulltextModel);
                 }
                 yield new PriceInfo(raw.price(), raw.currency(), raw.available(), ExtractionSource.SNIPPET);
@@ -60,11 +69,15 @@ public class PriceExtractionOrchestrator implements PriceExtractionService {
         };
     }
 
+    // Shape check, not a semantic check. We deliberately do not validate `available`:
+    // it's a primitive boolean (no "unknown" state), and availability accuracy is the
+    // prompt's job — a confidently-wrong value here can't be detected by a predicate.
     private boolean isValidLlmResult(PriceLlmResult r) {
         return r != null
                 && r.price() != null
                 && r.price().compareTo(BigDecimal.ZERO) > 0
-                && r.currency() != null;
+                && r.currency() != null
+                && !r.currency().isBlank();
     }
 
     private PriceInfo mapStructured(ScrapeResponse.PriceData d) {

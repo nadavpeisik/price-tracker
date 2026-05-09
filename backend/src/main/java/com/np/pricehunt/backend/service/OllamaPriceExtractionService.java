@@ -20,6 +20,7 @@ public class OllamaPriceExtractionService {
 
                         Examples:
                         - "In stock within 1 week. Add to cart. £100" → {"price": 100.00, "currency": "GBP", "available": false}
+                        - "In stock within about 1 week. Add to basket. €299" → {"price": 299.00, "currency": "EUR", "available": false}
                         - "In Stock. Buy Now. $50" → {"price": 50.00, "currency": "USD", "available": true}
                         - "חסר במלאי. ₪200" → {"price": 200.00, "currency": "ILS", "available": false}
                         """)
@@ -30,6 +31,8 @@ public class OllamaPriceExtractionService {
         log.debug("LLM input text ({} chars): {}", text.length(), text);
         long start = System.currentTimeMillis();
 
+        // Per-call options only set `model`; Spring AI merges with bean-level defaults
+        // (temperature, format=json, num-ctx) from spring.ai.ollama.chat.options.* in application.properties.
         PriceLlmResult result = chatClient.prompt()
                 .options(OllamaChatOptions.builder().model(model).build())
                 .user(u -> u.text("""
