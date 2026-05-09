@@ -5,12 +5,16 @@ import com.np.pricehunt.backend.dto.PriceLlmResult;
 import com.np.pricehunt.backend.dto.PriceInfo;
 import com.np.pricehunt.backend.dto.ScrapeResponse;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class PriceExtractionOrchestrator implements PriceExtractionService {
@@ -30,19 +34,37 @@ public class PriceExtractionOrchestrator implements PriceExtractionService {
 
     private final OllamaPriceExtractionService ollamaService;
 
+    @Value("${price.extraction.snippet-model}")
+    private String snippetModel;
+
+    @Value("${price.extraction.fulltext-model}")
+    private String fulltextModel;
+
     @Override
     public PriceInfo extractPrice(ScrapeResponse response) {
         return switch (response.extractionSource()) {
             case STRUCTURED -> mapStructured(response.priceData());
             case SNIPPET -> {
-                PriceLlmResult raw = ollamaService.extractPriceFromText(response.snippet());
+                String text = response.snippet();
+                PriceLlmResult raw = ollamaService.extractPriceFromText(text, snippetModel);
+                if (!isValidLlmResult(raw)) {
+                    log.info("SNIPPET fast model returned invalid result, retrying with accurate model");
+                    raw = ollamaService.extractPriceFromText(text, fulltextModel);
+                }
                 yield new PriceInfo(raw.price(), raw.currency(), raw.available(), ExtractionSource.SNIPPET);
             }
             case FULLTEXT -> {
-                PriceLlmResult raw = ollamaService.extractPriceFromText(filterLines(response.innerText()));
+                PriceLlmResult raw = ollamaService.extractPriceFromText(filterLines(response.innerText()), fulltextModel);
                 yield new PriceInfo(raw.price(), raw.currency(), raw.available(), ExtractionSource.FULLTEXT);
             }
         };
+    }
+
+    private boolean isValidLlmResult(PriceLlmResult r) {
+        return r != null
+                && r.price() != null
+                && r.price().compareTo(BigDecimal.ZERO) > 0
+                && r.currency() != null;
     }
 
     private PriceInfo mapStructured(ScrapeResponse.PriceData d) {
