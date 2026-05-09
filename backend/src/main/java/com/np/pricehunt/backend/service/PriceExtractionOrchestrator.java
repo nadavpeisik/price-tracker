@@ -5,12 +5,16 @@ import com.np.pricehunt.backend.dto.PriceLlmResult;
 import com.np.pricehunt.backend.dto.PriceInfo;
 import com.np.pricehunt.backend.dto.ScrapeResponse;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class PriceExtractionOrchestrator implements PriceExtractionService {
@@ -30,19 +34,50 @@ public class PriceExtractionOrchestrator implements PriceExtractionService {
 
     private final OllamaPriceExtractionService ollamaService;
 
+    @Value("${price.extraction.snippet-model}")
+    private String snippetModel;
+
+    @Value("${price.extraction.fulltext-model}")
+    private String fulltextModel;
+
     @Override
     public PriceInfo extractPrice(ScrapeResponse response) {
         return switch (response.extractionSource()) {
             case STRUCTURED -> mapStructured(response.priceData());
             case SNIPPET -> {
-                PriceLlmResult raw = ollamaService.extractPriceFromText(response.snippet());
+                String text = response.snippet();
+                PriceLlmResult raw;
+                try {
+                    raw = ollamaService.extractPriceFromText(text, snippetModel);
+                    if (!isValidLlmResult(raw)) {
+                        log.info("SNIPPET fast model returned invalid result {}, retrying with accurate model", raw);
+                        raw = ollamaService.extractPriceFromText(text, fulltextModel);
+                    }
+                } catch (Exception e) {
+                    // Small models occasionally emit malformed JSON, which makes Spring AI's
+                    // structured-output parser throw. Treat that the same as an invalid result.
+                    log.warn("SNIPPET fast model threw {}: {} — retrying with accurate model",
+                            e.getClass().getSimpleName(), e.getMessage());
+                    raw = ollamaService.extractPriceFromText(text, fulltextModel);
+                }
                 yield new PriceInfo(raw.price(), raw.currency(), raw.available(), ExtractionSource.SNIPPET);
             }
             case FULLTEXT -> {
-                PriceLlmResult raw = ollamaService.extractPriceFromText(filterLines(response.innerText()));
+                PriceLlmResult raw = ollamaService.extractPriceFromText(filterLines(response.innerText()), fulltextModel);
                 yield new PriceInfo(raw.price(), raw.currency(), raw.available(), ExtractionSource.FULLTEXT);
             }
         };
+    }
+
+    // Shape check, not a semantic check. We deliberately do not validate `available`:
+    // it's a primitive boolean (no "unknown" state), and availability accuracy is the
+    // prompt's job — a confidently-wrong value here can't be detected by a predicate.
+    private boolean isValidLlmResult(PriceLlmResult r) {
+        return r != null
+                && r.price() != null
+                && r.price().compareTo(BigDecimal.ZERO) > 0
+                && r.currency() != null
+                && !r.currency().isBlank();
     }
 
     private PriceInfo mapStructured(ScrapeResponse.PriceData d) {
