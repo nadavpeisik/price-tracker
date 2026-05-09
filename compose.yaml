@@ -14,6 +14,9 @@ services:
       context: ./scraper
     ports:
       - '8001:8001'
+    volumes:
+      - ./scraper:/app
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001", "--reload"]
 
 volumes:
   postgres_data:

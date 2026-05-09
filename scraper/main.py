@@ -30,9 +30,12 @@ logging.basicConfig(
 )
 
 # JavaScript run via page.evaluate() to strip noise from the DOM before extraction
+# `<style>` is intentionally NOT pruned: stylesheets contain the display:none rules
+# that hide out-of-stock templates kept in the DOM. Removing them would make
+# is_visible() report every hidden template as visible.
 _DOM_PRUNE_SCRIPT = """() => {
     const selectors = [
-        'nav', 'footer', 'script', 'style', 'noscript',
+        'nav', 'footer', 'script', 'noscript',
         '[class*="cookie"]', '[class*="banner"]', '[class*="ad-"]',
         '[id*="cookie"]', '[id*="popup"]'
     ];
@@ -138,6 +141,7 @@ async def correlation_id_middleware(request: Request, call_next):
 
 async def _extract_snippet(page) -> str | None:
     parts = []
+
     for prop in [("product:price:amount", "content"), ("product:price:currency", "content")]:
         try:
             el = await page.query_selector(f'meta[property="{prop[0]}"]')
@@ -158,16 +162,64 @@ async def _extract_snippet(page) -> str | None:
         except Exception:
             pass
 
+    # Visible-only and length-capped: skips hidden out-of-stock templates and
+    # parent containers that match via ancestor class but contain whole descriptions.
+    MAX_ELEMENT_CHARS = 200
+    PER_SELECTOR_LIMIT = 3
+    css_selectors = [
+        '[class*="price"]',
+        '[class*="stock"]',
+        '[class*="availability"]',
+        '[class*="delivery"]',
+        '[id*="availability"]',
+        '[id*="stock"]',
+    ]
+    for selector in css_selectors:
+        try:
+            els = await page.query_selector_all(selector)
+            taken = 0
+            for el in els:
+                if taken >= PER_SELECTOR_LIMIT:
+                    break
+                try:
+                    if not await el.is_visible():
+                        continue
+                    text = (await el.inner_text() or "").strip()
+                    if not text or len(text) > MAX_ELEMENT_CHARS:
+                        continue
+                    parts.append(text)
+                    taken += 1
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    # WooCommerce-style availability flag on the product container. The state is
+    # encoded as a class word ("instock" or "outofstock"), not visible text — and
+    # the container's text is the entire product card, far over MAX_ELEMENT_CHARS.
+    # Read the class attribute directly and synthesize an English phrase the LLM
+    # can parse regardless of page locale. Check outofstock first: if both ever
+    # co-exist, false-negative on availability is safer than false-positive.
     try:
-        price_els = await page.query_selector_all('[class*="price"]')
-        for el in price_els[:3]:
-            text = await el.inner_text()
-            if text and text.strip():
-                parts.append(text.strip())
+        el = await page.query_selector('[class~="outofstock"], [class~="instock"]')
+        if el:
+            cls = (await el.get_attribute("class") or "").split()
+            if "outofstock" in cls:
+                parts.append("This product is currently out of stock")
+            elif "instock" in cls:
+                parts.append("This product is currently in stock")
     except Exception:
         pass
 
-    return " | ".join(parts) if parts else None
+    deduped = list(dict.fromkeys(parts))
+    return " | ".join(deduped) if deduped else None
+
+
+def _snippet_has_useful_content(snippet: str) -> bool:
+    # A snippet is useful only if it has descriptive text (alphabetic characters,
+    # Unicode-aware so Hebrew/Latin both count). Pure price strings like "₪1,025"
+    # lack availability info and should fall through to FULLTEXT.
+    return len(snippet) >= 30 and any(c.isalpha() for c in snippet)
 
 
 @app.post("/scrape", response_model=ScrapeResponse)
@@ -197,10 +249,11 @@ async def scrape(request: ScrapeRequest):
         except Exception:
             pass
 
-        # Tier 2: CSS/meta selectors
+        # Tier 2: CSS/meta selectors — gate on quality so bot-walled / pure-price
+        # snippets fall through to FULLTEXT instead of producing low-signal LLM input.
         try:
             snippet = await _extract_snippet(page)
-            if snippet:
+            if snippet and _snippet_has_useful_content(snippet):
                 return ScrapeResponse(
                     extractionSource=ExtractionSource.SNIPPET,
                     snippet=snippet,

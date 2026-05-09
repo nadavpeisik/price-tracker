@@ -9,6 +9,7 @@ import com.np.pricehunt.backend.dto.*;
 import com.np.pricehunt.backend.repository.PriceRecordRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
+import com.np.pricehunt.backend.validator.UrlValidator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -39,6 +40,7 @@ class ProductTrackingServiceCrudTest {
     @Mock private PriceExtractionService extractionService;
     @Mock private ScraperClient scraperClient;
     @Mock private TransactionTemplate transactionTemplate;
+    @Mock private UrlValidator urlValidator;
 
     @InjectMocks private ProductTrackingService service;
 

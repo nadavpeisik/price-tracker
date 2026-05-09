@@ -8,6 +8,7 @@ import com.np.pricehunt.backend.dto.*;
 import com.np.pricehunt.backend.repository.PriceRecordRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
+import com.np.pricehunt.backend.validator.UrlValidator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -46,6 +47,7 @@ public class ProductTrackingService {
     private final PriceExtractionService extractionService;
     private final ScraperClient scraperClient;
     private final TransactionTemplate transactionTemplate;
+    private final UrlValidator urlValidator;
 
     // Per-process refresh rate-limiter. Survives failed scrapes (which never bump DB lastChecked).
     // Single-instance only; pre-Phase-2 Kafka. Lost on restart — acceptable: caller gets one free retry.
@@ -62,6 +64,7 @@ public class ProductTrackingService {
     }
 
     public TrackResponse trackUrl(Long productId, TrackRequest request) {
+        urlValidator.validate(request.url());
         ItemSnapshot snapshot = transactionTemplate.execute(status -> {
             Product product = productRepository.findById(productId)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found"));
@@ -185,6 +188,10 @@ public class ProductTrackingService {
                     .build());
 
             item.setLastChecked(record.getTimestamp());
+
+            log.info("Tracked itemId={} url={} source={} price={} {} available={}",
+                    item.getId(), item.getUrl(), info.extractionSource(),
+                    info.price(), info.currency(), info.available());
 
             return buildTrackResponse(item.getProduct(), item, record);
         });
