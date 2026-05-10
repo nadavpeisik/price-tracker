@@ -1,7 +1,7 @@
 package com.np.pricehunt.backend.dto;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 public record TrackedItemSummary(
         Long id,
@@ -10,5 +10,5 @@ public record TrackedItemSummary(
         BigDecimal currentPrice,
         String currency,
         boolean available,
-        LocalDateTime lastChecked
+        Instant lastChecked
 ) {}

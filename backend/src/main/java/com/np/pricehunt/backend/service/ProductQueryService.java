@@ -17,7 +17,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
@@ -58,7 +59,7 @@ public class ProductQueryService {
         return new ProductDetailResponse(product.getId(), product.getName(), product.getDescription(), summaries);
     }
 
-    public PriceHistoryResponse getPriceHistory(Long productId, Long itemId, LocalDateTime from, LocalDateTime to) {
+    public PriceHistoryResponse getPriceHistory(Long productId, Long itemId, Instant from, Instant to) {
         TrackedItem item = trackedItemRepository.findById(itemId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found"));
 
@@ -66,10 +67,10 @@ public class ProductQueryService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found for this product");
         }
 
-        LocalDateTime effectiveTo = (to != null) ? to : LocalDateTime.now();
-        LocalDateTime effectiveFrom = (from != null) ? from : effectiveTo.minusDays(defaultWindowDays);
+        Instant effectiveTo = (to != null) ? to : Instant.now();
+        Instant effectiveFrom = (from != null) ? from : effectiveTo.minus(defaultWindowDays, ChronoUnit.DAYS);
 
-        LocalDateTime maxFrom = effectiveTo.minusYears(2);
+        Instant maxFrom = effectiveTo.minus(365L * 2, ChronoUnit.DAYS);
         if (effectiveFrom.isBefore(maxFrom)) {
             log.info("Price history range clamped to 2 years for item={}", itemId);
             effectiveFrom = maxFrom;

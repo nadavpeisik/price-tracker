@@ -6,7 +6,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.List;
 
 @Entity
@@ -25,7 +25,7 @@ public class TrackedItem {
     @JoinColumn(name = "product_id")
     private Product product;
 
-    private LocalDateTime lastChecked;
+    private Instant lastChecked;
 
     @OneToMany(mappedBy = "trackedItem", cascade = CascadeType.ALL)
     private List<PriceRecord> priceHistory;
