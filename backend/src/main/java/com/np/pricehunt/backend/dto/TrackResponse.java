@@ -3,7 +3,7 @@ package com.np.pricehunt.backend.dto;
 import com.np.pricehunt.backend.domain.ExtractionSource;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 public record TrackResponse(
         Long productId,
@@ -14,6 +14,6 @@ public record TrackResponse(
         BigDecimal currentPrice,
         String currency,
         boolean available,
-        LocalDateTime lastChecked,
+        Instant lastChecked,
         ExtractionSource extractionSource
 ) {}

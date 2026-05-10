@@ -24,8 +24,6 @@ import java.math.RoundingMode;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.time.Instant;
-import java.time.LocalDateTime;
-import java.time.ZoneOffset;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -94,13 +92,11 @@ public class ProductTrackingService {
     // Atomically reads and stamps the in-memory rate-limit map. Falls back to the DB-stored
     // lastChecked when the process is fresh and the map is empty. Stamp happens before the
     // scrape, so failed scrapes can't bypass the limit by leaving lastChecked untouched.
-    private void checkAndStampRefreshAttempt(Long itemId, LocalDateTime persistedLastChecked) {
+    private void checkAndStampRefreshAttempt(Long itemId, Instant persistedLastChecked) {
         Instant now = Instant.now();
-        LocalDateTime nowLdt = LocalDateTime.ofInstant(now, ZoneOffset.UTC);
         Instant cutoff = now.minusSeconds(minRefreshIntervalSeconds);
 
-        if (persistedLastChecked != null &&
-                persistedLastChecked.isAfter(nowLdt.minusSeconds(minRefreshIntervalSeconds))) {
+        if (persistedLastChecked != null && persistedLastChecked.isAfter(cutoff)) {
             throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "Item was refreshed recently, try again later");
         }
 

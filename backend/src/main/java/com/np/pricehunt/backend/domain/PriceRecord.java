@@ -7,7 +7,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 @Entity
 // `timestamp DESC` honored by Hibernate 6+ on Postgres; older providers ignore the column order silently.
@@ -30,7 +30,7 @@ public class PriceRecord {
     private String currency;
 
     @Column(nullable = false)
-    private LocalDateTime timestamp;
+    private Instant timestamp;
 
     private boolean available;
 
@@ -44,7 +44,7 @@ public class PriceRecord {
     @PrePersist
     protected void onCreate() {
         if (this.timestamp == null) {
-            this.timestamp = LocalDateTime.now();
+            this.timestamp = Instant.now();
         }
     }
 }

@@ -19,7 +19,7 @@ import org.springframework.web.client.RestClientException;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.*;
@@ -83,7 +83,7 @@ class ProductControllerTest {
     void getProduct_found_returnsDetail() throws Exception {
         TrackedItemSummary item = new TrackedItemSummary(
                 1L, "https://amazon.com/dp/123", "amazon.com",
-                new BigDecimal("999.99"), "USD", true, LocalDateTime.now());
+                new BigDecimal("999.99"), "USD", true, Instant.now());
         ProductDetailResponse detail = new ProductDetailResponse(1L, "Laptop", null, List.of(item));
         when(queryService.getProduct(1L)).thenReturn(detail);
 
@@ -154,7 +154,7 @@ class ProductControllerTest {
     void refreshTrackedItem_returnsTrackResponse() throws Exception {
         TrackResponse response = new TrackResponse(
                 1L, "Laptop", 1L, "https://amazon.com/dp/123", "amazon.com",
-                new BigDecimal("949.99"), "USD", true, LocalDateTime.now(), ExtractionSource.FULLTEXT);
+                new BigDecimal("949.99"), "USD", true, Instant.now(), ExtractionSource.FULLTEXT);
         when(trackingService.refreshTrackedItem(1L, 1L)).thenReturn(response);
 
         mvc.perform(post("/api/products/1/tracked-items/1/refresh"))
@@ -175,7 +175,7 @@ class ProductControllerTest {
     @Test
     void getPriceHistory_noParams_returnsFullHistory() throws Exception {
         PricePointResponse point = new PricePointResponse(
-                new BigDecimal("999.99"), "USD", true, LocalDateTime.now(), "STRUCTURED");
+                new BigDecimal("999.99"), "USD", true, Instant.now(), "STRUCTURED");
         PriceHistoryResponse history = new PriceHistoryResponse(1L, "amazon.com", "https://amazon.com/dp/123", List.of(point));
         when(queryService.getPriceHistory(eq(1L), eq(1L), isNull(), isNull())).thenReturn(history);
 
@@ -189,30 +189,30 @@ class ProductControllerTest {
     @Test
     void getPriceHistory_withFromParam_parsesDateAndCallsService() throws Exception {
         PriceHistoryResponse history = new PriceHistoryResponse(1L, "amazon.com", "https://amazon.com/dp/123", List.of());
-        when(queryService.getPriceHistory(eq(1L), eq(1L), any(LocalDateTime.class), isNull()))
+        when(queryService.getPriceHistory(eq(1L), eq(1L), any(Instant.class), isNull()))
                 .thenReturn(history);
 
         mvc.perform(get("/api/products/1/tracked-items/1/price-history")
-                        .param("from", "2026-01-01T00:00:00"))
+                        .param("from", "2026-01-01T00:00:00Z"))
                 .andExpect(status().isOk());
 
-        verify(queryService).getPriceHistory(eq(1L), eq(1L), eq(LocalDateTime.of(2026, 1, 1, 0, 0, 0)), isNull());
+        verify(queryService).getPriceHistory(eq(1L), eq(1L), eq(Instant.parse("2026-01-01T00:00:00Z")), isNull());
     }
 
     @Test
     void getPriceHistory_withBothParams_passesBothToService() throws Exception {
         PriceHistoryResponse history = new PriceHistoryResponse(1L, "amazon.com", "https://amazon.com/dp/123", List.of());
-        when(queryService.getPriceHistory(eq(1L), eq(1L), any(LocalDateTime.class), any(LocalDateTime.class)))
+        when(queryService.getPriceHistory(eq(1L), eq(1L), any(Instant.class), any(Instant.class)))
                 .thenReturn(history);
 
         mvc.perform(get("/api/products/1/tracked-items/1/price-history")
-                        .param("from", "2026-01-01T00:00:00")
-                        .param("to", "2026-04-01T00:00:00"))
+                        .param("from", "2026-01-01T00:00:00Z")
+                        .param("to", "2026-04-01T00:00:00Z"))
                 .andExpect(status().isOk());
 
         verify(queryService).getPriceHistory(
                 eq(1L), eq(1L),
-                eq(LocalDateTime.of(2026, 1, 1, 0, 0, 0)),
-                eq(LocalDateTime.of(2026, 4, 1, 0, 0, 0)));
+                eq(Instant.parse("2026-01-01T00:00:00Z")),
+                eq(Instant.parse("2026-04-01T00:00:00Z")));
     }
 }

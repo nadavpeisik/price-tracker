@@ -5,7 +5,7 @@ import com.np.pricehunt.backend.domain.TrackedItem;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -22,6 +22,5 @@ public interface TrackedItemRepository extends JpaRepository<TrackedItem, Long> 
 
     // 3. Get items that haven't been checked in a while
     // Essential for "Daily Scraper" logic later.
-    // (Requires adding a 'lastChecked' LocalDateTime field to entity)
-    List<TrackedItem> findByLastCheckedBefore(LocalDateTime threshold);
+    List<TrackedItem> findByLastCheckedBefore(Instant threshold);
 }

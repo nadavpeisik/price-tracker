@@ -11,7 +11,7 @@ import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import org.springframework.boot.jpa.test.autoconfigure.TestEntityManager;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -25,9 +25,9 @@ class PriceRecordRepositoryTest {
     @Autowired private PriceRecordRepository priceRecordRepository;
 
     private TrackedItem item;
-    private LocalDateTime t1;
-    private LocalDateTime t2;
-    private LocalDateTime t3;
+    private Instant t1;
+    private Instant t2;
+    private Instant t3;
 
     @BeforeEach
     void setUp() {
@@ -38,9 +38,9 @@ class PriceRecordRepositoryTest {
                 .product(product)
                 .build());
 
-        t1 = LocalDateTime.of(2026, 1, 1, 12, 0);
-        t2 = LocalDateTime.of(2026, 2, 1, 12, 0);
-        t3 = LocalDateTime.of(2026, 3, 1, 12, 0);
+        t1 = Instant.parse("2026-01-01T12:00:00Z");
+        t2 = Instant.parse("2026-02-01T12:00:00Z");
+        t3 = Instant.parse("2026-03-01T12:00:00Z");
 
         em.persist(record("100.00", t1));
         em.persist(record("95.00", t2));
@@ -107,11 +107,11 @@ class PriceRecordRepositoryTest {
         assertThat(results.get(1).getTimestamp()).isEqualTo(t1);
     }
 
-    private PriceRecord record(String price, LocalDateTime timestamp) {
+    private PriceRecord record(String price, Instant timestamp) {
         return record(item, price, timestamp);
     }
 
-    private PriceRecord record(TrackedItem trackedItem, String price, LocalDateTime timestamp) {
+    private PriceRecord record(TrackedItem trackedItem, String price, Instant timestamp) {
         return PriceRecord.builder()
                 .price(new BigDecimal(price))
                 .currency("USD")

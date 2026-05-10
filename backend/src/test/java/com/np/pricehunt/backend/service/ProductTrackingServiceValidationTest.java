@@ -22,7 +22,7 @@ import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -73,7 +73,7 @@ class ProductTrackingServiceValidationTest {
                 .thenReturn(new PriceInfo(new BigDecimal("100.00"), "USD", true, ExtractionSource.STRUCTURED));
         when(priceRecordRepository.save(any())).thenAnswer(inv -> {
             PriceRecord r = inv.getArgument(0);
-            ReflectionTestUtils.setField(r, "timestamp", LocalDateTime.now());
+            ReflectionTestUtils.setField(r, "timestamp", Instant.now());
             return r;
         });
 
@@ -90,7 +90,7 @@ class ProductTrackingServiceValidationTest {
                 .thenReturn(new PriceInfo(new BigDecimal("100.00"), "USD", true, ExtractionSource.STRUCTURED));
         when(priceRecordRepository.save(any())).thenAnswer(inv -> {
             PriceRecord r = inv.getArgument(0);
-            ReflectionTestUtils.setField(r, "timestamp", LocalDateTime.now());
+            ReflectionTestUtils.setField(r, "timestamp", Instant.now());
             return r;
         });
 
@@ -154,7 +154,7 @@ class ProductTrackingServiceValidationTest {
                 .thenReturn(new PriceInfo(new BigDecimal("90.00"), "EUR", true, ExtractionSource.STRUCTURED));
         when(priceRecordRepository.save(any())).thenAnswer(inv -> {
             PriceRecord r = inv.getArgument(0);
-            ReflectionTestUtils.setField(r, "timestamp", LocalDateTime.now());
+            ReflectionTestUtils.setField(r, "timestamp", Instant.now());
             return r;
         });
 
@@ -172,7 +172,7 @@ class ProductTrackingServiceValidationTest {
                 .thenReturn(new PriceInfo(new BigDecimal("250.00"), "USD", true, ExtractionSource.STRUCTURED));
         when(priceRecordRepository.save(any())).thenAnswer(inv -> {
             PriceRecord r = inv.getArgument(0);
-            ReflectionTestUtils.setField(r, "timestamp", LocalDateTime.now());
+            ReflectionTestUtils.setField(r, "timestamp", Instant.now());
             return r;
         });
 

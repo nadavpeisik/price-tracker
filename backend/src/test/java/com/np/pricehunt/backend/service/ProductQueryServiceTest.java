@@ -26,7 +26,7 @@ import org.springframework.web.server.ResponseStatusException;
 import java.time.temporal.ChronoUnit;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -174,52 +174,52 @@ class ProductQueryServiceTest {
     void getPriceHistory_noBounds_defaultsToWindowEndingNow() {
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
         when(priceRecordRepository.findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(
-                eq(itemA), any(LocalDateTime.class), any(LocalDateTime.class))).thenReturn(List.of());
+                eq(itemA), any(Instant.class), any(Instant.class))).thenReturn(List.of());
 
         service.getPriceHistory(1L, 1L, null, null);
 
-        ArgumentCaptor<LocalDateTime> fromCaptor = ArgumentCaptor.forClass(LocalDateTime.class);
-        ArgumentCaptor<LocalDateTime> toCaptor = ArgumentCaptor.forClass(LocalDateTime.class);
+        ArgumentCaptor<Instant> fromCaptor = ArgumentCaptor.forClass(Instant.class);
+        ArgumentCaptor<Instant> toCaptor = ArgumentCaptor.forClass(Instant.class);
         verify(priceRecordRepository).findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(
                 eq(itemA), fromCaptor.capture(), toCaptor.capture());
-        assertThat(toCaptor.getValue()).isCloseTo(LocalDateTime.now(), within(5, ChronoUnit.SECONDS));
-        assertThat(fromCaptor.getValue()).isCloseTo(LocalDateTime.now().minusDays(90), within(5, ChronoUnit.SECONDS));
+        assertThat(toCaptor.getValue()).isCloseTo(Instant.now(), within(5, ChronoUnit.SECONDS));
+        assertThat(fromCaptor.getValue()).isCloseTo(Instant.now().minus(90, ChronoUnit.DAYS), within(5, ChronoUnit.SECONDS));
     }
 
     @Test
     void getPriceHistory_fromOnly_defaultsToToNow() {
-        LocalDateTime from = LocalDateTime.of(2026, 1, 1, 0, 0);
+        Instant from = Instant.parse("2026-01-01T00:00:00Z");
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
         when(priceRecordRepository.findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(
-                eq(itemA), any(LocalDateTime.class), any(LocalDateTime.class))).thenReturn(List.of());
+                eq(itemA), any(Instant.class), any(Instant.class))).thenReturn(List.of());
 
         service.getPriceHistory(1L, 1L, from, null);
 
-        ArgumentCaptor<LocalDateTime> toCaptor = ArgumentCaptor.forClass(LocalDateTime.class);
+        ArgumentCaptor<Instant> toCaptor = ArgumentCaptor.forClass(Instant.class);
         verify(priceRecordRepository).findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(
                 eq(itemA), eq(from), toCaptor.capture());
-        assertThat(toCaptor.getValue()).isCloseTo(LocalDateTime.now(), within(5, ChronoUnit.SECONDS));
+        assertThat(toCaptor.getValue()).isCloseTo(Instant.now(), within(5, ChronoUnit.SECONDS));
     }
 
     @Test
     void getPriceHistory_toOnly_defaultsFromWindowDaysBefore() {
-        LocalDateTime to = LocalDateTime.of(2026, 4, 1, 0, 0);
+        Instant to = Instant.parse("2026-04-01T00:00:00Z");
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
         when(priceRecordRepository.findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(
-                eq(itemA), any(LocalDateTime.class), any(LocalDateTime.class))).thenReturn(List.of());
+                eq(itemA), any(Instant.class), any(Instant.class))).thenReturn(List.of());
 
         service.getPriceHistory(1L, 1L, null, to);
 
-        ArgumentCaptor<LocalDateTime> fromCaptor = ArgumentCaptor.forClass(LocalDateTime.class);
+        ArgumentCaptor<Instant> fromCaptor = ArgumentCaptor.forClass(Instant.class);
         verify(priceRecordRepository).findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(
                 eq(itemA), fromCaptor.capture(), eq(to));
-        assertThat(fromCaptor.getValue()).isEqualTo(to.minusDays(90));
+        assertThat(fromCaptor.getValue()).isEqualTo(to.minus(90, ChronoUnit.DAYS));
     }
 
     @Test
     void getPriceHistory_bothBounds_usesExplicitBounds() {
-        LocalDateTime from = LocalDateTime.of(2026, 1, 1, 0, 0);
-        LocalDateTime to = LocalDateTime.of(2026, 4, 1, 0, 0);
+        Instant from = Instant.parse("2026-01-01T00:00:00Z");
+        Instant to = Instant.parse("2026-04-01T00:00:00Z");
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
         when(priceRecordRepository.findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(itemA, from, to))
                 .thenReturn(List.of());
@@ -231,12 +231,12 @@ class ProductQueryServiceTest {
 
     @Test
     void getPriceHistory_rangeExceedsMaxYears_clampsFrom() {
-        LocalDateTime to = LocalDateTime.of(2026, 4, 1, 0, 0);
-        LocalDateTime farBack = to.minusYears(3);
-        LocalDateTime expectedFrom = to.minusYears(2);
+        Instant to = Instant.parse("2026-04-01T00:00:00Z");
+        Instant farBack = to.minus(365L * 3, ChronoUnit.DAYS);
+        Instant expectedFrom = to.minus(365L * 2, ChronoUnit.DAYS);
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
         when(priceRecordRepository.findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(
-                eq(itemA), any(LocalDateTime.class), any(LocalDateTime.class))).thenReturn(List.of());
+                eq(itemA), any(Instant.class), any(Instant.class))).thenReturn(List.of());
 
         service.getPriceHistory(1L, 1L, farBack, to);
 
@@ -259,8 +259,8 @@ class ProductQueryServiceTest {
     @Test
     void getPriceHistory_mapsExtractionSourceAsString() {
         PriceRecord record = priceRecord(itemA, "100", "USD");
-        LocalDateTime from = LocalDateTime.of(2026, 1, 1, 0, 0);
-        LocalDateTime to = LocalDateTime.of(2026, 4, 1, 0, 0);
+        Instant from = Instant.parse("2026-01-01T00:00:00Z");
+        Instant to = Instant.parse("2026-04-01T00:00:00Z");
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
         when(priceRecordRepository.findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(itemA, from, to))
                 .thenReturn(List.of(record));

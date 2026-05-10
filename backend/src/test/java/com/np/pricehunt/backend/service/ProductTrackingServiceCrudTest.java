@@ -23,7 +23,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -216,7 +216,7 @@ class ProductTrackingServiceCrudTest {
     void refreshTrackedItem_recentlyRefreshed_throwsTooManyRequests() {
         TrackedItem recentItem = TrackedItem.builder().id(1L).url("https://amazon.com/dp/1")
                 .shopName("amazon.com").product(product)
-                .lastChecked(LocalDateTime.now().minusSeconds(10))
+                .lastChecked(Instant.now().minusSeconds(10))
                 .build();
         ReflectionTestUtils.setField(service, "minRefreshIntervalSeconds", 60);
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(recentItem));
@@ -262,7 +262,7 @@ class ProductTrackingServiceCrudTest {
                 .thenReturn(new PriceInfo(new BigDecimal("899.99"), "USD", true, ExtractionSource.STRUCTURED));
         when(priceRecordRepository.save(any())).thenAnswer(inv -> {
             PriceRecord r = inv.getArgument(0);
-            ReflectionTestUtils.setField(r, "timestamp", LocalDateTime.now());
+            ReflectionTestUtils.setField(r, "timestamp", Instant.now());
             return r;
         });
 
@@ -302,7 +302,7 @@ class ProductTrackingServiceCrudTest {
                 .thenReturn(new PriceInfo(new BigDecimal("100.00"), "usd", true, ExtractionSource.STRUCTURED));
         when(priceRecordRepository.save(any())).thenAnswer(inv -> {
             PriceRecord r = inv.getArgument(0);
-            ReflectionTestUtils.setField(r, "timestamp", LocalDateTime.now());
+            ReflectionTestUtils.setField(r, "timestamp", Instant.now());
             return r;
         });
 
