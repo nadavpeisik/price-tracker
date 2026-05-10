@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -74,11 +75,26 @@ class UrlValidatorTest {
                 .hasMessageContaining("Invalid URL");
     }
 
+    @Test
+    void validate_ftpScheme_rejected() {
+        assertThatThrownBy(() -> validator.validate("ftp://example.com/file"))
+                .isInstanceOfSatisfying(ResponseStatusException.class, e -> {
+                    assertThat(e.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(e.getReason()).contains("http or https");
+                });
+    }
+
+    @Test
+    void validate_uppercaseHttpsScheme_passes() {
+        assertThatCode(() -> validator.validate("HTTPS://www.thomann.de/gb/some_product.htm"))
+                .doesNotThrowAnyException();
+    }
+
     private void assertAmazonRejected(String url) {
         assertThatThrownBy(() -> validator.validate(url))
                 .isInstanceOfSatisfying(ResponseStatusException.class, e -> {
-                    assert e.getStatusCode().equals(HttpStatus.BAD_REQUEST);
-                    assert e.getReason() != null && e.getReason().contains("Amazon");
+                    assertThat(e.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(e.getReason()).contains("Amazon");
                 });
     }
 }

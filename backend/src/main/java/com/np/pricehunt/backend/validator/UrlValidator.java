@@ -20,8 +20,13 @@ public class UrlValidator {
     public void validate(String url) {
         URI uri = parseOrThrow(url);
         String host = uri.getHost();
-        if (host == null) {
+        String scheme = uri.getScheme();
+        if (host == null || scheme == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid URL");
+        }
+        String normalizedScheme = scheme.toLowerCase(Locale.ROOT);
+        if (!normalizedScheme.equals("http") && !normalizedScheme.equals("https")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "URL must be http or https");
         }
         rejectUnsupportedSites(host.toLowerCase(Locale.ROOT));
     }

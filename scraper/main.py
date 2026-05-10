@@ -194,6 +194,8 @@ async def _extract_snippet(page) -> str | None:
         except Exception:
             pass
 
+    # Assumes a PDP URL (single product container). On a category listing this would
+    # read the first product's flag, which may not match the URL the user submitted.
     # WooCommerce-style availability flag on the product container. The state is
     # encoded as a class word ("instock" or "outofstock"), not visible text — and
     # the container's text is the entire product card, far over MAX_ELEMENT_CHARS.
@@ -217,9 +219,11 @@ async def _extract_snippet(page) -> str | None:
 
 def _snippet_has_useful_content(snippet: str) -> bool:
     # A snippet is useful only if it has descriptive text (alphabetic characters,
-    # Unicode-aware so Hebrew/Latin both count). Pure price strings like "₪1,025"
-    # lack availability info and should fall through to FULLTEXT.
-    return len(snippet) >= 30 and any(c.isalpha() for c in snippet)
+    # Unicode-aware so Hebrew/Latin both count). Pure currency strings like "₪1,025"
+    # are killed by the alpha check; the length floor catches very short bot-wall
+    # fragments without rejecting clean structured snippets like "100.00 | USD | OOS"
+    # (18 chars).
+    return len(snippet) >= 15 and any(c.isalpha() for c in snippet)
 
 
 @app.post("/scrape", response_model=ScrapeResponse)
