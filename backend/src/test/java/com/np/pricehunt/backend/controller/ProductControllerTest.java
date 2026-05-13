@@ -2,12 +2,14 @@ package com.np.pricehunt.backend.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.np.pricehunt.backend.domain.ExtractionSource;
+import com.np.pricehunt.backend.config.WebPaginationConfig;
 import com.np.pricehunt.backend.dto.*;
 import com.np.pricehunt.backend.service.ProductQueryService;
 import com.np.pricehunt.backend.service.ProductTrackingService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
@@ -28,6 +30,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @WebMvcTest(ProductController.class)
+@Import(WebPaginationConfig.class)
 class ProductControllerTest {
 
     @Autowired private MockMvc mvc;
@@ -51,7 +54,7 @@ class ProductControllerTest {
                 .andExpect(jsonPath("$.content[0].bestPrice").value(999.99))
                 .andExpect(jsonPath("$.content[0].bestPriceShop").value("amazon.com"))
                 .andExpect(jsonPath("$.content[0].mixedCurrencies").value(false))
-                .andExpect(jsonPath("$.totalElements").value(1));
+                .andExpect(jsonPath("$.page.totalElements").value(1));
     }
 
     @Test
