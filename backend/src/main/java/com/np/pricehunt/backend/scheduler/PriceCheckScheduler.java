@@ -3,7 +3,6 @@ package com.np.pricehunt.backend.scheduler;
 import com.np.pricehunt.backend.dto.TrackedItemRefreshView;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
 import com.np.pricehunt.backend.service.ProductTrackingService;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Value;
@@ -17,32 +16,36 @@ import java.util.UUID;
 
 @Slf4j
 @Component
-@RequiredArgsConstructor
 @ConditionalOnProperty(name = "price.scheduler.enabled", havingValue = "true", matchIfMissing = true)
 public class PriceCheckScheduler {
 
+    private static final String DEFAULT_FIXED_DELAY_MS = "21600000";
+
     private final ProductTrackingService trackingService;
     private final TrackedItemRepository trackedItemRepository;
+    private final long fixedDelayMs;
 
-    @Value("${price.scheduler.fixed-delay-ms:21600000}")
-    private long fixedDelayMs;
+    public PriceCheckScheduler(
+            ProductTrackingService trackingService,
+            TrackedItemRepository trackedItemRepository,
+            @Value("${price.scheduler.fixed-delay-ms:" + DEFAULT_FIXED_DELAY_MS + "}") long fixedDelayMs) {
+        this.trackingService = trackingService;
+        this.trackedItemRepository = trackedItemRepository;
+        this.fixedDelayMs = fixedDelayMs;
+    }
 
     @Scheduled(
-            fixedDelayString = "${price.scheduler.fixed-delay-ms:21600000}",
+            fixedDelayString = "${price.scheduler.fixed-delay-ms:" + DEFAULT_FIXED_DELAY_MS + "}",
             initialDelayString = "${price.scheduler.initial-delay-ms:60000}"
     )
     public void refreshAll() {
         MDC.put("correlationId", "sched-" + UUID.randomUUID());
         try {
-            List<TrackedItemRefreshView> items = trackedItemRepository.findAllForRefresh();
-            Instant staleCutoff = Instant.now().minusMillis(fixedDelayMs);
-            log.info("Scheduled refresh starting for {} items", items.size());
-            int success = 0, failed = 0, skipped = 0;
+            Instant cutoff = Instant.now().minusMillis(fixedDelayMs);
+            List<TrackedItemRefreshView> items = trackedItemRepository.findStaleItems(cutoff);
+            log.info("Scheduled refresh starting for {} stale items", items.size());
+            int success = 0, failed = 0;
             for (TrackedItemRefreshView item : items) {
-                if (item.lastChecked() != null && item.lastChecked().isAfter(staleCutoff)) {
-                    skipped++;
-                    continue;
-                }
                 try {
                     trackingService.scheduledRefresh(item.id());
                     success++;
@@ -52,7 +55,7 @@ public class PriceCheckScheduler {
                             item.id(), item.url(), e.getClass().getSimpleName(), e.getMessage());
                 }
             }
-            log.info("Scheduled refresh done: {} success, {} failed, {} skipped (already fresh)", success, failed, skipped);
+            log.info("Scheduled refresh done: {} success, {} failed", success, failed);
         } finally {
             MDC.clear();
         }

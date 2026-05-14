@@ -5,6 +5,7 @@ import com.np.pricehunt.backend.domain.TrackedItem;
 import com.np.pricehunt.backend.dto.TrackedItemRefreshView;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
@@ -26,11 +27,13 @@ public interface TrackedItemRepository extends JpaRepository<TrackedItem, Long> 
     // Essential for "Daily Scraper" logic later.
     List<TrackedItem> findByLastCheckedBefore(Instant threshold);
 
-    // Narrow projection for the scheduler — avoids hydrating the LAZY priceHistory collection
-    // that @Data's generated toString/equals/hashCode would touch.
+    // Narrow projection + DB-side stale filter for the scheduler. Avoids hydrating the LAZY
+    // priceHistory collection (the @Data toString/equals/hashCode foot-gun) and keeps freshly-
+    // refreshed rows from ever reaching the JVM.
     @Query("""
            SELECT new com.np.pricehunt.backend.dto.TrackedItemRefreshView(t.id, t.url, t.lastChecked)
            FROM TrackedItem t
+           WHERE t.lastChecked IS NULL OR t.lastChecked < :cutoff
            """)
-    List<TrackedItemRefreshView> findAllForRefresh();
+    List<TrackedItemRefreshView> findStaleItems(@Param("cutoff") Instant cutoff);
 }
