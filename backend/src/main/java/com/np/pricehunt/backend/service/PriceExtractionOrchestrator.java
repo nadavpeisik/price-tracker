@@ -4,7 +4,6 @@ import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.dto.PriceLlmResult;
 import com.np.pricehunt.backend.dto.PriceInfo;
 import com.np.pricehunt.backend.dto.ScrapeResponse;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -16,7 +15,6 @@ import java.util.regex.Pattern;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class PriceExtractionOrchestrator implements PriceExtractionService {
 
     private static final int MAX_FILTER_LINES = 50;
@@ -33,12 +31,17 @@ public class PriceExtractionOrchestrator implements PriceExtractionService {
     );
 
     private final OllamaPriceExtractionService ollamaService;
+    private final String snippetModel;
+    private final String fulltextModel;
 
-    @Value("${price.extraction.snippet-model}")
-    private String snippetModel;
-
-    @Value("${price.extraction.fulltext-model}")
-    private String fulltextModel;
+    public PriceExtractionOrchestrator(
+            OllamaPriceExtractionService ollamaService,
+            @Value("${price.extraction.snippet-model}") String snippetModel,
+            @Value("${price.extraction.fulltext-model}") String fulltextModel) {
+        this.ollamaService = ollamaService;
+        this.snippetModel = snippetModel;
+        this.fulltextModel = fulltextModel;
+    }
 
     @Override
     public PriceInfo extractPrice(ScrapeResponse response) {

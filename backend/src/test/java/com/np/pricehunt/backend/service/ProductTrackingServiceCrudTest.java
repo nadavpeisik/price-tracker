@@ -13,7 +13,6 @@ import com.np.pricehunt.backend.validator.UrlValidator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
@@ -42,15 +41,17 @@ class ProductTrackingServiceCrudTest {
     @Mock private TransactionTemplate transactionTemplate;
     @Mock private UrlValidator urlValidator;
 
-    @InjectMocks private ProductTrackingService service;
+    private ProductTrackingService service;
 
     private Product product;
     private TrackedItem item;
 
     @BeforeEach
     void setUp() {
-        ReflectionTestUtils.setField(service, "maxDeltaPercent", 200);
-        ReflectionTestUtils.setField(service, "minRefreshIntervalSeconds", 60);
+        service = new ProductTrackingService(
+                productRepository, trackedItemRepository, priceRecordRepository,
+                extractionService, scraperClient, transactionTemplate, urlValidator,
+                200, 60);
         // Run transactionTemplate callbacks inline so phase splits are exercised end-to-end.
         lenient().when(transactionTemplate.execute(any())).thenAnswer(inv -> {
             TransactionCallback<?> cb = inv.getArgument(0);
@@ -218,7 +219,6 @@ class ProductTrackingServiceCrudTest {
                 .shopName("amazon.com").product(product)
                 .lastChecked(Instant.now().minusSeconds(10))
                 .build();
-        ReflectionTestUtils.setField(service, "minRefreshIntervalSeconds", 60);
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(recentItem));
 
         assertThatThrownBy(() -> service.refreshTrackedItem(1L, 1L))

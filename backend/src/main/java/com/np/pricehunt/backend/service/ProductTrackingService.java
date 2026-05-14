@@ -9,7 +9,6 @@ import com.np.pricehunt.backend.repository.PriceRecordRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
 import com.np.pricehunt.backend.validator.UrlValidator;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -30,14 +29,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class ProductTrackingService {
-
-    @Value("${price.validation.max-delta-percent:200}")
-    private int maxDeltaPercent;
-
-    @Value("${price.refresh.min-interval-seconds:60}")
-    private int minRefreshIntervalSeconds;
 
     private final ProductRepository productRepository;
     private final TrackedItemRepository trackedItemRepository;
@@ -46,10 +38,33 @@ public class ProductTrackingService {
     private final ScraperClient scraperClient;
     private final TransactionTemplate transactionTemplate;
     private final UrlValidator urlValidator;
+    private final int maxDeltaPercent;
+    private final int minRefreshIntervalSeconds;
 
     // Per-process refresh rate-limiter. Survives failed scrapes (which never bump DB lastChecked).
     // Single-instance only; pre-Phase-2 Kafka. Lost on restart — acceptable: caller gets one free retry.
     private final Map<Long, Instant> lastRefreshAttempt = new ConcurrentHashMap<>();
+
+    public ProductTrackingService(
+            ProductRepository productRepository,
+            TrackedItemRepository trackedItemRepository,
+            PriceRecordRepository priceRecordRepository,
+            PriceExtractionService extractionService,
+            ScraperClient scraperClient,
+            TransactionTemplate transactionTemplate,
+            UrlValidator urlValidator,
+            @Value("${price.validation.max-delta-percent:200}") int maxDeltaPercent,
+            @Value("${price.refresh.min-interval-seconds:60}") int minRefreshIntervalSeconds) {
+        this.productRepository = productRepository;
+        this.trackedItemRepository = trackedItemRepository;
+        this.priceRecordRepository = priceRecordRepository;
+        this.extractionService = extractionService;
+        this.scraperClient = scraperClient;
+        this.transactionTemplate = transactionTemplate;
+        this.urlValidator = urlValidator;
+        this.maxDeltaPercent = maxDeltaPercent;
+        this.minRefreshIntervalSeconds = minRefreshIntervalSeconds;
+    }
 
     private record ItemSnapshot(Long id, String url) {}
 
