@@ -292,6 +292,33 @@ class ProductTrackingServiceCrudTest {
     }
 
     @Test
+    void scheduledRefresh_savesPriceWithoutRateLimitCheck() {
+        // Item was just refreshed — a manual refresh would 429, but the scheduler must bypass.
+        TrackedItem recentItem = TrackedItem.builder().id(1L).url("https://amazon.com/dp/1")
+                .shopName("amazon.com").product(product)
+                .lastChecked(Instant.now().minusSeconds(10))
+                .build();
+        ScrapeResponse scraped = new ScrapeResponse(ExtractionSource.STRUCTURED,
+                new ScrapeResponse.PriceData(new BigDecimal("899.99"), "USD", true), null, null);
+        when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(recentItem));
+        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(recentItem)).thenReturn(Optional.empty());
+        when(scraperClient.scrape(recentItem.getUrl())).thenReturn(scraped);
+        when(extractionService.extractPrice(scraped))
+                .thenReturn(new PriceInfo(new BigDecimal("899.99"), "USD", true, ExtractionSource.STRUCTURED));
+        when(priceRecordRepository.save(any())).thenAnswer(inv -> {
+            PriceRecord r = inv.getArgument(0);
+            ReflectionTestUtils.setField(r, "timestamp", Instant.now());
+            return r;
+        });
+
+        TrackResponse response = service.scheduledRefresh(1L);
+
+        verify(scraperClient).scrape(recentItem.getUrl());
+        verify(priceRecordRepository).save(any());
+        assertThat(response.currentPrice()).isEqualByComparingTo("899.99");
+    }
+
+    @Test
     void scrapeAndPersist_normalizesCurrencyToUppercase() {
         ScrapeResponse scraped = new ScrapeResponse(ExtractionSource.STRUCTURED,
                 new ScrapeResponse.PriceData(new BigDecimal("100.00"), "usd", true), null, null);

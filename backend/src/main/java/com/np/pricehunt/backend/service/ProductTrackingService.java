@@ -89,6 +89,17 @@ public class ProductTrackingService {
         return persistResultInTxn(snapshot.id(), info);
     }
 
+    // System-initiated refresh: bypasses the rate-limit (the scheduler is the system, not a user).
+    public TrackResponse scheduledRefresh(Long itemId) {
+        ItemSnapshot snapshot = transactionTemplate.execute(status -> {
+            TrackedItem item = trackedItemRepository.findById(itemId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found"));
+            return new ItemSnapshot(item.getId(), item.getUrl());
+        });
+        PriceInfo info = doScrape(snapshot.url());
+        return persistResultInTxn(snapshot.id(), info);
+    }
+
     // Atomically reads and stamps the in-memory rate-limit map. Falls back to the DB-stored
     // lastChecked when the process is fresh and the map is empty. Stamp happens before the
     // scrape, so failed scrapes can't bypass the limit by leaving lastChecked untouched.
