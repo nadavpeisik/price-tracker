@@ -219,7 +219,6 @@ class ProductTrackingServiceCrudTest {
                 .shopName("amazon.com").product(product)
                 .lastChecked(Instant.now().minusSeconds(10))
                 .build();
-        ReflectionTestUtils.setField(service, "minRefreshIntervalSeconds", 60);
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(recentItem));
 
         assertThatThrownBy(() -> service.refreshTrackedItem(1L, 1L))
