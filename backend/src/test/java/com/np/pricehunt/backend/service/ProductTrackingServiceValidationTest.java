@@ -14,7 +14,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -40,7 +39,6 @@ class ProductTrackingServiceValidationTest {
     @Mock private TransactionTemplate transactionTemplate;
     @Mock private UrlValidator urlValidator;
 
-    @InjectMocks
     private ProductTrackingService service;
 
     private Product product;
@@ -49,7 +47,10 @@ class ProductTrackingServiceValidationTest {
 
     @BeforeEach
     void setUp() {
-        ReflectionTestUtils.setField(service, "maxDeltaPercent", 200);
+        service = new ProductTrackingService(
+                productRepository, trackedItemRepository, priceRecordRepository,
+                extractionService, scraperClient, transactionTemplate, urlValidator,
+                200, 60);
 
         product = Product.builder().id(1L).name("Test Product").build();
         item = TrackedItem.builder().id(1L).url("https://example.com/item").shopName("example.com").product(product).build();

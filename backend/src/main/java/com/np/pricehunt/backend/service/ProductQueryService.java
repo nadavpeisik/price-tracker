@@ -7,7 +7,6 @@ import com.np.pricehunt.backend.dto.*;
 import com.np.pricehunt.backend.repository.PriceRecordRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
@@ -26,16 +25,24 @@ import java.util.stream.Collectors;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 @Transactional(readOnly = true)
 public class ProductQueryService {
-
-    @Value("${price.history.default-window-days:90}")
-    private int defaultWindowDays;
 
     private final ProductRepository productRepository;
     private final TrackedItemRepository trackedItemRepository;
     private final PriceRecordRepository priceRecordRepository;
+    private final int defaultWindowDays;
+
+    public ProductQueryService(
+            ProductRepository productRepository,
+            TrackedItemRepository trackedItemRepository,
+            PriceRecordRepository priceRecordRepository,
+            @Value("${price.history.default-window-days:90}") int defaultWindowDays) {
+        this.productRepository = productRepository;
+        this.trackedItemRepository = trackedItemRepository;
+        this.priceRecordRepository = priceRecordRepository;
+        this.defaultWindowDays = defaultWindowDays;
+    }
 
     // Pairs a tracked item with its latest price record (null if no prices yet)
     private record ItemWithLatestPrice(TrackedItem item, PriceRecord latest) {}

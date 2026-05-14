@@ -7,10 +7,8 @@ import com.np.pricehunt.backend.dto.ScrapeResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 
@@ -26,7 +24,6 @@ class PriceExtractionOrchestratorTest {
     @Mock
     private OllamaPriceExtractionService ollamaService;
 
-    @InjectMocks
     private PriceExtractionOrchestrator orchestrator;
 
     private static final PriceLlmResult STUB_LLM_RESULT =
@@ -36,9 +33,8 @@ class PriceExtractionOrchestratorTest {
     private static final String FULLTEXT_MODEL = "qwen3.5:9b";
 
     @BeforeEach
-    void injectModelNames() {
-        ReflectionTestUtils.setField(orchestrator, "snippetModel", SNIPPET_MODEL);
-        ReflectionTestUtils.setField(orchestrator, "fulltextModel", FULLTEXT_MODEL);
+    void setUp() {
+        orchestrator = new PriceExtractionOrchestrator(ollamaService, SNIPPET_MODEL, FULLTEXT_MODEL);
     }
 
     // --- filterLines ---

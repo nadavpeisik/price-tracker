@@ -13,14 +13,12 @@ import com.np.pricehunt.backend.repository.TrackedItemRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
-import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.temporal.ChronoUnit;
@@ -45,7 +43,7 @@ class ProductQueryServiceTest {
     @Mock private TrackedItemRepository trackedItemRepository;
     @Mock private PriceRecordRepository priceRecordRepository;
 
-    @InjectMocks private ProductQueryService service;
+    private ProductQueryService service;
 
     private Product product;
     private TrackedItem itemA;
@@ -53,7 +51,7 @@ class ProductQueryServiceTest {
 
     @BeforeEach
     void setUp() {
-        ReflectionTestUtils.setField(service, "defaultWindowDays", 90);
+        service = new ProductQueryService(productRepository, trackedItemRepository, priceRecordRepository, 90);
         product = Product.builder().id(1L).name("Laptop").build();
         itemA = TrackedItem.builder().id(1L).url("https://amazon.com/dp/1").shopName("amazon.com").product(product).build();
         itemB = TrackedItem.builder().id(2L).url("https://bestbuy.com/p/1").shopName("bestbuy.com").product(product).build();
