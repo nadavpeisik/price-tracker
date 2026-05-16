@@ -2,7 +2,7 @@ import pytest
 import pytest_asyncio
 from playwright.async_api import async_playwright
 
-from main import _STRUCTURED_DATA_SCRIPT, _extract_snippet
+from main import _STRIP_DECOY_PRICES_SCRIPT, _STRUCTURED_DATA_SCRIPT, _extract_snippet
 
 
 @pytest_asyncio.fixture
@@ -103,6 +103,7 @@ async def test_snippet_strips_del_tag(page):
     </body></html>
     """
     await page.set_content(html)
+    await page.evaluate(_STRIP_DECOY_PRICES_SCRIPT)
     snippet = await _extract_snippet(page)
     assert snippet is not None
     assert "9,990" in snippet
@@ -120,6 +121,7 @@ async def test_snippet_strips_s_tag(page):
     </body></html>
     """
     await page.set_content(html)
+    await page.evaluate(_STRIP_DECOY_PRICES_SCRIPT)
     snippet = await _extract_snippet(page)
     assert snippet is not None
     assert "79.00" in snippet
@@ -137,7 +139,125 @@ async def test_snippet_strips_strikethrough_class(page):
     </body></html>
     """
     await page.set_content(html)
+    await page.evaluate(_STRIP_DECOY_PRICES_SCRIPT)
     snippet = await _extract_snippet(page)
     assert snippet is not None
     assert "40.00" in snippet
     assert "50.00" not in snippet
+
+
+# Gemini PR #20 comment 1 — microdata with <del> inside itemprop="price".
+# readProp used to fall through to innerText and concatenate "99.00" + "79.00".
+# The global pre-Tier-1 strip removes the <del> before microdata reads anything.
+async def test_microdata_strips_del_inside_price(page):
+    html = """
+    <html><body>
+    <div itemprop="offers" itemscope itemtype="https://schema.org/Offer">
+      <span itemprop="price"><del>99.00</del>79.00</span>
+      <meta itemprop="priceCurrency" content="USD">
+    </div>
+    </body></html>
+    """
+    await page.set_content(html)
+    await page.evaluate(_STRIP_DECOY_PRICES_SCRIPT)
+    result = await page.evaluate(_STRUCTURED_DATA_SCRIPT)
+    assert result["price"] == 79
+    assert result["currency"] == "USD"
+
+
+# No-sale page: .regular-price is the only price. A naive global strip would
+# orphan the page. Confirms the sale-pairing guard keeps it intact.
+async def test_regular_price_alone_survives_strip(page):
+    html = """
+    <html><body>
+    <div class="price">
+      <span class="regular-price">$50.00</span>
+    </div>
+    </body></html>
+    """
+    await page.set_content(html)
+    await page.evaluate(_STRIP_DECOY_PRICES_SCRIPT)
+    snippet = await _extract_snippet(page)
+    assert snippet is not None
+    assert "50.00" in snippet
+
+
+# Multi-product safety: card A has paired regular+sale, card B has regular only.
+# The strip must remove A's regular AND leave B's regular intact.
+async def test_multi_product_strip_is_card_scoped(page):
+    html = """
+    <html><body>
+    <div class="product-card">
+      <div class="price">
+        <span class="regular-price">$100</span>
+        <span class="sale-price">$80</span>
+      </div>
+    </div>
+    <div class="product-card">
+      <div class="price">
+        <span class="regular-price">$50</span>
+      </div>
+    </div>
+    </body></html>
+    """
+    await page.set_content(html)
+    await page.evaluate(_STRIP_DECOY_PRICES_SCRIPT)
+    remaining = await page.evaluate("""
+        () => Array.from(document.querySelectorAll('[class*="regular-price"]'))
+            .map(n => n.textContent.trim())
+    """)
+    assert "$100" not in remaining
+    assert "$50" in remaining
+
+
+# Magento-style nested wrappers. parentElement / closest() would fail here;
+# the depth-bounded ascent finds the price-box and strips the regular-price.
+async def test_strip_handles_wrapped_pair(page):
+    html = """
+    <html><body>
+    <div class="price-box">
+      <div class="old-price-wrapper">
+        <span class="regular-price">$120</span>
+      </div>
+      <div class="special-price-wrapper">
+        <span class="sale-price">$99</span>
+      </div>
+    </div>
+    </body></html>
+    """
+    await page.set_content(html)
+    await page.evaluate(_STRIP_DECOY_PRICES_SCRIPT)
+    remaining = await page.evaluate("""
+        () => Array.from(document.querySelectorAll('[class*="regular-price"]'))
+            .map(n => n.textContent.trim())
+    """)
+    assert remaining == []
+
+
+# Grid-poisoning guard: a card whose sale-price has no paired regular-price
+# must not climb past the card boundary and wipe a sibling card's regular-price.
+# The firewall (next parent has "grid" in className) breaks the ascent.
+async def test_strip_does_not_cross_grid_boundary(page):
+    html = """
+    <html><body>
+    <div class="related-products-grid">
+      <div class="product-card">
+        <div class="sale-banner">
+          <span class="sale-price">$99</span>
+        </div>
+      </div>
+      <div class="product-card">
+        <div class="price-box">
+          <span class="regular-price">$50</span>
+        </div>
+      </div>
+    </div>
+    </body></html>
+    """
+    await page.set_content(html)
+    await page.evaluate(_STRIP_DECOY_PRICES_SCRIPT)
+    remaining = await page.evaluate("""
+        () => Array.from(document.querySelectorAll('[class*="regular-price"]'))
+            .map(n => n.textContent.trim())
+    """)
+    assert "$50" in remaining

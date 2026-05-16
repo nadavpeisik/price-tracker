@@ -157,6 +157,45 @@ _STRUCTURED_DATA_SCRIPT = """() => {
     return null;
 }"""
 
+# JavaScript run via page.evaluate() to remove decoy prices (strikethrough MSRP
+# and paired .regular-price) from the rendered DOM. Runs before Tier 1 so
+# microdata's innerText-based reads see clean values; runs before Tier 2 so the
+# snippet doesn't flatten both prices into one string. Safe to run before
+# _DOM_PRUNE_SCRIPT because it does not touch <script> tags — JSON-LD survives.
+_STRIP_DECOY_PRICES_SCRIPT = """() => {
+    // Always-safe: <del>/<s>/<strike> and explicit strikethrough classes are
+    // semantically "invalidated text" — no legitimate price hides in them.
+    document.querySelectorAll('del, s, strike, [class*="strikethrough"]')
+        .forEach(n => n.remove());
+
+    // Conditional: .regular-price means "MSRP" only when paired with a
+    // .sale-price sibling. Walk up from each sale-price until we find an
+    // ancestor that actually contains a regular-price. Depth cap +
+    // class-based firewall guard against cross-card poisoning on PDPs with
+    // related-product carousels.
+    const MAX_ASCENT = 4;
+    const MACRO_WORDS = ['grid', 'row', 'carousel', 'list'];
+    const isMacroLayout = (el) => {
+        const cls = (typeof el.className === 'string') ? el.className.toLowerCase() : '';
+        return MACRO_WORDS.some(w => cls.includes(w));
+    };
+    document.querySelectorAll('[class*="sale-price"]').forEach(saleEl => {
+        let container = saleEl.parentElement;
+        let depth = 0;
+        while (container && depth < MAX_ASCENT) {
+            const regulars = container.querySelectorAll('[class*="regular-price"]');
+            if (regulars.length > 0) {
+                regulars.forEach(n => n.remove());
+                break;
+            }
+            const next = container.parentElement;
+            if (!next || isMacroLayout(next)) break;
+            container = next;
+            depth++;
+        }
+    });
+}"""
+
 
 class ExtractionSource(str, Enum):
     STRUCTURED = "structured"
@@ -245,15 +284,8 @@ async def _extract_snippet(page) -> str | None:
         '[id*="availability"]',
         '[id*="stock"]',
     ]
-    # WooCommerce uses <del> for the old price, Shopify/Squarespace use <s>,
-    # legacy templates still use <strike>; some themes style the old price purely
-    # via class. Without stripping, inner_text() flattens both prices into the
-    # snippet and the LLM tends to pick the larger (old) one. Page is discarded
-    # after the scrape, so mutating the live DOM in place is safe.
-    strip_strikethrough = """(el) => {
-        el.querySelectorAll('del, s, strike, [class*="strikethrough"], [class*="regular-price"]')
-          .forEach(n => n.remove());
-    }"""
+    # Decoy prices (strikethrough + paired .regular-price) have already been
+    # removed globally by _STRIP_DECOY_PRICES_SCRIPT before we got here.
     for selector in css_selectors:
         try:
             els = await page.query_selector_all(selector)
@@ -264,8 +296,6 @@ async def _extract_snippet(page) -> str | None:
                 try:
                     if not await el.is_visible():
                         continue
-                    if selector == PRICE_SELECTOR:
-                        await el.evaluate(strip_strikethrough)
                     text = (await el.inner_text() or "").strip()
                     if not text or len(text) > MAX_ELEMENT_CHARS:
                         continue
@@ -317,6 +347,15 @@ async def scrape(request: ScrapeRequest):
     try:
         page = await context.new_page()
         await page.goto(request.url, wait_until="domcontentloaded", timeout=30000)
+
+        # Pre-Tier 1: strip decoy prices (strikethrough MSRP + paired .regular-price)
+        # from the rendered DOM. Safe before structured-data because it does not
+        # touch <script> tags — JSON-LD remains intact. Cleans the DOM body for
+        # microdata's innerText reads and for the Tier 2 snippet.
+        try:
+            await page.evaluate(_STRIP_DECOY_PRICES_SCRIPT)
+        except Exception:
+            pass
 
         # Tier 1: Schema.org structured data (JSON-LD then Microdata) — must run
         # before DOM pruning, which removes <script> tags used by JSON-LD.
