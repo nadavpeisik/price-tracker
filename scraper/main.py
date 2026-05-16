@@ -80,7 +80,7 @@ _STRUCTURED_DATA_SCRIPT = """() => {
         return {
             price: price,
             currency: currency,
-            available: IN_STOCK_URIS.some(s => (availability || '').toLowerCase().includes(s))
+            available: IN_STOCK_URIS.some(s => String(availability || '').toLowerCase().includes(s))
         };
     };
 

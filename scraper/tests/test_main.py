@@ -305,6 +305,28 @@ async def test_jsonld_european_thousands_without_decimal(page):
     assert result["currency"] == "EUR"
 
 
+# Gemini PR #20 follow-up — `availability` is supposed to be a URI string,
+# but some publishers emit a nested ItemAvailability object. Without the
+# String() wrap, .toLowerCase() throws TypeError, the outer try/except in
+# the JSON-LD loop swallows it, and the whole script block aborts —
+# silently demoting the page to Tier 2. The fix keeps extraction alive
+# (price still returns); the available flag falls back to false, which is
+# a much smaller harm than losing the structured tier entirely.
+async def test_jsonld_availability_as_object_does_not_crash(page):
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@type":"Offer","price":"42","priceCurrency":"EUR",
+     "availability":{"@type":"ItemAvailability","url":"https://schema.org/InStock"}}
+    </script></head><body></body></html>
+    """
+    await page.set_content(html)
+    result = await page.evaluate(_STRUCTURED_DATA_SCRIPT)
+    assert result is not None
+    assert result["price"] == 42
+    assert result["currency"] == "EUR"
+
+
 # Gemini PR #20 follow-up — global strikethrough strip must preserve
 # non-numeric badges like <s>Sold Out</s>, which Tier 2 needs for the
 # availability signal.
