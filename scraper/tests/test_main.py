@@ -263,6 +263,31 @@ async def test_strip_does_not_cross_grid_boundary(page):
     assert "$50" in remaining
 
 
+# Legacy table-based product grid. Without 'table' in the firewall, the
+# ascent climbs past the <td> into the shared <tr> and wipes the sibling
+# cell's regular-price. With it, the ascent halts at the row boundary.
+async def test_strip_does_not_cross_table_boundary(page):
+    html = """
+    <html><body>
+    <table class="product-table"><tr>
+      <td>
+        <div class="sale-banner"><span class="sale-price">$99</span></div>
+      </td>
+      <td>
+        <div class="price-box"><span class="regular-price">$50</span></div>
+      </td>
+    </tr></table>
+    </body></html>
+    """
+    await page.set_content(html)
+    await page.evaluate(_STRIP_DECOY_PRICES_SCRIPT)
+    remaining = await page.evaluate("""
+        () => Array.from(document.querySelectorAll('[class*="regular-price"]'))
+            .map(n => n.textContent.trim())
+    """)
+    assert "$50" in remaining
+
+
 # Gemini PR #20 follow-up — European thousands without a decimal. Old
 # parseNumeric treated the last dot as the decimal point and returned
 # 1234.567 instead of 1234567 for "1.234.567". Multi-separator detection

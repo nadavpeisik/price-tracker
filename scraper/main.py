@@ -179,8 +179,13 @@ _STRIP_DECOY_PRICES_SCRIPT = """() => {
     // class-based firewall guard against cross-card poisoning on PDPs with
     // related-product carousels.
     const MAX_ASCENT = 4;
-    const MACRO_WORDS = ['grid', 'row', 'carousel', 'list'];
+    const MACRO_WORDS = ['grid', 'row', 'carousel', 'list', 'table'];
+    // Legacy table-based product grids: <tr>/<table> often carry no class, so
+    // a className-only firewall would miss them. Treat their tags as a hard
+    // boundary regardless of class.
+    const MACRO_TAGS = new Set(['TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR']);
     const isMacroLayout = (el) => {
+        if (MACRO_TAGS.has(el.tagName)) return true;
         const cls = (typeof el.className === 'string') ? el.className.toLowerCase() : '';
         return MACRO_WORDS.some(w => cls.includes(w));
     };
