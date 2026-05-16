@@ -62,7 +62,11 @@ _STRUCTURED_DATA_SCRIPT = """() => {
         const lastDot = cleaned.lastIndexOf('.');
         const lastComma = cleaned.lastIndexOf(',');
         const sep = lastDot > lastComma ? '.' : (lastComma > lastDot ? ',' : null);
-        if (sep === null) return parseFloat(cleaned.replace(/[^0-9]/g, ''));
+        // No separator, or the chosen separator appears more than once (European
+        // thousands like "1.234.567" — no decimal, all dots are grouping).
+        if (sep === null || cleaned.split(sep).length > 2) {
+            return parseFloat(cleaned.replace(/[^0-9]/g, ''));
+        }
         return parseFloat(
             cleaned.substring(0, cleaned.lastIndexOf(sep)).replace(/[^0-9]/g, '')
             + '.'
@@ -163,10 +167,11 @@ _STRUCTURED_DATA_SCRIPT = """() => {
 # snippet doesn't flatten both prices into one string. Safe to run before
 # _DOM_PRUNE_SCRIPT because it does not touch <script> tags — JSON-LD survives.
 _STRIP_DECOY_PRICES_SCRIPT = """() => {
-    // Always-safe: <del>/<s>/<strike> and explicit strikethrough classes are
-    // semantically "invalidated text" — no legitimate price hides in them.
+    // Digit-gated: <del>/<s>/<strike> wrapping non-numeric text (e.g.
+    // <s>Sold Out</s>) is a UX signal Tier 2/3 needs for availability.
+    // Only strip when the node contains numerals — that's the price-MSRP case.
     document.querySelectorAll('del, s, strike, [class*="strikethrough"]')
-        .forEach(n => n.remove());
+        .forEach(n => { if (/[0-9]/.test(n.textContent || '')) n.remove(); });
 
     // Conditional: .regular-price means "MSRP" only when paired with a
     // .sale-price sibling. Walk up from each sale-price until we find an

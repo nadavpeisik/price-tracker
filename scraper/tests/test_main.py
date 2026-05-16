@@ -261,3 +261,40 @@ async def test_strip_does_not_cross_grid_boundary(page):
             .map(n => n.textContent.trim())
     """)
     assert "$50" in remaining
+
+
+# Gemini PR #20 follow-up — European thousands without a decimal. Old
+# parseNumeric treated the last dot as the decimal point and returned
+# 1234.567 instead of 1234567 for "1.234.567". Multi-separator detection
+# (split(sep).length > 2) corrects this.
+async def test_jsonld_european_thousands_without_decimal(page):
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@type":"Offer","price":"1.234.567","priceCurrency":"EUR","availability":"InStock"}
+    </script></head><body></body></html>
+    """
+    await page.set_content(html)
+    result = await page.evaluate(_STRUCTURED_DATA_SCRIPT)
+    assert result["price"] == 1234567
+    assert result["currency"] == "EUR"
+
+
+# Gemini PR #20 follow-up — global strikethrough strip must preserve
+# non-numeric badges like <s>Sold Out</s>, which Tier 2 needs for the
+# availability signal.
+async def test_strip_preserves_non_numeric_strikethrough(page):
+    html = """
+    <html><body>
+    <div class="product-price">
+        <span class="amount">79.00</span>
+    </div>
+    <p class="stock"><s>Sold Out</s> back in stock soon</p>
+    </body></html>
+    """
+    await page.set_content(html)
+    await page.evaluate(_STRIP_DECOY_PRICES_SCRIPT)
+    snippet = await _extract_snippet(page)
+    assert snippet is not None
+    assert "Sold Out" in snippet
+    assert "79.00" in snippet
