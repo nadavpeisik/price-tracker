@@ -75,15 +75,25 @@ _STRUCTURED_DATA_SCRIPT = """() => {
         const lastDot = cleaned.lastIndexOf('.');
         const lastComma = cleaned.lastIndexOf(',');
         const sep = lastDot > lastComma ? '.' : (lastComma > lastDot ? ',' : null);
-        // No separator, or the chosen separator appears more than once (European
-        // thousands like "1.234.567" — no decimal, all dots are grouping).
-        if (sep === null || cleaned.split(sep).length > 2) {
+        if (sep === null) {
+            return parseFloat(cleaned);
+        }
+        const sepIdx = cleaned.lastIndexOf(sep);
+        const tail = cleaned.substring(sepIdx + 1);
+        // Treat as thousands-grouping (strip all separators) when either:
+        //  - the separator appears more than once ("1.234.567" — every dot is grouping)
+        //  - it appears once with exactly 3 trailing digits ("1,234", "9,990" —
+        //    ambiguous in isolation, but in practice almost always a thousands
+        //    separator; a decimal with exactly 3 trailing digits is rare outside
+        //    of scientific notation, while comma-thousands is common, especially
+        //    on ILS/EUR sites that emit prices like "9,990" in JSON-LD).
+        if (cleaned.split(sep).length > 2 || tail.length === 3) {
             return parseFloat(cleaned.replace(/[^0-9]/g, ''));
         }
         return parseFloat(
-            cleaned.substring(0, cleaned.lastIndexOf(sep)).replace(/[^0-9]/g, '')
+            cleaned.substring(0, sepIdx).replace(/[^0-9]/g, '')
             + '.'
-            + cleaned.substring(cleaned.lastIndexOf(sep) + 1)
+            + tail
         );
     };
 

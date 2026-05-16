@@ -305,6 +305,38 @@ async def test_jsonld_european_thousands_without_decimal(page):
     assert result["currency"] == "EUR"
 
 
+# Gemini PR #20 follow-up — single-separator + exactly 3 trailing digits is
+# almost always a thousands grouping, not a decimal. Without this heuristic,
+# an Israeli/EU publisher emitting "9,990" in JSON-LD would silently parse as
+# 9.99 — three orders of magnitude wrong, passes price > 0 validation.
+async def test_jsonld_single_separator_three_digits_is_thousands(page):
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@type":"Offer","price":"9,990","priceCurrency":"ILS","availability":"InStock"}
+    </script></head><body></body></html>
+    """
+    await page.set_content(html)
+    result = await page.evaluate(_STRUCTURED_DATA_SCRIPT)
+    assert result["price"] == 9990
+    assert result["currency"] == "ILS"
+
+
+# Gemini PR #20 follow-up — single-separator + 2 trailing digits is the
+# canonical decimal case. Heuristic must NOT misclassify "1,23" as thousands.
+async def test_jsonld_single_separator_two_digits_is_decimal(page):
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@type":"Offer","price":"1,23","priceCurrency":"EUR","availability":"InStock"}
+    </script></head><body></body></html>
+    """
+    await page.set_content(html)
+    result = await page.evaluate(_STRUCTURED_DATA_SCRIPT)
+    assert result["price"] == 1.23
+    assert result["currency"] == "EUR"
+
+
 # Gemini PR #20 follow-up — priceSpecification[] can mix UnitPriceSpecification
 # (the real product price) with DeliveryChargeSpecification (shipping). Without
 # a @type allowlist, the min-reduce would pick the lower shipping cost as the
