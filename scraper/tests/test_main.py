@@ -305,6 +305,79 @@ async def test_jsonld_european_thousands_without_decimal(page):
     assert result["currency"] == "EUR"
 
 
+# Gemini PR #20 follow-up — priceSpecification[] can mix UnitPriceSpecification
+# (the real product price) with DeliveryChargeSpecification (shipping). Without
+# a @type allowlist, the min-reduce would pick the lower shipping cost as the
+# product price. The PRODUCT_PRICE_TYPES filter keeps shipping out of the pool.
+async def test_jsonld_priceSpecification_ignores_shipping_entry(page):
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@type":"Offer","priceCurrency":"USD","priceSpecification":[
+        {"@type":"UnitPriceSpecification","price":"49.99","priceCurrency":"USD"},
+        {"@type":"DeliveryChargeSpecification","price":"5.99","priceCurrency":"USD"}
+    ]}
+    </script></head><body></body></html>
+    """
+    await page.set_content(html)
+    result = await page.evaluate(_STRUCTURED_DATA_SCRIPT)
+    assert result["price"] == 49.99
+    assert result["currency"] == "USD"
+
+
+# Gemini PR #20 follow-up — strikethrough selector tightened from [class*=] to
+# [class~=] so we don't strip `.not-strikethrough` opt-outs. Verify the exact
+# token still catches the real case.
+async def test_strip_exact_token_strikethrough_class(page):
+    html = """
+    <html><body>
+    <div class="product-price">
+      <span class="strikethrough">100.00</span>
+      <span class="amount">79.00</span>
+    </div>
+    </body></html>
+    """
+    await page.set_content(html)
+    await page.evaluate(_STRIP_DECOY_PRICES_SCRIPT)
+    snippet = await _extract_snippet(page)
+    assert snippet is not None
+    assert "79.00" in snippet
+    assert "100.00" not in snippet
+
+
+# Gemini PR #20 follow-up — `not-strikethrough` is an opt-out class some
+# templates use to disable a parent's strikethrough styling. The substring
+# selector used to wipe it (and any prices it contained); the [class~=]
+# selector lets it survive.
+async def test_strip_preserves_not_strikethrough_class(page):
+    html = """
+    <html><body>
+    <div class="product-price">
+      <span class="not-strikethrough">79.00</span>
+    </div>
+    </body></html>
+    """
+    await page.set_content(html)
+    await page.evaluate(_STRIP_DECOY_PRICES_SCRIPT)
+    snippet = await _extract_snippet(page)
+    assert snippet is not None
+    assert "79.00" in snippet
+
+
+# Gemini PR #20 follow-up — Schema.org PreOrder availability means "purchasable
+# but not in stock yet"; treat as available alongside InStock/PreSale.
+async def test_jsonld_preorder_marked_available(page):
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@type":"Offer","price":"42","priceCurrency":"USD","availability":"https://schema.org/PreOrder"}
+    </script></head><body></body></html>
+    """
+    await page.set_content(html)
+    result = await page.evaluate(_STRUCTURED_DATA_SCRIPT)
+    assert result["available"] is True
+
+
 # Gemini PR #20 follow-up — `availability` is supposed to be a URI string,
 # but some publishers emit a nested ItemAvailability object. Without the
 # String() wrap, .toLowerCase() throws TypeError, the outer try/except in

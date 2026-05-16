@@ -56,6 +56,19 @@ _STRUCTURED_DATA_SCRIPT = """() => {
         return MSRP_SUFFIXES.some(suf => s === suf || s.endsWith('/' + suf));
     };
 
+    // Schema.org types that represent the product's unit price. Anything else
+    // in priceSpecification[] (DeliveryChargeSpecification, PaymentChargeSpec,
+    // etc.) carries shipping/tax/fees, not the item price — must be filtered
+    // out before the min-price reduce, or we'd return shipping as the product.
+    // Untyped entries pass through (publishers commonly omit @type on the
+    // canonical UnitPriceSpecification).
+    const PRODUCT_PRICE_TYPES = ['UnitPriceSpecification', 'PriceSpecification', 'CompoundPriceSpecification'];
+    const isProductPriceType = (atType) => {
+        if (!atType) return true;
+        const s = String(atType);
+        return PRODUCT_PRICE_TYPES.some(t => s === t || s.endsWith('/' + t));
+    };
+
     const parseNumeric = (raw) => {
         if (raw === undefined || raw === null) return NaN;
         const cleaned = String(raw).replace(/[^0-9.,]/g, '');
@@ -74,7 +87,7 @@ _STRUCTURED_DATA_SCRIPT = """() => {
         );
     };
 
-    const IN_STOCK_URIS = ['instock', 'limitedavailability', 'onlineonly', 'presale'];
+    const IN_STOCK_URIS = ['instock', 'limitedavailability', 'onlineonly', 'presale', 'preorder'];
     const buildResult = (price, currency, availability) => {
         if (isNaN(price) || price <= 0 || !currency) return null;
         return {
@@ -100,7 +113,7 @@ _STRUCTURED_DATA_SCRIPT = """() => {
         const specs = Array.isArray(raw) ? raw : (raw ? [raw] : []);
         const valid = specs
             .map(s => ({ spec: s, num: parseNumeric(s && s.price) }))
-            .filter(x => !isNaN(x.num) && x.num > 0);
+            .filter(x => !isNaN(x.num) && x.num > 0 && isProductPriceType(x.spec && x.spec['@type']));
         if (valid.length === 0) return { rawPrice: undefined, currency };
         const survivors = valid.filter(x => !isMsrpType(x.spec.priceType));
         const pool = survivors.length > 0 ? survivors : valid;
@@ -170,7 +183,10 @@ _STRIP_DECOY_PRICES_SCRIPT = """() => {
     // Digit-gated: <del>/<s>/<strike> wrapping non-numeric text (e.g.
     // <s>Sold Out</s>) is a UX signal Tier 2/3 needs for availability.
     // Only strip when the node contains numerals — that's the price-MSRP case.
-    document.querySelectorAll('del, s, strike, [class*="strikethrough"]')
+    // Class selector uses [class~=] (exact whitespace-separated token) instead
+    // of [class*=] so we don't accidentally strip a `.not-strikethrough` opt-out
+    // class. <del>/<s>/<strike> tags catch all the semantic cases anyway.
+    document.querySelectorAll('del, s, strike, [class~="strikethrough"], [class~="strikethrough-price"]')
         .forEach(n => { if (/[0-9]/.test(n.textContent || '')) n.remove(); });
 
     // Conditional: .regular-price means "MSRP" only when paired with a
