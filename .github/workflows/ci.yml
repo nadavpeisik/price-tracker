@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  backend-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Run backend tests
+        env:
+          SPRING_DOCKER_COMPOSE_ENABLED: 'false'
+        run: ./mvnw -B test
+
+  scraper-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: scraper
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: scraper/pyproject.toml
+      - name: Install deps
+        run: pip install -e '.[dev]'
+      - name: Install Playwright browsers
+        run: playwright install --with-deps chromium
+      - name: Run scraper tests
+        run: pytest -v
