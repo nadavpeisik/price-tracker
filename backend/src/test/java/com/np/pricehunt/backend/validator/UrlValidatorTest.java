@@ -110,6 +110,24 @@ class UrlValidatorTest {
     }
 
     @Test
+    void validate_blankPatternEntry_ignored() {
+        // A blank string compiles to a regex that matches every host — would brick the API.
+        UrlValidator withBlank = validatorWith("   ", "");
+        assertThatCode(() -> withBlank.validate("https://www.amazon.com/dp/B000000000"))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void validate_uppercasePatternConfig_stillMatchesLowercaseHost() {
+        UrlValidator caseInsensitive = validatorWith("(^|\\.)AMAZON\\.[A-Z]{2,3}(\\.[A-Z]{2})?$");
+        assertThatThrownBy(() -> caseInsensitive.validate("https://www.amazon.com/dp/B000000000"))
+                .isInstanceOfSatisfying(ResponseStatusException.class, e -> {
+                    assertThat(e.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(e.getReason()).contains("amazon");
+                });
+    }
+
+    @Test
     void validate_customBlocklistEntry_rejected() {
         UrlValidator custom = validatorWith("(^|\\.)example\\.com$");
         assertThatThrownBy(() -> custom.validate("https://www.example.com/foo"))

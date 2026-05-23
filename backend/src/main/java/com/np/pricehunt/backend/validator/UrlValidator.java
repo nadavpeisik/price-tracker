@@ -22,7 +22,8 @@ public class UrlValidator {
     public UrlValidator(UrlValidationProperties properties) {
         this.unsupportedSitesEnabled = properties.unsupportedSitesEnabled();
         this.blockedHostPatterns = properties.unsupportedHostPatterns().stream()
-                .map(Pattern::compile)
+                .filter(s -> !s.isBlank())
+                .map(s -> Pattern.compile(s, Pattern.CASE_INSENSITIVE))
                 .toList();
         if (!unsupportedSitesEnabled) {
             log.warn("Unsupported-sites blocklist is DISABLED via configuration; all hosts will be allowed past UrlValidator.");
