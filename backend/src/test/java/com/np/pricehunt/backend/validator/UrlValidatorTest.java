@@ -1,8 +1,11 @@
 package com.np.pricehunt.backend.validator;
 
+import com.np.pricehunt.backend.config.UrlValidationProperties;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
+
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
@@ -10,7 +13,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class UrlValidatorTest {
 
-    private final UrlValidator validator = new UrlValidator();
+    private static final String AMAZON_PATTERN = "(^|\\.)amazon\\.[a-z]{2,3}(\\.[a-z]{2})?$";
+
+    private final UrlValidator validator = validatorWith(AMAZON_PATTERN);
 
     @Test
     void validate_thomannUrl_passes() {
@@ -90,11 +95,47 @@ class UrlValidatorTest {
                 .doesNotThrowAnyException();
     }
 
+    @Test
+    void validate_emptyBlocklist_amazonPasses() {
+        UrlValidator unrestricted = validatorWith();
+        assertThatCode(() -> unrestricted.validate("https://www.amazon.com/dp/B000000000"))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void validate_blocklistDisabled_amazonPasses() {
+        UrlValidator disabled = disabledValidatorWith(AMAZON_PATTERN);
+        assertThatCode(() -> disabled.validate("https://www.amazon.com/dp/B000000000"))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void validate_customBlocklistEntry_rejected() {
+        UrlValidator custom = validatorWith("(^|\\.)example\\.com$");
+        assertThatThrownBy(() -> custom.validate("https://www.example.com/foo"))
+                .isInstanceOfSatisfying(ResponseStatusException.class, e -> {
+                    assertThat(e.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(e.getReason())
+                            .contains("www.example.com")
+                            .contains("not currently supported");
+                });
+    }
+
+    private static UrlValidator validatorWith(String... patterns) {
+        return new UrlValidator(new UrlValidationProperties(true, List.of(patterns)));
+    }
+
+    private static UrlValidator disabledValidatorWith(String... patterns) {
+        return new UrlValidator(new UrlValidationProperties(false, List.of(patterns)));
+    }
+
     private void assertAmazonRejected(String url) {
         assertThatThrownBy(() -> validator.validate(url))
                 .isInstanceOfSatisfying(ResponseStatusException.class, e -> {
                     assertThat(e.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-                    assertThat(e.getReason()).contains("Amazon");
+                    assertThat(e.getReason())
+                            .contains("amazon")
+                            .contains("not currently supported");
                 });
     }
 }

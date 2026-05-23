@@ -1,21 +1,33 @@
 package com.np.pricehunt.backend.validator;
 
+import com.np.pricehunt.backend.config.UrlValidationProperties;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.util.List;
 import java.util.Locale;
 import java.util.regex.Pattern;
 
+@Slf4j
 @Component
 public class UrlValidator {
 
-    // Anchored on (^|.) so amazon-clone.com / notamazon.com don't match;
-    // covers amazon.com, amazon.co.uk, amazon.de, amazon.com.br, etc.
-    private static final Pattern AMAZON_HOST = Pattern.compile(
-            "(^|\\.)amazon\\.[a-z]{2,3}(\\.[a-z]{2})?$");
+    private final boolean unsupportedSitesEnabled;
+    private final List<Pattern> blockedHostPatterns;
+
+    public UrlValidator(UrlValidationProperties properties) {
+        this.unsupportedSitesEnabled = properties.unsupportedSitesEnabled();
+        this.blockedHostPatterns = properties.unsupportedHostPatterns().stream()
+                .map(Pattern::compile)
+                .toList();
+        if (!unsupportedSitesEnabled) {
+            log.warn("Unsupported-sites blocklist is DISABLED via configuration; all hosts will be allowed past UrlValidator.");
+        }
+    }
 
     public void validate(String url) {
         URI uri = parseOrThrow(url);
@@ -40,9 +52,14 @@ public class UrlValidator {
     }
 
     private void rejectUnsupportedSites(String host) {
-        if (AMAZON_HOST.matcher(host).find()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "Amazon URLs are not currently supported");
+        if (!unsupportedSitesEnabled) {
+            return;
+        }
+        for (Pattern pattern : blockedHostPatterns) {
+            if (pattern.matcher(host).find()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "URLs from " + host + " are not currently supported");
+            }
         }
     }
 }
