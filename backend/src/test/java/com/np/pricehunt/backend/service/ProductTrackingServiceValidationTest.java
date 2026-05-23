@@ -6,6 +6,7 @@ import com.np.pricehunt.backend.domain.PriceRecord;
 import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.domain.TrackedItem;
 import com.np.pricehunt.backend.dto.*;
+import com.np.pricehunt.backend.exception.ScrapeBlockedException;
 import com.np.pricehunt.backend.repository.PriceRecordRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
@@ -25,6 +26,7 @@ import java.time.Instant;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
@@ -55,7 +57,7 @@ class ProductTrackingServiceValidationTest {
         product = Product.builder().id(1L).name("Test Product").build();
         item = TrackedItem.builder().id(1L).url("https://example.com/item").shopName("example.com").product(product).build();
         scrapeResponse = new ScrapeResponse(ExtractionSource.STRUCTURED,
-                new ScrapeResponse.PriceData(new BigDecimal("100.00"), "USD", true), null, null);
+                new ScrapeResponse.PriceData(new BigDecimal("100.00"), "USD", true), null, null, null);
 
         lenient().when(transactionTemplate.execute(any())).thenAnswer(inv -> {
             TransactionCallback<?> cb = inv.getArgument(0);
@@ -63,7 +65,9 @@ class ProductTrackingServiceValidationTest {
         });
         when(productRepository.findById(1L)).thenReturn(Optional.of(product));
         when(trackedItemRepository.findByUrl(any())).thenReturn(Optional.of(item));
-        when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
+        // findById is hit only inside persistResultInTxn — tests that short-circuit
+        // before persistence (e.g. ScrapeBlockedException propagation) skip it.
+        lenient().when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
         when(scraperClient.scrape(any())).thenReturn(scrapeResponse);
     }
 
@@ -204,6 +208,28 @@ class ProductTrackingServiceValidationTest {
                 .thenReturn(new PriceInfo(new BigDecimal("10.00"), "USD", true, ExtractionSource.FULLTEXT));
 
         service.trackUrl(1L, new TrackRequest("https://example.com/item", null));
+
+        verify(priceRecordRepository, never()).save(any());
+    }
+
+    @Test
+    void trackUrl_blockedScrape_propagatesExceptionAndDoesNotSaveRecord() {
+        // When the extraction layer raises ScrapeBlockedException (because the
+        // scraper returned ExtractionSource.BLOCKED), trackUrl must propagate it
+        // unchanged — no PriceRecord saved, no silent "last known" fallback. The
+        // transactional boundary rolls back any uncommitted work; the controller
+        // turns the ResponseStatusException into a 502 to the client.
+        // Note: we override the extractionService stub rather than the scraperClient
+        // stub to avoid shadowing the BeforeEach scrape stub (Mockito strict-stubs).
+        // The orchestrator test separately verifies BLOCKED → ScrapeBlockedException.
+        String reason = "cloudflare-managed:cf-ray=9fcfc0abcd123456-TLV";
+        when(extractionService.extractPrice(scrapeResponse))
+                .thenThrow(new ScrapeBlockedException(reason));
+
+        assertThatThrownBy(() ->
+                service.trackUrl(1L, new TrackRequest("https://example.com/item", null)))
+                .isInstanceOf(ScrapeBlockedException.class)
+                .hasMessageContaining(reason);
 
         verify(priceRecordRepository, never()).save(any());
     }

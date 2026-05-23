@@ -1,8 +1,23 @@
+from pathlib import Path
+
 import pytest
 import pytest_asyncio
 from playwright.async_api import async_playwright
 
-from main import _STRIP_DECOY_PRICES_SCRIPT, _STRUCTURED_DATA_SCRIPT, _extract_snippet
+from main import _STRIP_DECOY_PRICES_SCRIPT, _STRUCTURED_DATA_SCRIPT, _detect_block, _extract_snippet
+
+
+_FIXTURES = Path(__file__).parent / "fixtures"
+
+
+class _FakeResponse:
+    """Minimal stand-in for Playwright's Response — covers the .status / .headers
+    surface that _detect_block reads. Avoids the cost (and flakiness) of a real
+    network round-trip in unit tests."""
+
+    def __init__(self, status: int, headers: dict[str, str] | None = None):
+        self.status = status
+        self.headers = headers or {}
 
 
 @pytest_asyncio.fixture
@@ -450,3 +465,34 @@ async def test_strip_preserves_non_numeric_strikethrough(page):
     assert snippet is not None
     assert "Sold Out" in snippet
     assert "79.00" in snippet
+
+
+# Bot-wall detection — saved Cloudflare managed-challenge fixture. Confirms both
+# the title check and the _cf_chl_opt presence check fire, and that the reason
+# carries the cf-ray from the response headers when available.
+async def test_detect_cloudflare_challenge_html(page):
+    html = (_FIXTURES / "cloudflare_challenge.html").read_text()
+    await page.set_content(html)
+    response = _FakeResponse(status=403, headers={
+        "cf-mitigated": "challenge",
+        "cf-ray": "9fcfc0abcd123456-TLV",
+    })
+    blocked, reason = await _detect_block(page, response)
+    assert blocked is True
+    assert reason is not None
+    assert "9fcfc0abcd123456-TLV" in reason
+
+
+# Bot-wall detection — normal product page must not false-positive. No CF
+# headers, no challenge title, no _cf_chl_opt — _detect_block must return
+# (False, None) so we don't BLOCK legitimate pages.
+async def test_detect_normal_page_html(page):
+    html = """
+    <html><head><title>Soldano SLO-30 Classic | Wild Guitars</title></head>
+    <body><h1>Soldano SLO-30 Classic</h1><p>Price: $1,999</p></body></html>
+    """
+    await page.set_content(html)
+    response = _FakeResponse(status=200, headers={})
+    blocked, reason = await _detect_block(page, response)
+    assert blocked is False
+    assert reason is None

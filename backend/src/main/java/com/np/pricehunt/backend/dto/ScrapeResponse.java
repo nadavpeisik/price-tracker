@@ -8,7 +8,8 @@ public record ScrapeResponse(
         ExtractionSource extractionSource,
         PriceData priceData,
         String snippet,
-        String innerText
+        String innerText,
+        String blockedReason
 ) {
     public record PriceData(BigDecimal price, String currency, boolean available) {}
 }

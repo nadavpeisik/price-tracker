@@ -41,3 +41,14 @@ jobs:
             -d '{"url":"https://www.thomannmusic.com/rme_babyface_pro_fs.htm"}')
           echo "$resp"
           echo "$resp" | python -c "import json,sys; d=json.load(sys.stdin); assert d['extractionSource']=='structured', d; assert d['priceData']['price']>0, d"
+      - name: Canary — Wild Guitars (Cloudflare-protected)
+        # Informational regression: if Cloudflare tightens or our stealth flags
+        # stop working, this goes red overnight and we know before users see it.
+        # Asserts not-blocked AND a real price — silent FULLTEXT fallback on a
+        # "Just a moment" body would otherwise look like success.
+        run: |
+          resp=$(curl -fsS -X POST http://127.0.0.1:8001/scrape \
+            -H 'Content-Type: application/json' \
+            -d '{"url":"https://www.wildguitars.co.il/product/soldano-slo-30-classic/"}')
+          echo "$resp"
+          echo "$resp" | python -c "import json,sys; d=json.load(sys.stdin); assert d['extractionSource']!='blocked', d; assert d.get('priceData') and d['priceData']['price']>0, d"
