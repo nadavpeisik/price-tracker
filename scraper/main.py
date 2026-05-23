@@ -381,6 +381,15 @@ _CF_CHALLENGE_TITLES = (
     "attention required! | cloudflare",
 )
 
+# Linux Chrome UA matched to the Docker container's actual OS — sending a
+# Windows/Mac UA from a Linux box creates a JA3/UA mismatch that anti-bot
+# walls fingerprint on. Pinned UA string will drift from real Chrome over
+# time; bump when CF-protected sites start blocking again.
+_BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+)
+
 
 async def _detect_block(page, response) -> tuple[bool, str | None]:
     # Checks (in order): HTTP 403 + cf-mitigated: challenge header; CF challenge
@@ -433,16 +442,9 @@ async def scrape(request: ScrapeRequest):
     if not request.url.startswith(("http://", "https://")):
         raise HTTPException(status_code=400, detail="URL must use http or https scheme")
 
-    # Linux Chrome UA + realistic viewport/locale/Accept-Language to match the
-    # Docker container's actual OS — sending a Windows/Mac UA from a Linux box
-    # would create a JA3/UA mismatch that anti-bot walls fingerprint on. Pinned
-    # UA string will drift from real Chrome over time; revisit when Wild Guitars
-    # (or other CF-protected sites) start blocking again.
+    # Realistic viewport/locale/Accept-Language pair with _BROWSER_USER_AGENT.
     context = await browser.new_context(
-        user_agent=(
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
-        ),
+        user_agent=_BROWSER_USER_AGENT,
         locale="en-US",
         viewport={"width": 1920, "height": 1080},
         extra_http_headers={
