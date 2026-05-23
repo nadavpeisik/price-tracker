@@ -468,13 +468,18 @@ async def scrape(request: ScrapeRequest):
                     timeout=15000,
                 )
             except Exception:
-                logging.getLogger(__name__).info(
-                    "scrape blocked url=%s reason=%s", request.url, reason
-                )
-                return ScrapeResponse(
-                    extractionSource=ExtractionSource.BLOCKED,
-                    blockedReason=reason,
-                )
+                # wait_for_function also throws if the challenge navigates the
+                # page on success (execution context destroyed). Re-check DOM
+                # signals before concluding we're still blocked.
+                still_blocked, _ = await _detect_block(page, None)
+                if still_blocked:
+                    logging.getLogger(__name__).info(
+                        "scrape blocked url=%s reason=%s", request.url, reason
+                    )
+                    return ScrapeResponse(
+                        extractionSource=ExtractionSource.BLOCKED,
+                        blockedReason=reason,
+                    )
 
         # Pre-Tier 1: strip decoy prices (strikethrough MSRP + paired .regular-price)
         # from the rendered DOM. Safe before structured-data because it does not
