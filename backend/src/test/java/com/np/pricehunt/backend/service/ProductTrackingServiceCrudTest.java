@@ -254,7 +254,7 @@ class ProductTrackingServiceCrudTest {
     @Test
     void refreshTrackedItem_found_callsScraper() {
         ScrapeResponse scraped = new ScrapeResponse(ExtractionSource.STRUCTURED,
-                new ScrapeResponse.PriceData(new BigDecimal("899.99"), "USD", true), null, null);
+                new ScrapeResponse.PriceData(new BigDecimal("899.99"), "USD", true), null, null, null);
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
         when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item)).thenReturn(Optional.empty());
         when(scraperClient.scrape(item.getUrl())).thenReturn(scraped);
@@ -299,7 +299,7 @@ class ProductTrackingServiceCrudTest {
                 .lastChecked(Instant.now().minusSeconds(10))
                 .build();
         ScrapeResponse scraped = new ScrapeResponse(ExtractionSource.STRUCTURED,
-                new ScrapeResponse.PriceData(new BigDecimal("899.99"), "USD", true), null, null);
+                new ScrapeResponse.PriceData(new BigDecimal("899.99"), "USD", true), null, null, null);
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(recentItem));
         when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(recentItem)).thenReturn(Optional.empty());
         when(scraperClient.scrape(recentItem.getUrl())).thenReturn(scraped);
@@ -321,7 +321,7 @@ class ProductTrackingServiceCrudTest {
     @Test
     void scrapeAndPersist_normalizesCurrencyToUppercase() {
         ScrapeResponse scraped = new ScrapeResponse(ExtractionSource.STRUCTURED,
-                new ScrapeResponse.PriceData(new BigDecimal("100.00"), "usd", true), null, null);
+                new ScrapeResponse.PriceData(new BigDecimal("100.00"), "usd", true), null, null, null);
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
         when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item)).thenReturn(Optional.empty());
         when(scraperClient.scrape(item.getUrl())).thenReturn(scraped);

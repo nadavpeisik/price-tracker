@@ -4,11 +4,13 @@ import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.dto.PriceLlmResult;
 import com.np.pricehunt.backend.dto.PriceInfo;
 import com.np.pricehunt.backend.dto.ScrapeResponse;
+import com.np.pricehunt.backend.exception.ScrapeBlockedException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpStatus;
 
 import java.math.BigDecimal;
 
@@ -97,7 +99,7 @@ class PriceExtractionOrchestratorTest {
         ScrapeResponse response = new ScrapeResponse(
                 ExtractionSource.STRUCTURED,
                 new ScrapeResponse.PriceData(new BigDecimal("49.99"), "EUR", true),
-                null, null);
+                null, null, null);
 
         PriceInfo result = orchestrator.extractPrice(response);
 
@@ -111,7 +113,7 @@ class PriceExtractionOrchestratorTest {
     @Test
     void extractPrice_structured_nullPriceData_throwsIllegalState() {
         ScrapeResponse response = new ScrapeResponse(
-                ExtractionSource.STRUCTURED, null, null, null);
+                ExtractionSource.STRUCTURED, null, null, null, null);
 
         assertThatThrownBy(() -> orchestrator.extractPrice(response))
                 .isInstanceOf(IllegalStateException.class)
@@ -123,7 +125,7 @@ class PriceExtractionOrchestratorTest {
         when(ollamaService.extractPriceFromText("$29.99 | USD | In Stock", SNIPPET_MODEL))
                 .thenReturn(STUB_LLM_RESULT);
         ScrapeResponse response = new ScrapeResponse(
-                ExtractionSource.SNIPPET, null, "$29.99 | USD | In Stock", null);
+                ExtractionSource.SNIPPET, null, "$29.99 | USD | In Stock", null, null);
 
         PriceInfo result = orchestrator.extractPrice(response);
 
@@ -140,7 +142,7 @@ class PriceExtractionOrchestratorTest {
         when(ollamaService.extractPriceFromText(snippet, SNIPPET_MODEL)).thenReturn(invalid);
         when(ollamaService.extractPriceFromText(snippet, FULLTEXT_MODEL)).thenReturn(STUB_LLM_RESULT);
         ScrapeResponse response = new ScrapeResponse(
-                ExtractionSource.SNIPPET, null, snippet, null);
+                ExtractionSource.SNIPPET, null, snippet, null, null);
 
         PriceInfo result = orchestrator.extractPrice(response);
 
@@ -157,7 +159,7 @@ class PriceExtractionOrchestratorTest {
                 .thenThrow(new RuntimeException("JSON parse error"));
         when(ollamaService.extractPriceFromText(snippet, FULLTEXT_MODEL)).thenReturn(STUB_LLM_RESULT);
         ScrapeResponse response = new ScrapeResponse(
-                ExtractionSource.SNIPPET, null, snippet, null);
+                ExtractionSource.SNIPPET, null, snippet, null, null);
 
         PriceInfo result = orchestrator.extractPrice(response);
 
@@ -174,7 +176,7 @@ class PriceExtractionOrchestratorTest {
         when(ollamaService.extractPriceFromText(snippet, SNIPPET_MODEL)).thenReturn(invalid);
         when(ollamaService.extractPriceFromText(snippet, FULLTEXT_MODEL)).thenReturn(invalid);
         ScrapeResponse response = new ScrapeResponse(
-                ExtractionSource.SNIPPET, null, snippet, null);
+                ExtractionSource.SNIPPET, null, snippet, null, null);
 
         PriceInfo result = orchestrator.extractPrice(response);
 
@@ -187,12 +189,26 @@ class PriceExtractionOrchestratorTest {
     }
 
     @Test
+    void extractPrice_blocked_throwsScrapeBlockedExceptionWith502AndReason() {
+        String reason = "cloudflare-managed:cf-ray=9fcfc0abcd123456-TLV";
+        ScrapeResponse response = new ScrapeResponse(
+                ExtractionSource.BLOCKED, null, null, null, reason);
+
+        assertThatThrownBy(() -> orchestrator.extractPrice(response))
+                .isInstanceOf(ScrapeBlockedException.class)
+                .satisfies(e -> assertThat(((ScrapeBlockedException) e).getStatusCode())
+                        .isEqualTo(HttpStatus.BAD_GATEWAY))
+                .hasMessageContaining(reason);
+        verifyNoInteractions(ollamaService);
+    }
+
+    @Test
     void extractPrice_fulltext_callsLlmWithFilteredTextAndAccurateModel() {
         when(ollamaService.extractPriceFromText(anyString(), eq(FULLTEXT_MODEL))).thenReturn(STUB_LLM_RESULT);
         // lines 0-1 and 5-6 are far enough from any price match that filterLines should drop them
         String body = "dropped first\nalso dropped\n$29.99\nin stock\nalso dropped\ndropped last";
         ScrapeResponse response = new ScrapeResponse(
-                ExtractionSource.FULLTEXT, null, null, body);
+                ExtractionSource.FULLTEXT, null, null, body, null);
 
         PriceInfo result = orchestrator.extractPrice(response);
 

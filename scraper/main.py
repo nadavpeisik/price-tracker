@@ -237,6 +237,7 @@ class ExtractionSource(str, Enum):
     STRUCTURED = "structured"
     SNIPPET = "snippet"
     FULLTEXT = "fulltext"
+    BLOCKED = "blocked"
 
 
 class ScrapeRequest(BaseModel):
@@ -254,15 +255,25 @@ class ScrapeResponse(BaseModel):
     priceData: PriceData | None = None
     snippet: str | None = None
     innerText: str | None = None
+    blockedReason: str | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global playwright_instance, browser
     playwright_instance = await async_playwright().start()
+    # --disable-blink-features=AutomationControlled hides the navigator.webdriver=true
+    # signal that Cloudflare and similar walls fingerprint to detect Playwright-driven
+    # Chrome. Native engine flag (not a JS patch) — Cloudflare's anti-bot can detect
+    # prototype-pollution via add_init_script, so we set it at launch instead.
+    # --no-sandbox + --disable-dev-shm-usage stay; they're container hygiene, not stealth.
     browser = await playwright_instance.chromium.launch(
         headless=True,
-        args=["--no-sandbox", "--disable-dev-shm-usage"],
+        args=[
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-blink-features=AutomationControlled",
+        ],
     )
     yield
     await browser.close()
@@ -365,6 +376,58 @@ async def _extract_snippet(page) -> str | None:
     return " | ".join(deduped) if deduped else None
 
 
+_CF_CHALLENGE_TITLES = (
+    "just a moment",
+    "attention required! | cloudflare",
+)
+
+# Linux Chrome UA matched to the Docker container's actual OS — sending a
+# Windows/Mac UA from a Linux box creates a JA3/UA mismatch that anti-bot
+# walls fingerprint on. Pinned UA string will drift from real Chrome over
+# time; bump when CF-protected sites start blocking again.
+_BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+)
+
+
+async def _detect_block(page, response) -> tuple[bool, str | None]:
+    # Checks (in order): HTTP 403 + cf-mitigated: challenge header; CF challenge
+    # page title; window._cf_chl_opt presence. Returns (True, reason) on first hit.
+    # `reason` always carries the cf-ray when we can find it, so a live block wave
+    # is debuggable end-to-end from the API response back through Cloudflare logs.
+    cf_ray = "unknown"
+    if response is not None:
+        try:
+            cf_ray = response.headers.get("cf-ray", "unknown")
+        except Exception:
+            pass
+
+    if response is not None and getattr(response, "status", None) == 403:
+        try:
+            mitigated = (response.headers.get("cf-mitigated", "") or "").lower()
+            if "challenge" in mitigated:
+                return True, f"cloudflare-managed:cf-ray={cf_ray}"
+        except Exception:
+            pass
+
+    try:
+        title = ((await page.title()) or "").strip().lower()
+        if any(title.startswith(t) or t in title for t in _CF_CHALLENGE_TITLES):
+            return True, f"cloudflare-challenge-title:cf-ray={cf_ray}"
+    except Exception:
+        pass
+
+    try:
+        has_cf_chl = await page.evaluate("() => typeof window._cf_chl_opt !== 'undefined'")
+        if has_cf_chl:
+            return True, f"cloudflare-managed:_cf_chl_opt-present:cf-ray={cf_ray}"
+    except Exception:
+        pass
+
+    return False, None
+
+
 def _snippet_has_useful_content(snippet: str) -> bool:
     # A snippet is useful only if it has descriptive text (alphabetic characters,
     # Unicode-aware so Hebrew/Latin both count). Pure currency strings like "₪1,025"
@@ -379,10 +442,44 @@ async def scrape(request: ScrapeRequest):
     if not request.url.startswith(("http://", "https://")):
         raise HTTPException(status_code=400, detail="URL must use http or https scheme")
 
-    context = await browser.new_context()
+    # Realistic viewport/locale/Accept-Language pair with _BROWSER_USER_AGENT.
+    context = await browser.new_context(
+        user_agent=_BROWSER_USER_AGENT,
+        locale="en-US",
+        viewport={"width": 1920, "height": 1080},
+        extra_http_headers={
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+    )
     try:
         page = await context.new_page()
-        await page.goto(request.url, wait_until="domcontentloaded", timeout=30000)
+        response = await page.goto(request.url, wait_until="domcontentloaded", timeout=30000)
+
+        # Bot-wall detection. If the page is challenged, give the managed-challenge
+        # JS up to 15s to self-resolve in our stealth context; if it doesn't clear,
+        # short-circuit to BLOCKED and skip tiers 1/2/3 — extracting from a "Just a
+        # moment" interstitial would produce nonsense at best.
+        blocked, reason = await _detect_block(page, response)
+        if blocked:
+            try:
+                await page.wait_for_function(
+                    "() => !window._cf_chl_opt "
+                    "&& !document.title.toLowerCase().startsWith('just a moment')",
+                    timeout=15000,
+                )
+            except Exception:
+                # wait_for_function also throws if the challenge navigates the
+                # page on success (execution context destroyed). Re-check DOM
+                # signals before concluding we're still blocked.
+                still_blocked, _ = await _detect_block(page, None)
+                if still_blocked:
+                    logging.getLogger(__name__).info(
+                        "scrape blocked url=%s reason=%s", request.url, reason
+                    )
+                    return ScrapeResponse(
+                        extractionSource=ExtractionSource.BLOCKED,
+                        blockedReason=reason,
+                    )
 
         # Pre-Tier 1: strip decoy prices (strikethrough MSRP + paired .regular-price)
         # from the rendered DOM. Safe before structured-data because it does not

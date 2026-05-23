@@ -4,6 +4,7 @@ import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.dto.PriceLlmResult;
 import com.np.pricehunt.backend.dto.PriceInfo;
 import com.np.pricehunt.backend.dto.ScrapeResponse;
+import com.np.pricehunt.backend.exception.ScrapeBlockedException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -46,6 +47,7 @@ public class PriceExtractionOrchestrator implements PriceExtractionService {
     @Override
     public PriceInfo extractPrice(ScrapeResponse response) {
         return switch (response.extractionSource()) {
+            case BLOCKED -> throw new ScrapeBlockedException(response.blockedReason());
             case STRUCTURED -> mapStructured(response.priceData());
             case SNIPPET -> {
                 String text = response.snippet();
