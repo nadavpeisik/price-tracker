@@ -4,6 +4,7 @@ import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.dto.PriceLlmResult;
 import com.np.pricehunt.backend.dto.PriceInfo;
 import com.np.pricehunt.backend.dto.ScrapeResponse;
+import com.np.pricehunt.backend.exception.EmptyExtractionInputException;
 import com.np.pricehunt.backend.exception.ScrapeBlockedException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -137,7 +138,7 @@ class PriceExtractionOrchestratorTest {
 
     @Test
     void extractPrice_snippet_invalidFastResult_retriesWithAccurateModel() {
-        String snippet = "ambiguous text";
+        String snippet = "ambiguous text payload";
         PriceLlmResult invalid = new PriceLlmResult(null, null, false);
         when(ollamaService.extractPriceFromText(snippet, SNIPPET_MODEL)).thenReturn(invalid);
         when(ollamaService.extractPriceFromText(snippet, FULLTEXT_MODEL)).thenReturn(STUB_LLM_RESULT);
@@ -171,7 +172,7 @@ class PriceExtractionOrchestratorTest {
 
     @Test
     void extractPrice_snippet_bothModelsInvalid_returnsResultWithNulls() {
-        String snippet = "ambiguous";
+        String snippet = "ambiguous payload";
         PriceLlmResult invalid = new PriceLlmResult(null, null, false);
         when(ollamaService.extractPriceFromText(snippet, SNIPPET_MODEL)).thenReturn(invalid);
         when(ollamaService.extractPriceFromText(snippet, FULLTEXT_MODEL)).thenReturn(invalid);
@@ -199,6 +200,52 @@ class PriceExtractionOrchestratorTest {
                 .satisfies(e -> assertThat(((ScrapeBlockedException) e).getStatusCode())
                         .isEqualTo(HttpStatus.BAD_GATEWAY))
                 .hasMessageContaining(reason);
+        verifyNoInteractions(ollamaService);
+    }
+
+    // FULLTEXT with empty innerText is the symptom we hit on Amazon's AWS WAF
+    // page before scraper-side detection caught it: tier 3 fell through, body
+    // was empty, and the LLM was being called with 0 chars.
+    @Test
+    void extractPrice_fulltext_emptyInnerText_throwsEmptyExtractionInputException() {
+        ScrapeResponse response = new ScrapeResponse(
+                ExtractionSource.FULLTEXT, null, null, "", null);
+
+        assertThatThrownBy(() -> orchestrator.extractPrice(response))
+                .isInstanceOf(EmptyExtractionInputException.class)
+                .satisfies(e -> assertThat(((EmptyExtractionInputException) e).getStatusCode())
+                        .isEqualTo(HttpStatus.BAD_GATEWAY))
+                .hasMessageContaining("FULLTEXT")
+                .hasMessageContaining("chars=0");
+        verifyNoInteractions(ollamaService);
+    }
+
+    // Whitespace-only inputs would slip past a raw-length check. guardMinLength
+    // measures trimmed length so this still trips the floor and we don't burn an
+    // LLM call on payloads that are effectively empty.
+    @Test
+    void extractPrice_fulltext_whitespaceOnly_throwsEmptyExtractionInputException() {
+        ScrapeResponse response = new ScrapeResponse(
+                ExtractionSource.FULLTEXT, null, null, "                    ", null);
+
+        assertThatThrownBy(() -> orchestrator.extractPrice(response))
+                .isInstanceOf(EmptyExtractionInputException.class)
+                .hasMessageContaining("FULLTEXT")
+                .hasMessageContaining("chars=0");
+        verifyNoInteractions(ollamaService);
+    }
+
+    @Test
+    void extractPrice_snippet_belowThreshold_throwsEmptyExtractionInputException() {
+        ScrapeResponse response = new ScrapeResponse(
+                ExtractionSource.SNIPPET, null, "abc", null, null);
+
+        assertThatThrownBy(() -> orchestrator.extractPrice(response))
+                .isInstanceOf(EmptyExtractionInputException.class)
+                .satisfies(e -> assertThat(((EmptyExtractionInputException) e).getStatusCode())
+                        .isEqualTo(HttpStatus.BAD_GATEWAY))
+                .hasMessageContaining("SNIPPET")
+                .hasMessageContaining("chars=3");
         verifyNoInteractions(ollamaService);
     }
 

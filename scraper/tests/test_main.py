@@ -483,6 +483,21 @@ async def test_detect_cloudflare_challenge_html(page):
     assert "9fcfc0abcd123456-TLV" in reason
 
 
+# Bot-wall detection — saved AWS WAF Bot Control challenge fixture. Status 202
+# + gokuProps + awsWafCookieDomainList is AWS-specific; verified against real
+# normal-page captures (thomann, google, Amazon-when-WAF-off) that none of those
+# markers appear. The per-request encrypted `key` blob in the fixture has been
+# scrubbed since it doesn't affect detection.
+async def test_detect_aws_waf_challenge_html(page):
+    html = (_FIXTURES / "aws_waf_challenge.html").read_text()
+    await page.set_content(html)
+    response = _FakeResponse(status=202, headers={})
+    blocked, reason = await _detect_block(page, response)
+    assert blocked is True
+    assert reason is not None
+    assert reason.startswith("aws-waf-challenge")
+
+
 # Bot-wall detection — normal product page must not false-positive. No CF
 # headers, no challenge title, no _cf_chl_opt — _detect_block must return
 # (False, None) so we don't BLOCK legitimate pages.

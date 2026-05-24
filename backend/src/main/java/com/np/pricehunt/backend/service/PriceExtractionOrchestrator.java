@@ -4,6 +4,7 @@ import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.dto.PriceLlmResult;
 import com.np.pricehunt.backend.dto.PriceInfo;
 import com.np.pricehunt.backend.dto.ScrapeResponse;
+import com.np.pricehunt.backend.exception.EmptyExtractionInputException;
 import com.np.pricehunt.backend.exception.ScrapeBlockedException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -21,6 +22,12 @@ public class PriceExtractionOrchestrator implements PriceExtractionService {
     private static final int MAX_FILTER_LINES = 50;
     private static final int MAX_FILTER_CHARS = 2000;
     private static final int FALLBACK_CHARS = 3000;
+    // Floor matches scraper's _snippet_has_useful_content (scraper/main.py:437).
+    // Backstop for the case where the scraper returns a payload but the text is
+    // empty/near-empty (undetected bot wall like Amazon's AWS WAF interstitial
+    // before detection caught it, or an upstream change). Prevents wasted LLM
+    // calls and bogus prices being persisted.
+    private static final int MIN_LLM_INPUT_CHARS = 15;
 
     // Matches currency symbols/codes and price-related keywords (US and EU number formats)
     private static final Pattern PRICE_LINE_PATTERN = Pattern.compile(
@@ -50,7 +57,8 @@ public class PriceExtractionOrchestrator implements PriceExtractionService {
             case BLOCKED -> throw new ScrapeBlockedException(response.blockedReason());
             case STRUCTURED -> mapStructured(response.priceData());
             case SNIPPET -> {
-                String text = response.snippet();
+                String text = response.snippet() == null ? "" : response.snippet();
+                guardMinLength(text, "SNIPPET");
                 PriceLlmResult raw;
                 try {
                     raw = ollamaService.extractPriceFromText(text, snippetModel);
@@ -68,10 +76,19 @@ public class PriceExtractionOrchestrator implements PriceExtractionService {
                 yield new PriceInfo(raw.price(), raw.currency(), raw.available(), ExtractionSource.SNIPPET);
             }
             case FULLTEXT -> {
-                PriceLlmResult raw = ollamaService.extractPriceFromText(filterLines(response.innerText()), fulltextModel);
+                String text = filterLines(response.innerText());
+                guardMinLength(text, "FULLTEXT");
+                PriceLlmResult raw = ollamaService.extractPriceFromText(text, fulltextModel);
                 yield new PriceInfo(raw.price(), raw.currency(), raw.available(), ExtractionSource.FULLTEXT);
             }
         };
+    }
+
+    private void guardMinLength(String text, String source) {
+        int len = text == null ? 0 : text.trim().length();
+        if (len < MIN_LLM_INPUT_CHARS) {
+            throw new EmptyExtractionInputException(source, len);
+        }
     }
 
     // Shape check, not a semantic check. We deliberately do not validate `available`:
