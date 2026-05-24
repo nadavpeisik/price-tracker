@@ -425,6 +425,20 @@ async def _detect_block(page, response) -> tuple[bool, str | None]:
     except Exception:
         pass
 
+    # AWS WAF Bot Control / Captcha challenge interstitial. Served as HTTP 202
+    # with a ~2 KB shell that sets window.gokuProps and window.awsWafCookieDomainList
+    # — both are AWS-internal identifiers, neither appears on normal product pages
+    # (verified against thomann.de, google.com, and a 200-served Amazon PDP).
+    # No retry/wait loop like the CF case: AWS's JS challenge mints aws-waf-token
+    # via heavy obfuscated code that doesn't complete in our stealth context.
+    if response is not None and getattr(response, "status", None) == 202:
+        try:
+            html = await page.content()
+            if "gokuProps" in html or "awsWafCookieDomainList" in html:
+                return True, "aws-waf-challenge:status=202"
+        except Exception:
+            pass
+
     return False, None
 
 
@@ -455,12 +469,21 @@ async def scrape(request: ScrapeRequest):
         page = await context.new_page()
         response = await page.goto(request.url, wait_until="domcontentloaded", timeout=30000)
 
-        # Bot-wall detection. If the page is challenged, give the managed-challenge
-        # JS up to 15s to self-resolve in our stealth context; if it doesn't clear,
-        # short-circuit to BLOCKED and skip tiers 1/2/3 — extracting from a "Just a
-        # moment" interstitial would produce nonsense at best.
+        # Bot-wall detection. AWS WAF challenges fail fast — their JS challenge
+        # mints aws-waf-token via heavy obfuscated code that doesn't complete in
+        # our stealth context, so waiting is pointless. CF managed challenges
+        # sometimes self-resolve in our stealth context, so we give them up to
+        # 15s before short-circuiting. Either way, BLOCKED skips tiers 1/2/3.
         blocked, reason = await _detect_block(page, response)
         if blocked:
+            if reason and reason.startswith("aws-waf-challenge"):
+                logging.getLogger(__name__).info(
+                    "scrape blocked url=%s reason=%s", request.url, reason
+                )
+                return ScrapeResponse(
+                    extractionSource=ExtractionSource.BLOCKED,
+                    blockedReason=reason,
+                )
             try:
                 await page.wait_for_function(
                     "() => !window._cf_chl_opt "
