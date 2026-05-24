@@ -1,5 +1,6 @@
 package com.np.pricehunt.backend.controller;
 
+import com.np.pricehunt.backend.config.CurrencyProperties;
 import com.np.pricehunt.backend.dto.*;
 import com.np.pricehunt.backend.service.ProductQueryService;
 import com.np.pricehunt.backend.service.ProductTrackingService;
@@ -13,16 +14,22 @@ import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
+import java.util.Locale;
+import java.util.regex.Pattern;
 
 @RestController
 @RequestMapping("/api/products")
 @RequiredArgsConstructor
 public class ProductController {
 
+    private static final Pattern ISO_4217_CODE = Pattern.compile("^[A-Z]{3}$");
+
     private final ProductTrackingService trackingService;
     private final ProductQueryService queryService;
+    private final CurrencyProperties currencyProperties;
 
     @PostMapping
     public ResponseEntity<CreateProductResponse> createProduct(@RequestBody CreateProductRequest request) {
@@ -32,8 +39,9 @@ public class ProductController {
 
     @GetMapping
     public ResponseEntity<Page<ProductSummaryResponse>> getAllProducts(
-            @PageableDefault(size = 20, sort = {"name", "id"}) Pageable pageable) {
-        return ResponseEntity.ok(queryService.getAllProducts(withStableSort(pageable)));
+            @PageableDefault(size = 20, sort = {"name", "id"}) Pageable pageable,
+            @RequestParam(required = false) String displayCurrency) {
+        return ResponseEntity.ok(queryService.getAllProducts(withStableSort(pageable), resolveDisplayCurrency(displayCurrency)));
     }
 
     // Caller-provided ?sort overrides @PageableDefault entirely; append `id` so pagination stays deterministic.
@@ -41,6 +49,18 @@ public class ProductController {
         if (p.getSort().getOrderFor("id") != null) return p;
         Sort sort = p.getSort().and(Sort.by(Sort.Order.asc("id")));
         return PageRequest.of(p.getPageNumber(), p.getPageSize(), sort);
+    }
+
+    private String resolveDisplayCurrency(String requested) {
+        if (requested == null || requested.isBlank()) {
+            return currencyProperties.defaultDisplay();
+        }
+        String normalized = requested.trim().toUpperCase(Locale.ROOT);
+        if (!ISO_4217_CODE.matcher(normalized).matches()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "displayCurrency must be a 3-letter ISO 4217 code");
+        }
+        return normalized;
     }
 
     @GetMapping("/{id}")

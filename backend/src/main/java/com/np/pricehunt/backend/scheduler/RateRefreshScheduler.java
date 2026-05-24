@@ -1,0 +1,31 @@
+package com.np.pricehunt.backend.scheduler;
+
+import com.np.pricehunt.backend.service.fx.ExchangeRateService;
+import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+
+import java.util.UUID;
+
+@Slf4j
+@Component
+public class RateRefreshScheduler {
+
+    private final ExchangeRateService service;
+
+    public RateRefreshScheduler(ExchangeRateService service) {
+        this.service = service;
+    }
+
+    @Scheduled(cron = "${pricehunt.currency.fx.refresh-cron:0 30 16 * * *}", zone = "UTC")
+    public void scheduledRefresh() {
+        MDC.put("correlationId", "fx-" + UUID.randomUUID());
+        try {
+            log.info("Scheduled FX rate refresh starting");
+            service.refresh();
+        } finally {
+            MDC.clear();
+        }
+    }
+}
