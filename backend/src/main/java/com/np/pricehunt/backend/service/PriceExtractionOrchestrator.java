@@ -85,7 +85,7 @@ public class PriceExtractionOrchestrator implements PriceExtractionService {
     }
 
     private void guardMinLength(String text, String source) {
-        int len = text == null ? 0 : text.length();
+        int len = text == null ? 0 : text.trim().length();
         if (len < MIN_LLM_INPUT_CHARS) {
             throw new EmptyExtractionInputException(source, len);
         }

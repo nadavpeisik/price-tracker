@@ -220,6 +220,21 @@ class PriceExtractionOrchestratorTest {
         verifyNoInteractions(ollamaService);
     }
 
+    // Whitespace-only inputs would slip past a raw-length check. guardMinLength
+    // measures trimmed length so this still trips the floor and we don't burn an
+    // LLM call on payloads that are effectively empty.
+    @Test
+    void extractPrice_fulltext_whitespaceOnly_throwsEmptyExtractionInputException() {
+        ScrapeResponse response = new ScrapeResponse(
+                ExtractionSource.FULLTEXT, null, null, "                    ", null);
+
+        assertThatThrownBy(() -> orchestrator.extractPrice(response))
+                .isInstanceOf(EmptyExtractionInputException.class)
+                .hasMessageContaining("FULLTEXT")
+                .hasMessageContaining("chars=0");
+        verifyNoInteractions(ollamaService);
+    }
+
     @Test
     void extractPrice_snippet_belowThreshold_throwsEmptyExtractionInputException() {
         ScrapeResponse response = new ScrapeResponse(
