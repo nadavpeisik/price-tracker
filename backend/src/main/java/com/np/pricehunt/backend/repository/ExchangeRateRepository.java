@@ -14,6 +14,4 @@ public interface ExchangeRateRepository extends JpaRepository<ExchangeRate, Long
     Optional<ExchangeRate> findTopByOrderByAsOfDesc();
 
     List<ExchangeRate> findByAsOf(LocalDate asOf);
-
-    boolean existsByQuoteAndAsOf(String quote, LocalDate asOf);
 }

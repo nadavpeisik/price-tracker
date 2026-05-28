@@ -18,7 +18,7 @@ public class RateRefreshScheduler {
         this.service = service;
     }
 
-    @Scheduled(cron = "${pricehunt.currency.fx.refresh-cron:0 30 16 * * *}", zone = "UTC")
+    @Scheduled(cron = "${pricehunt.currency.fx.refresh-cron}", zone = "UTC")
     public void scheduledRefresh() {
         MDC.put("correlationId", "fx-" + UUID.randomUUID());
         try {

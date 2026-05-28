@@ -1,14 +1,12 @@
 package com.np.pricehunt.backend.service.fx;
 
 import com.np.pricehunt.backend.config.CurrencyProperties;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Clock;
 import java.time.LocalDate;
-import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.Locale;
 import java.util.Optional;
@@ -26,12 +24,7 @@ public class PriceConverter {
     private final BigDecimal fxMarginMultiplier;
     private final Clock clock;
 
-    @Autowired
-    public PriceConverter(ExchangeRateService rateService, CurrencyProperties properties) {
-        this(rateService, properties, Clock.system(ZoneOffset.UTC));
-    }
-
-    PriceConverter(ExchangeRateService rateService, CurrencyProperties properties, Clock clock) {
+    public PriceConverter(ExchangeRateService rateService, CurrencyProperties properties, Clock clock) {
         this.rateService = rateService;
         this.fxMarginMultiplier = BigDecimal.ONE.add(
                 properties.fxMarginPercent().divide(HUNDRED, INTERMEDIATE_SCALE, RoundingMode.HALF_UP));

@@ -3,10 +3,13 @@ package com.np.pricehunt.backend.service.fx;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.np.pricehunt.backend.config.CurrencyProperties;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
 import java.math.BigDecimal;
+import java.net.http.HttpClient;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.util.Map;
 
@@ -19,7 +22,17 @@ public class FrankfurterRateProvider {
     private final String fallbackUrl;
 
     public FrankfurterRateProvider(RestClient.Builder restClientBuilder, CurrencyProperties properties) {
-        this.restClient = restClientBuilder.build();
+        // Connect timeout lives on the HttpClient; read timeout on the factory. JdkClientHttpRequestFactory
+        // exposes only setReadTimeout, so the connect side must be configured on the underlying HttpClient.
+        HttpClient httpClient = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(5))
+                .build();
+        JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory(httpClient);
+        factory.setReadTimeout(Duration.ofSeconds(10));
+
+        this.restClient = restClientBuilder
+                .requestFactory(factory)
+                .build();
         this.primaryUrl = properties.fx().primaryUrl();
         this.fallbackUrl = properties.fx().fallbackUrl();
     }
