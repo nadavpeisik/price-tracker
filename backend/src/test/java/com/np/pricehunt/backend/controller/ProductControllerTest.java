@@ -7,6 +7,7 @@ import com.np.pricehunt.backend.config.WebPaginationConfig;
 import com.np.pricehunt.backend.dto.*;
 import com.np.pricehunt.backend.service.ProductQueryService;
 import com.np.pricehunt.backend.service.ProductTrackingService;
+import com.np.pricehunt.backend.service.fx.PriceConverter;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -41,10 +42,12 @@ class ProductControllerTest {
     private final ObjectMapper mapper = new ObjectMapper();
     @MockitoBean private ProductTrackingService trackingService;
     @MockitoBean private ProductQueryService queryService;
+    @MockitoBean private PriceConverter priceConverter;
 
     @Test
     void getAllProducts_defaultsToConfiguredDisplayCurrency() throws Exception {
         ProductSummaryResponse summary = summaryFixture();
+        when(priceConverter.isSupported("ILS")).thenReturn(true);
         when(queryService.getAllProducts(any(Pageable.class), anyString()))
                 .thenReturn(new PageImpl<>(List.of(summary)));
 
@@ -68,6 +71,7 @@ class ProductControllerTest {
 
     @Test
     void getAllProducts_explicitDisplayCurrency_passedToService() throws Exception {
+        when(priceConverter.isSupported("USD")).thenReturn(true);
         when(queryService.getAllProducts(any(Pageable.class), anyString()))
                 .thenReturn(new PageImpl<>(List.of()));
 
@@ -79,6 +83,7 @@ class ProductControllerTest {
 
     @Test
     void getAllProducts_lowercaseDisplayCurrency_normalizedToUpper() throws Exception {
+        when(priceConverter.isSupported("EUR")).thenReturn(true);
         when(queryService.getAllProducts(any(Pageable.class), anyString()))
                 .thenReturn(new PageImpl<>(List.of()));
 
@@ -97,7 +102,18 @@ class ProductControllerTest {
     }
 
     @Test
+    void getAllProducts_unsupportedDisplayCurrency_returns400() throws Exception {
+        when(priceConverter.isSupported("ZZZ")).thenReturn(false);
+
+        mvc.perform(get("/api/products").param("displayCurrency", "ZZZ"))
+                .andExpect(status().isBadRequest());
+
+        verify(queryService, never()).getAllProducts(any(Pageable.class), anyString());
+    }
+
+    @Test
     void getAllProducts_pageParams_passedToService() throws Exception {
+        when(priceConverter.isSupported("ILS")).thenReturn(true);
         when(queryService.getAllProducts(any(Pageable.class), anyString()))
                 .thenReturn(new PageImpl<>(List.of()));
 
@@ -109,6 +125,7 @@ class ProductControllerTest {
 
     @Test
     void getAllProducts_userSortWithoutId_appendsIdTiebreaker() throws Exception {
+        when(priceConverter.isSupported("ILS")).thenReturn(true);
         when(queryService.getAllProducts(any(Pageable.class), anyString()))
                 .thenReturn(new PageImpl<>(List.of()));
 

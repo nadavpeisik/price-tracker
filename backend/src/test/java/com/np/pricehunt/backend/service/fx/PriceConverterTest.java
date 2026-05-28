@@ -149,6 +149,47 @@ class PriceConverterTest {
         assertThat(result.value()).isEqualByComparingTo("363.6364");
     }
 
+    @Test
+    void isSupported_eur_alwaysTrueEvenWithoutSnapshot() {
+        PriceConverter converter = newConverter("0");
+        // No snapshot stubbed — EUR short-circuits before checking.
+        assertThat(converter.isSupported("EUR")).isTrue();
+    }
+
+    @Test
+    void isSupported_lowercase_normalizedBeforeLookup() {
+        PriceConverter converter = newConverter("0");
+        snapshotOn(TODAY);
+
+        assertThat(converter.isSupported("usd")).isTrue();
+    }
+
+    @Test
+    void isSupported_currencyInSnapshot_returnsTrue() {
+        PriceConverter converter = newConverter("0");
+        snapshotOn(TODAY);
+
+        assertThat(converter.isSupported("ILS")).isTrue();
+    }
+
+    @Test
+    void isSupported_currencyNotInSnapshot_returnsFalse() {
+        PriceConverter converter = newConverter("0");
+        snapshotOn(TODAY);
+
+        assertThat(converter.isSupported("ZZZ")).isFalse();
+    }
+
+    @Test
+    void isSupported_noSnapshot_failsOpenForGracefulColdStart() {
+        // Before the first refresh completes, we can't verify support — return true so the API
+        // doesn't 400 every request during the startup window. Conversion still returns null per-record.
+        PriceConverter converter = newConverter("0");
+        when(rateService.currentSnapshot()).thenReturn(Optional.empty());
+
+        assertThat(converter.isSupported("ZZZ")).isTrue();
+    }
+
     private PriceConverter newConverter(String marginPercent) {
         CurrencyProperties props = new CurrencyProperties(
                 "ILS",

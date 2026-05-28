@@ -58,6 +58,17 @@ public class PriceConverter {
         return new ConvertedAmount(converted, snapshot.asOf(), stale);
     }
 
+    public boolean isSupported(String currency) {
+        String upper = currency.toUpperCase(Locale.ROOT);
+        if (EUR.equals(upper)) return true;
+        // No snapshot loaded yet (cold-start before first refresh): fail open so the API doesn't
+        // 400 every request during the startup window. Conversion will return null per-record,
+        // preserving the existing graceful-degradation contract.
+        return rateService.currentSnapshot()
+                .map(snap -> snap.rates().containsKey(upper))
+                .orElse(true);
+    }
+
     private static BigDecimal rateOf(RateSnapshot snapshot, String currency) {
         // EUR is the implicit base — its rate is 1 even when absent from the providers' `rates` map.
         return EUR.equals(currency) ? BigDecimal.ONE : snapshot.rates().get(currency);

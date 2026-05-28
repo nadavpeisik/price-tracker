@@ -4,6 +4,7 @@ import com.np.pricehunt.backend.config.CurrencyProperties;
 import com.np.pricehunt.backend.dto.*;
 import com.np.pricehunt.backend.service.ProductQueryService;
 import com.np.pricehunt.backend.service.ProductTrackingService;
+import com.np.pricehunt.backend.service.fx.PriceConverter;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -30,6 +31,7 @@ public class ProductController {
     private final ProductTrackingService trackingService;
     private final ProductQueryService queryService;
     private final CurrencyProperties currencyProperties;
+    private final PriceConverter priceConverter;
 
     @PostMapping
     public ResponseEntity<CreateProductResponse> createProduct(@RequestBody CreateProductRequest request) {
@@ -52,15 +54,23 @@ public class ProductController {
     }
 
     private String resolveDisplayCurrency(String requested) {
+        String resolved;
         if (requested == null || requested.isBlank()) {
-            return currencyProperties.defaultDisplay();
+            resolved = currencyProperties.defaultDisplay();
+        } else {
+            resolved = requested.trim().toUpperCase(Locale.ROOT);
+            if (!ISO_4217_CODE.matcher(resolved).matches()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "displayCurrency must be a 3-letter ISO 4217 code");
+            }
         }
-        String normalized = requested.trim().toUpperCase(Locale.ROOT);
-        if (!ISO_4217_CODE.matcher(normalized).matches()) {
+        // Check support on the resolved value so a misconfigured default also surfaces as 400
+        // once the FX snapshot has loaded (isSupported fails open during cold-start).
+        if (!priceConverter.isSupported(resolved)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "displayCurrency must be a 3-letter ISO 4217 code");
+                    "Unsupported display currency: " + resolved);
         }
-        return normalized;
+        return resolved;
     }
 
     @GetMapping("/{id}")

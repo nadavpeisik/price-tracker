@@ -7,7 +7,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.util.HashMap;
@@ -40,10 +39,7 @@ public class ExchangeRateService {
         });
     }
 
-    // @Transactional on the listener (not just on refresh()) so the proxy opens a tx at entry —
-    // self-invocation of refresh() below would otherwise bypass the proxy and drop the tx boundary.
     @EventListener(ApplicationReadyEvent.class)
-    @Transactional
     public void initialRefreshOnStartup() {
         if (snapshot == null) {
             log.info("No FX rates persisted; triggering initial refresh");
@@ -51,7 +47,9 @@ public class ExchangeRateService {
         }
     }
 
-    @Transactional
+    // No @Transactional: provider.fetchLatest() is a multi-second network call. Wrapping it in a tx
+    // would hold a DB connection for the whole fetch and starve the pool under load. saveAll() inside
+    // persist() opens its own short-lived tx for the write — that's the only atomicity we need.
     public void refresh() {
         try {
             RateSnapshot fresh = provider.fetchLatest();

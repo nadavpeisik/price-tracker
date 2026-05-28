@@ -56,6 +56,15 @@ public class FrankfurterRateProvider {
         if (payload == null || payload.date() == null || payload.rates() == null || payload.rates().isEmpty()) {
             throw new IllegalStateException(providerName + " returned empty FX payload");
         }
+        // Validate at ingress: PriceConverter divides by fromRate, so a zero or negative rate would
+        // either throw ArithmeticException or produce a negative price. Failing fast here triggers
+        // the fallback URL via fetchLatest()'s catch.
+        payload.rates().forEach((quote, rate) -> {
+            if (rate == null || rate.compareTo(BigDecimal.ZERO) <= 0) {
+                throw new IllegalStateException(
+                        providerName + " returned non-positive rate for " + quote + ": " + rate);
+            }
+        });
         log.info("Fetched {} FX rates from {} (asOf={})",
                 payload.rates().size(), providerName, payload.date());
         return new RateSnapshot(payload.date(), payload.rates());

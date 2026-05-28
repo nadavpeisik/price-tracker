@@ -53,6 +53,7 @@ public class ProductQueryService {
     private record ConvertedItem(ItemWithLatestPrice source, ConvertedAmount converted) {}
 
     public Page<ProductSummaryResponse> getAllProducts(Pageable pageable, String displayCurrency) {
+        // displayCurrency support is validated in ProductController before this method is called.
         // N+1: O(pageSize × storesPerProduct). Acceptable at current scale; revisit with JPQL fetch join when traffic grows.
         return productRepository.findAll(pageable).map(product -> {
             List<ItemWithLatestPrice> pairs = fetchItemsWithLatestPrices(product);
