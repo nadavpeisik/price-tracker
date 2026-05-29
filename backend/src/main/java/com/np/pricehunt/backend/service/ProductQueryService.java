@@ -7,6 +7,8 @@ import com.np.pricehunt.backend.dto.*;
 import com.np.pricehunt.backend.repository.PriceRecordRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
+import com.np.pricehunt.backend.service.fx.ConvertedAmount;
+import com.np.pricehunt.backend.service.fx.PriceConverter;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
@@ -20,8 +22,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Set;
-import java.util.stream.Collectors;
+import java.util.Objects;
 
 @Slf4j
 @Service
@@ -31,27 +32,32 @@ public class ProductQueryService {
     private final ProductRepository productRepository;
     private final TrackedItemRepository trackedItemRepository;
     private final PriceRecordRepository priceRecordRepository;
+    private final PriceConverter priceConverter;
     private final int defaultWindowDays;
 
     public ProductQueryService(
             ProductRepository productRepository,
             TrackedItemRepository trackedItemRepository,
             PriceRecordRepository priceRecordRepository,
+            PriceConverter priceConverter,
             @Value("${price.history.default-window-days:90}") int defaultWindowDays) {
         this.productRepository = productRepository;
         this.trackedItemRepository = trackedItemRepository;
         this.priceRecordRepository = priceRecordRepository;
+        this.priceConverter = priceConverter;
         this.defaultWindowDays = defaultWindowDays;
     }
 
-    // Pairs a tracked item with its latest price record (null if no prices yet)
     private record ItemWithLatestPrice(TrackedItem item, PriceRecord latest) {}
 
-    public Page<ProductSummaryResponse> getAllProducts(Pageable pageable) {
+    private record ConvertedItem(ItemWithLatestPrice source, ConvertedAmount converted) {}
+
+    public Page<ProductSummaryResponse> getAllProducts(Pageable pageable, String displayCurrency) {
+        // displayCurrency support is validated in ProductController before this method is called.
         // N+1: O(pageSize × storesPerProduct). Acceptable at current scale; revisit with JPQL fetch join when traffic grows.
         return productRepository.findAll(pageable).map(product -> {
             List<ItemWithLatestPrice> pairs = fetchItemsWithLatestPrices(product);
-            return toSummaryResponse(product, pairs);
+            return toSummaryResponse(product, pairs, displayCurrency);
         });
     }
 
@@ -105,41 +111,72 @@ public class ProductQueryService {
                 .toList();
     }
 
-    private ProductSummaryResponse toSummaryResponse(Product product, List<ItemWithLatestPrice> pairs) {
+    private ProductSummaryResponse toSummaryResponse(Product product, List<ItemWithLatestPrice> pairs, String displayCurrency) {
         int storeCount = pairs.size();
-        boolean anyAvailable = pairs.stream()
-                .filter(p -> p.latest() != null)
-                .anyMatch(p -> p.latest().isAvailable());
 
         List<ItemWithLatestPrice> withPrices = pairs.stream()
                 .filter(p -> p.latest() != null)
                 .toList();
 
-        if (withPrices.isEmpty()) {
-            return new ProductSummaryResponse(
-                    product.getId(), product.getName(), product.getDescription(),
-                    storeCount, null, null, null, anyAvailable, false);
-        }
-
-        Set<String> currencies = withPrices.stream()
+        boolean anyAvailable = withPrices.stream().anyMatch(p -> p.latest().isAvailable());
+        boolean mixedCurrencies = withPrices.stream()
                 .map(p -> p.latest().getCurrency())
-                .collect(Collectors.toSet());
+                .distinct()
+                .count() > 1;
 
-        if (currencies.size() > 1) {
-            return new ProductSummaryResponse(
-                    product.getId(), product.getName(), product.getDescription(),
-                    storeCount, null, null, null, anyAvailable, true);
+        if (withPrices.isEmpty()) {
+            return emptyBestPriceResponse(product, storeCount, false, false);
         }
 
-        ItemWithLatestPrice best = withPrices.stream()
-                .min(Comparator.comparing(p -> p.latest().getPrice()))
+        List<ConvertedItem> convertible = withPrices.stream()
+                .map(p -> {
+                    ConvertedAmount conv = priceConverter.convert(
+                            p.latest().getPrice(),
+                            p.latest().getCurrency(),
+                            displayCurrency);
+                    return conv == null ? null : new ConvertedItem(p, conv);
+                })
+                .filter(Objects::nonNull)
+                .toList();
+
+        if (convertible.isEmpty()) {
+            log.debug("No tracked items convertible to {} for product {}", displayCurrency, product.getId());
+            return emptyBestPriceResponse(product, storeCount, anyAvailable, mixedCurrencies);
+        }
+
+        ConvertedItem best = convertible.stream()
+                .min(Comparator.comparing(ci -> ci.converted().value()))
                 .orElseThrow();
 
+        PriceRecord bestLatest = best.source().latest();
         return new ProductSummaryResponse(
-                product.getId(), product.getName(), product.getDescription(),
+                product.getId(),
+                product.getName(),
+                product.getDescription(),
                 storeCount,
-                best.latest().getPrice(), best.latest().getCurrency(), best.item().getShopName(),
-                anyAvailable, false);
+                best.converted().value(),
+                displayCurrency,
+                bestLatest.getPrice(),
+                bestLatest.getCurrency(),
+                best.source().item().getShopName(),
+                best.converted().asOf(),
+                best.converted().stale(),
+                PriceBasis.AS_LISTED,
+                anyAvailable,
+                mixedCurrencies);
+    }
+
+    private ProductSummaryResponse emptyBestPriceResponse(Product product, int storeCount,
+                                                          boolean anyAvailable, boolean mixedCurrencies) {
+        return new ProductSummaryResponse(
+                product.getId(),
+                product.getName(),
+                product.getDescription(),
+                storeCount,
+                null, null, null, null, null, null, false,
+                PriceBasis.AS_LISTED,
+                anyAvailable,
+                mixedCurrencies);
     }
 
     private TrackedItemSummary toItemSummary(TrackedItem item, PriceRecord latest) {

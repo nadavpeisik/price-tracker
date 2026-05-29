@@ -2,12 +2,15 @@ package com.np.pricehunt.backend.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.np.pricehunt.backend.domain.ExtractionSource;
+import com.np.pricehunt.backend.config.CurrencyProperties;
 import com.np.pricehunt.backend.config.WebPaginationConfig;
 import com.np.pricehunt.backend.dto.*;
 import com.np.pricehunt.backend.service.ProductQueryService;
 import com.np.pricehunt.backend.service.ProductTrackingService;
+import com.np.pricehunt.backend.service.fx.PriceConverter;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.PageImpl;
@@ -22,6 +25,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.*;
@@ -31,46 +35,98 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @WebMvcTest(ProductController.class)
 @Import(WebPaginationConfig.class)
+@EnableConfigurationProperties(CurrencyProperties.class)
 class ProductControllerTest {
 
     @Autowired private MockMvc mvc;
     private final ObjectMapper mapper = new ObjectMapper();
     @MockitoBean private ProductTrackingService trackingService;
     @MockitoBean private ProductQueryService queryService;
+    @MockitoBean private PriceConverter priceConverter;
 
     @Test
-    void getAllProducts_returnsPaginatedResponse() throws Exception {
-        ProductSummaryResponse summary = new ProductSummaryResponse(
-                1L, "Laptop", null, 2,
-                new BigDecimal("999.99"), "USD", "amazon.com",
-                true, false);
-        when(queryService.getAllProducts(any(Pageable.class)))
+    void getAllProducts_defaultsToConfiguredDisplayCurrency() throws Exception {
+        ProductSummaryResponse summary = summaryFixture();
+        when(priceConverter.isSupported("ILS")).thenReturn(true);
+        when(queryService.getAllProducts(any(Pageable.class), anyString()))
                 .thenReturn(new PageImpl<>(List.of(summary)));
 
         mvc.perform(get("/api/products"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content[0].id").value(1))
                 .andExpect(jsonPath("$.content[0].name").value("Laptop"))
-                .andExpect(jsonPath("$.content[0].bestPrice").value(999.99))
+                .andExpect(jsonPath("$.content[0].bestPriceConverted").value(363.6364))
+                .andExpect(jsonPath("$.content[0].bestPriceConvertedCurrency").value("ILS"))
+                .andExpect(jsonPath("$.content[0].bestPriceOriginal").value(100))
+                .andExpect(jsonPath("$.content[0].bestPriceOriginalCurrency").value("USD"))
                 .andExpect(jsonPath("$.content[0].bestPriceShop").value("amazon.com"))
-                .andExpect(jsonPath("$.content[0].mixedCurrencies").value(false))
+                .andExpect(jsonPath("$.content[0].conversionAsOf").value("2026-05-24"))
+                .andExpect(jsonPath("$.content[0].conversionStale").value(false))
+                .andExpect(jsonPath("$.content[0].priceBasis").value("AS_LISTED"))
+                .andExpect(jsonPath("$.content[0].mixedCurrencies").value(true))
                 .andExpect(jsonPath("$.page.totalElements").value(1));
+
+        verify(queryService).getAllProducts(any(Pageable.class), eq("ILS"));
+    }
+
+    @Test
+    void getAllProducts_explicitDisplayCurrency_passedToService() throws Exception {
+        when(priceConverter.isSupported("USD")).thenReturn(true);
+        when(queryService.getAllProducts(any(Pageable.class), anyString()))
+                .thenReturn(new PageImpl<>(List.of()));
+
+        mvc.perform(get("/api/products").param("displayCurrency", "USD"))
+                .andExpect(status().isOk());
+
+        verify(queryService).getAllProducts(any(Pageable.class), eq("USD"));
+    }
+
+    @Test
+    void getAllProducts_lowercaseDisplayCurrency_normalizedToUpper() throws Exception {
+        when(priceConverter.isSupported("EUR")).thenReturn(true);
+        when(queryService.getAllProducts(any(Pageable.class), anyString()))
+                .thenReturn(new PageImpl<>(List.of()));
+
+        mvc.perform(get("/api/products").param("displayCurrency", "eur"))
+                .andExpect(status().isOk());
+
+        verify(queryService).getAllProducts(any(Pageable.class), eq("EUR"));
+    }
+
+    @Test
+    void getAllProducts_invalidDisplayCurrencyFormat_returns400() throws Exception {
+        mvc.perform(get("/api/products").param("displayCurrency", "ZZZZ"))
+                .andExpect(status().isBadRequest());
+
+        verify(queryService, never()).getAllProducts(any(Pageable.class), anyString());
+    }
+
+    @Test
+    void getAllProducts_unsupportedDisplayCurrency_returns400() throws Exception {
+        when(priceConverter.isSupported("ZZZ")).thenReturn(false);
+
+        mvc.perform(get("/api/products").param("displayCurrency", "ZZZ"))
+                .andExpect(status().isBadRequest());
+
+        verify(queryService, never()).getAllProducts(any(Pageable.class), anyString());
     }
 
     @Test
     void getAllProducts_pageParams_passedToService() throws Exception {
-        when(queryService.getAllProducts(any(Pageable.class)))
+        when(priceConverter.isSupported("ILS")).thenReturn(true);
+        when(queryService.getAllProducts(any(Pageable.class), anyString()))
                 .thenReturn(new PageImpl<>(List.of()));
 
         mvc.perform(get("/api/products").param("page", "2").param("size", "5"))
                 .andExpect(status().isOk());
 
-        verify(queryService).getAllProducts(argThat(p -> p.getPageNumber() == 2 && p.getPageSize() == 5));
+        verify(queryService).getAllProducts(argThat(p -> p.getPageNumber() == 2 && p.getPageSize() == 5), eq("ILS"));
     }
 
     @Test
     void getAllProducts_userSortWithoutId_appendsIdTiebreaker() throws Exception {
-        when(queryService.getAllProducts(any(Pageable.class)))
+        when(priceConverter.isSupported("ILS")).thenReturn(true);
+        when(queryService.getAllProducts(any(Pageable.class), anyString()))
                 .thenReturn(new PageImpl<>(List.of()));
 
         mvc.perform(get("/api/products").param("sort", "name,asc"))
@@ -79,7 +135,7 @@ class ProductControllerTest {
         verify(queryService).getAllProducts(argThat(p -> {
             Sort.Order idOrder = p.getSort().getOrderFor("id");
             return idOrder != null && p.getSort().getOrderFor("name") != null;
-        }));
+        }), eq("ILS"));
     }
 
     @Test
@@ -217,5 +273,16 @@ class ProductControllerTest {
                 eq(1L), eq(1L),
                 eq(Instant.parse("2026-01-01T00:00:00Z")),
                 eq(Instant.parse("2026-04-01T00:00:00Z")));
+    }
+
+    private static ProductSummaryResponse summaryFixture() {
+        return new ProductSummaryResponse(
+                1L, "Laptop", null, 2,
+                new BigDecimal("363.6364"), "ILS",
+                new BigDecimal("100"), "USD",
+                "amazon.com",
+                LocalDate.of(2026, 5, 24), false,
+                PriceBasis.AS_LISTED,
+                true, true);
     }
 }
