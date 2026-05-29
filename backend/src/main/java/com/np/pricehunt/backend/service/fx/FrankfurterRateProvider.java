@@ -30,7 +30,9 @@ public class FrankfurterRateProvider {
         JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory(httpClient);
         factory.setReadTimeout(Duration.ofSeconds(10));
 
-        this.restClient = restClientBuilder
+        // clone() before mutating: RestClient.Builder is a shared Spring bean — calling
+        // requestFactory() directly on it would set our 5s/10s timeouts on every other consumer too.
+        this.restClient = restClientBuilder.clone()
                 .requestFactory(factory)
                 .build();
         this.primaryUrl = properties.fx().primaryUrl();
