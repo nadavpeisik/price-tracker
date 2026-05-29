@@ -9,6 +9,8 @@ import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -22,13 +24,15 @@ public class ExchangeRateService {
 
     private final ExchangeRateRepository repository;
     private final FrankfurterRateProvider provider;
+    private final Clock clock;
 
     // Volatile is sufficient: snapshot is replaced wholesale on refresh; readers see either old or new, never partial.
     private volatile RateSnapshot snapshot;
 
-    public ExchangeRateService(ExchangeRateRepository repository, FrankfurterRateProvider provider) {
+    public ExchangeRateService(ExchangeRateRepository repository, FrankfurterRateProvider provider, Clock clock) {
         this.repository = repository;
         this.provider = provider;
+        this.clock = clock;
     }
 
     @PostConstruct
@@ -47,8 +51,11 @@ public class ExchangeRateService {
 
     @EventListener(ApplicationReadyEvent.class)
     public void initialRefreshOnStartup() {
-        if (snapshot == null) {
-            log.info("No FX rates persisted; triggering initial refresh");
+        // 1-day buffer matches the daily cron cadence: a yesterday-snapshot restart is normal,
+        // an older one means we missed at least one cron window and should catch up eagerly.
+        if (snapshot == null
+                || snapshot.asOf().isBefore(LocalDate.now(clock).minusDays(1))) {
+            log.info("FX snapshot missing or stale; triggering initial refresh");
             refresh();
         }
     }
@@ -56,7 +63,11 @@ public class ExchangeRateService {
     // No @Transactional: provider.fetchLatest() is a multi-second network call. Wrapping it in a tx
     // would hold a DB connection for the whole fetch and starve the pool under load. saveAll() inside
     // persist() opens its own short-lived tx for the write — that's the only atomicity we need.
-    public void refresh() {
+    // synchronized: prevents the ApplicationReadyEvent listener and the scheduled cron from racing
+    // on persist() — without it, two concurrent refreshes can both see no rows in findByAsOf() and
+    // both try to insert, hitting the uq_exchange_rate_quote_as_of unique constraint. Per-JVM only;
+    // a multi-instance deployment would need a DB advisory lock.
+    public synchronized void refresh() {
         try {
             RateSnapshot fresh = provider.fetchLatest();
             persist(fresh);
