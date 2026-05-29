@@ -32,6 +32,9 @@ public class PriceConverter {
     }
 
     public ConvertedAmount convert(BigDecimal amount, String fromCurrency, String toCurrency) {
+        // PriceRecord.currency is still nullable in the schema (Flyway PR will tighten); return null
+        // for unconvertible input rather than NPE so callers see the existing graceful-degradation contract.
+        if (amount == null || fromCurrency == null || toCurrency == null) return null;
         String from = fromCurrency.toUpperCase(Locale.ROOT);
         String to = toCurrency.toUpperCase(Locale.ROOT);
 
@@ -59,6 +62,7 @@ public class PriceConverter {
     }
 
     public boolean isSupported(String currency) {
+        if (currency == null) return false;
         String upper = currency.toUpperCase(Locale.ROOT);
         if (EUR.equals(upper)) return true;
         // No snapshot loaded yet (cold-start before first refresh): fail open so the API doesn't

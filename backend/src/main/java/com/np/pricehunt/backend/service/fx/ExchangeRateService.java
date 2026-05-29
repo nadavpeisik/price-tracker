@@ -51,6 +51,22 @@ public class ExchangeRateService {
 
     @EventListener(ApplicationReadyEvent.class)
     public void initialRefreshOnStartup() {
+        // If @PostConstruct's loadFromDb() threw (transient pool warming, race with Flyway, etc.),
+        // snapshot is still null even though the DB is now healthy. Retry the load here before
+        // burning an external API call. The stale-check below still runs, so a successfully-loaded
+        // but old snapshot will trigger refresh anyway — we only skip the network call when the DB
+        // has a fresh-enough snapshot.
+        if (snapshot == null) {
+            try {
+                loadFromDb().ifPresent(snap -> {
+                    this.snapshot = snap;
+                    log.info("Loaded FX snapshot from DB on ApplicationReadyEvent: asOf={}, currencies={}",
+                            snap.asOf(), snap.rates().size());
+                });
+            } catch (Exception e) {
+                log.error("Retry of DB load failed on ApplicationReadyEvent; falling through to refresh", e);
+            }
+        }
         // 1-day buffer matches the daily cron cadence: a yesterday-snapshot restart is normal,
         // an older one means we missed at least one cron window and should catch up eagerly.
         if (snapshot == null
