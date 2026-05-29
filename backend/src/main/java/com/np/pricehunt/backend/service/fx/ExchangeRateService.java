@@ -33,10 +33,16 @@ public class ExchangeRateService {
 
     @PostConstruct
     void init() {
-        loadFromDb().ifPresent(snap -> {
-            this.snapshot = snap;
-            log.info("Loaded FX snapshot from DB: asOf={}, currencies={}", snap.asOf(), snap.rates().size());
-        });
+        // FX is non-critical: a load failure here (missing table mid-migration, transient connection
+        // issue) must not prevent bean creation. ApplicationReadyEvent will retrigger a fresh fetch.
+        try {
+            loadFromDb().ifPresent(snap -> {
+                this.snapshot = snap;
+                log.info("Loaded FX snapshot from DB: asOf={}, currencies={}", snap.asOf(), snap.rates().size());
+            });
+        } catch (Exception e) {
+            log.error("Failed to load FX snapshot from DB on startup; will retry on refresh", e);
+        }
     }
 
     @EventListener(ApplicationReadyEvent.class)
