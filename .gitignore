@@ -16,6 +16,10 @@ __pycache__/
 .venv/
 .pytest_cache/
 
+# Coverage
+.coverage
+coverage.xml
+
 # Env
 .env
 *.log
