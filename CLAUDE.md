@@ -83,6 +83,21 @@ The scraper response carries an `extractionSource` enum (`STRUCTURED | SNIPPET |
 - Monetary values use `BigDecimal` (precision 19, scale 4)
 - The single existing test class is `@Disabled` — tests are not yet implemented
 
+## Database migrations
+
+Schema is managed by **Flyway**. SQL files live in `backend/src/main/resources/db/migration/`, named `V{n}__{snake_case_description}.sql`. Each migration runs once per database, in version order, on app startup. The `flyway_schema_history` table in Postgres records what's been applied.
+
+**Hard rules:**
+- Migrations are immutable. Once a `V{n}` is merged, never edit it — Flyway stores a checksum and refuses to start on mismatch. Bugs get fixed in `V{n+1}`.
+- `spring.jpa.hibernate.ddl-auto=validate` means Hibernate no longer mutates the schema. At startup it just checks that entity classes match what's live; any drift fails the boot.
+- When changing an entity (adding a column, renaming, etc.), write the matching migration in the same PR.
+
+**Existing-DB baselining:** `spring.flyway.baseline-on-migrate=true` + `baseline-version=1`. On a DB that has tables but no `flyway_schema_history`, Flyway inserts a row marking V1 as already applied — without running it — and continues from V2. Fresh DBs (CI, new contributors) run V1 normally. This is how local dev DBs survived the Flyway adoption without being recreated.
+
+**Tests:** `@DataJpaTest` uses in-memory H2. `application-test.properties` disables Flyway and switches Hibernate back to `create-drop` for tests — our migrations are Postgres-flavored and H2 fakes the syntax inconsistently. Temporary trade-off; the V2 PR (FX `ExchangeRate` IDENTITY → SEQUENCE) will require Testcontainers Postgres for repository tests since H2 cannot honor Postgres-specific sequence DDL.
+
+**Spring Boot 4 dependency gotcha:** SB4 split per-feature autoconfigs into separate modules. Declaring only `org.flywaydb:flyway-core` puts the library on the classpath but no `FlywayAutoConfiguration` registers — Flyway sits dormant with no logs. The artifact that wires autoconfig is `org.springframework.boot:spring-boot-flyway` (transitively pulls `flyway-core`). Same pattern presumably applies to Liquibase, Redis, Kafka, etc. — when adding a third-party library that "just worked" by classpath in SB3, check the SB4 BOM for a matching `spring-boot-{feature}` module.
+
 ## Roadmap
 
 **Phase 1 (done):** Synchronous HTTP pipeline — user submits URL → Spring Boot calls Python scraper → Ollama extracts price → stored in Postgres.
