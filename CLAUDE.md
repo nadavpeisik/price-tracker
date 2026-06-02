@@ -114,6 +114,7 @@ Schema is managed by **Flyway**. SQL files live in `backend/src/main/resources/d
 - Spring Boot consumes result, calls Ollama if needed, saves `PriceRecord`
 - `POST /api/products/track` returns `202 Accepted` with a `requestId`
 - `PriceCheckScheduler` (`@Scheduled`) publishes events for all active `TrackedItem`s hourly
+- Migrate primary keys project-wide from BIGSERIAL/SEQUENCE to UUIDv7 — Kafka producers can mint IDs before the row hits the DB (no `getGeneratedKeys()` round-trip per insert). Until Phase 2 lands, `ExchangeRate` uses SEQUENCE; other entities use IDENTITY.
 
 **Phase 3 (future):** Price change detection → `PriceDroppedEvent` → notification (email/push).
 
