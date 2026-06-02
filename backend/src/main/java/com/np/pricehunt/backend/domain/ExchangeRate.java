@@ -25,7 +25,8 @@ import java.time.LocalDate;
 public class ExchangeRate {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "exchange_rate_seq")
+    @SequenceGenerator(name = "exchange_rate_seq", sequenceName = "exchange_rate_seq", allocationSize = 50)
     private Long id;
 
     // EUR is the implicit base; one row per quote currency per as_of date.
