@@ -9,6 +9,11 @@ import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
 import com.np.pricehunt.backend.service.fx.ConvertedAmount;
 import com.np.pricehunt.backend.service.fx.PriceConverter;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Objects;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
@@ -17,12 +22,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
-
-import java.time.Instant;
-import java.time.temporal.ChronoUnit;
-import java.util.Comparator;
-import java.util.List;
-import java.util.Objects;
 
 @Slf4j
 @Service
@@ -54,7 +53,8 @@ public class ProductQueryService {
 
     public Page<ProductSummaryResponse> getAllProducts(Pageable pageable, String displayCurrency) {
         // displayCurrency support is validated in ProductController before this method is called.
-        // N+1: O(pageSize × storesPerProduct). Acceptable at current scale; revisit with JPQL fetch join when traffic grows.
+        // N+1: O(pageSize × storesPerProduct). Acceptable at current scale; revisit with JPQL fetch join when traffic
+        // grows.
         return productRepository.findAll(pageable).map(product -> {
             List<ItemWithLatestPrice> pairs = fetchItemsWithLatestPrices(product);
             return toSummaryResponse(product, pairs, displayCurrency);
@@ -62,7 +62,8 @@ public class ProductQueryService {
     }
 
     public ProductDetailResponse getProduct(Long id) {
-        Product product = productRepository.findById(id)
+        Product product = productRepository
+                .findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found"));
 
         List<TrackedItemSummary> summaries = fetchItemsWithLatestPrices(product).stream()
@@ -73,7 +74,8 @@ public class ProductQueryService {
     }
 
     public PriceHistoryResponse getPriceHistory(Long productId, Long itemId, Instant from, Instant to) {
-        TrackedItem item = trackedItemRepository.findById(itemId)
+        TrackedItem item = trackedItemRepository
+                .findById(itemId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found"));
 
         if (!item.getProduct().getId().equals(productId)) {
@@ -89,8 +91,8 @@ public class ProductQueryService {
             effectiveFrom = maxFrom;
         }
 
-        List<PriceRecord> records = priceRecordRepository
-                .findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(item, effectiveFrom, effectiveTo);
+        List<PriceRecord> records = priceRecordRepository.findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(
+                item, effectiveFrom, effectiveTo);
 
         List<PricePointResponse> history = records.stream()
                 .map(r -> new PricePointResponse(
@@ -106,23 +108,27 @@ public class ProductQueryService {
 
     private List<ItemWithLatestPrice> fetchItemsWithLatestPrices(Product product) {
         return trackedItemRepository.findByProduct(product).stream()
-                .map(item -> new ItemWithLatestPrice(item,
-                        priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item).orElse(null)))
+                .map(item -> new ItemWithLatestPrice(
+                        item,
+                        priceRecordRepository
+                                .findFirstByTrackedItemOrderByTimestampDesc(item)
+                                .orElse(null)))
                 .toList();
     }
 
-    private ProductSummaryResponse toSummaryResponse(Product product, List<ItemWithLatestPrice> pairs, String displayCurrency) {
+    private ProductSummaryResponse toSummaryResponse(
+            Product product, List<ItemWithLatestPrice> pairs, String displayCurrency) {
         int storeCount = pairs.size();
 
-        List<ItemWithLatestPrice> withPrices = pairs.stream()
-                .filter(p -> p.latest() != null)
-                .toList();
+        List<ItemWithLatestPrice> withPrices =
+                pairs.stream().filter(p -> p.latest() != null).toList();
 
         boolean anyAvailable = withPrices.stream().anyMatch(p -> p.latest().isAvailable());
         boolean mixedCurrencies = withPrices.stream()
-                .map(p -> p.latest().getCurrency())
-                .distinct()
-                .count() > 1;
+                        .map(p -> p.latest().getCurrency())
+                        .distinct()
+                        .count()
+                > 1;
 
         if (withPrices.isEmpty()) {
             return emptyBestPriceResponse(product, storeCount, false, false);
@@ -131,9 +137,7 @@ public class ProductQueryService {
         List<ConvertedItem> convertible = withPrices.stream()
                 .map(p -> {
                     ConvertedAmount conv = priceConverter.convert(
-                            p.latest().getPrice(),
-                            p.latest().getCurrency(),
-                            displayCurrency);
+                            p.latest().getPrice(), p.latest().getCurrency(), displayCurrency);
                     return conv == null ? null : new ConvertedItem(p, conv);
                 })
                 .filter(Objects::nonNull)
@@ -166,14 +170,20 @@ public class ProductQueryService {
                 mixedCurrencies);
     }
 
-    private ProductSummaryResponse emptyBestPriceResponse(Product product, int storeCount,
-                                                          boolean anyAvailable, boolean mixedCurrencies) {
+    private ProductSummaryResponse emptyBestPriceResponse(
+            Product product, int storeCount, boolean anyAvailable, boolean mixedCurrencies) {
         return new ProductSummaryResponse(
                 product.getId(),
                 product.getName(),
                 product.getDescription(),
                 storeCount,
-                null, null, null, null, null, null, false,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                false,
                 PriceBasis.AS_LISTED,
                 anyAvailable,
                 mixedCurrencies);

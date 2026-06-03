@@ -3,16 +3,15 @@ package com.np.pricehunt.backend.scheduler;
 import com.np.pricehunt.backend.dto.TrackedItemRefreshView;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
 import com.np.pricehunt.backend.service.ProductTrackingService;
+import java.time.Instant;
+import java.util.List;
+import java.util.UUID;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-
-import java.time.Instant;
-import java.util.List;
-import java.util.UUID;
 
 @Slf4j
 @Component
@@ -36,8 +35,7 @@ public class PriceCheckScheduler {
 
     @Scheduled(
             fixedDelayString = "${price.scheduler.fixed-delay-ms:" + DEFAULT_FIXED_DELAY_MS + "}",
-            initialDelayString = "${price.scheduler.initial-delay-ms:60000}"
-    )
+            initialDelayString = "${price.scheduler.initial-delay-ms:60000}")
     public void refreshAll() {
         MDC.put("correlationId", "sched-" + UUID.randomUUID());
         try {
@@ -51,8 +49,12 @@ public class PriceCheckScheduler {
                     success++;
                 } catch (Exception e) {
                     failed++;
-                    log.warn("Scheduled refresh failed for itemId={} url={} type={}: {}",
-                            item.id(), item.url(), e.getClass().getSimpleName(), e.getMessage());
+                    log.warn(
+                            "Scheduled refresh failed for itemId={} url={} type={}: {}",
+                            item.id(),
+                            item.url(),
+                            e.getClass().getSimpleName(),
+                            e.getMessage());
                 }
             }
             log.info("Scheduled refresh done: {} success, {} failed", success, failed);

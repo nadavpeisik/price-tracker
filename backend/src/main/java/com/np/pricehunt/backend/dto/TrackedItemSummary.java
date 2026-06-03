@@ -10,5 +10,4 @@ public record TrackedItemSummary(
         BigDecimal currentPrice,
         String currency,
         boolean available,
-        Instant lastChecked
-) {}
+        Instant lastChecked) {}

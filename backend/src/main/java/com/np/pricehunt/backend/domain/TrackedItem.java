@@ -1,13 +1,12 @@
 package com.np.pricehunt.backend.domain;
 
 import jakarta.persistence.*;
+import java.time.Instant;
+import java.util.List;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-
-import java.time.Instant;
-import java.util.List;
 
 @Entity
 @Data
@@ -18,6 +17,7 @@ public class TrackedItem {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
     private String url;
     private String shopName;
 

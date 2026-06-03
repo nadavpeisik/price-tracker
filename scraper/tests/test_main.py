@@ -1,11 +1,14 @@
 from pathlib import Path
 
-import pytest
 import pytest_asyncio
 from playwright.async_api import async_playwright
 
-from main import _STRIP_DECOY_PRICES_SCRIPT, _STRUCTURED_DATA_SCRIPT, _detect_block, _extract_snippet
-
+from main import (
+    _STRIP_DECOY_PRICES_SCRIPT,
+    _STRUCTURED_DATA_SCRIPT,
+    _detect_block,
+    _extract_snippet,
+)
 
 _FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -473,10 +476,13 @@ async def test_strip_preserves_non_numeric_strikethrough(page):
 async def test_detect_cloudflare_challenge_html(page):
     html = (_FIXTURES / "cloudflare_challenge.html").read_text()
     await page.set_content(html)
-    response = _FakeResponse(status=403, headers={
-        "cf-mitigated": "challenge",
-        "cf-ray": "9fcfc0abcd123456-TLV",
-    })
+    response = _FakeResponse(
+        status=403,
+        headers={
+            "cf-mitigated": "challenge",
+            "cf-ray": "9fcfc0abcd123456-TLV",
+        },
+    )
     blocked, reason = await _detect_block(page, response)
     assert blocked is True
     assert reason is not None

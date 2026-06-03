@@ -1,7 +1,6 @@
 package com.np.pricehunt.backend.dto;
 
 import com.np.pricehunt.backend.domain.ExtractionSource;
-
 import java.math.BigDecimal;
 
 public record ScrapeResponse(
@@ -9,7 +8,6 @@ public record ScrapeResponse(
         PriceData priceData,
         String snippet,
         String innerText,
-        String blockedReason
-) {
+        String blockedReason) {
     public record PriceData(BigDecimal price, String currency, boolean available) {}
 }

@@ -1,5 +1,10 @@
 package com.np.pricehunt.backend.service;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.*;
+
 import com.np.pricehunt.backend.client.ScraperClient;
 import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.domain.PriceRecord;
@@ -10,6 +15,9 @@ import com.np.pricehunt.backend.repository.PriceRecordRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
 import com.np.pricehunt.backend.validator.UrlValidator;
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -21,25 +29,29 @@ import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.math.BigDecimal;
-import java.time.Instant;
-import java.util.Optional;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.*;
-
 @ExtendWith(MockitoExtension.class)
 class ProductTrackingServiceCrudTest {
 
-    @Mock private ProductRepository productRepository;
-    @Mock private TrackedItemRepository trackedItemRepository;
-    @Mock private PriceRecordRepository priceRecordRepository;
-    @Mock private PriceExtractionService extractionService;
-    @Mock private ScraperClient scraperClient;
-    @Mock private TransactionTemplate transactionTemplate;
-    @Mock private UrlValidator urlValidator;
+    @Mock
+    private ProductRepository productRepository;
+
+    @Mock
+    private TrackedItemRepository trackedItemRepository;
+
+    @Mock
+    private PriceRecordRepository priceRecordRepository;
+
+    @Mock
+    private PriceExtractionService extractionService;
+
+    @Mock
+    private ScraperClient scraperClient;
+
+    @Mock
+    private TransactionTemplate transactionTemplate;
+
+    @Mock
+    private UrlValidator urlValidator;
 
     private ProductTrackingService service;
 
@@ -49,16 +61,27 @@ class ProductTrackingServiceCrudTest {
     @BeforeEach
     void setUp() {
         service = new ProductTrackingService(
-                productRepository, trackedItemRepository, priceRecordRepository,
-                extractionService, scraperClient, transactionTemplate, urlValidator,
-                200, 60);
+                productRepository,
+                trackedItemRepository,
+                priceRecordRepository,
+                extractionService,
+                scraperClient,
+                transactionTemplate,
+                urlValidator,
+                200,
+                60);
         // Run transactionTemplate callbacks inline so phase splits are exercised end-to-end.
         lenient().when(transactionTemplate.execute(any())).thenAnswer(inv -> {
             TransactionCallback<?> cb = inv.getArgument(0);
             return cb.doInTransaction(null);
         });
         product = Product.builder().id(1L).name("Laptop").build();
-        item = TrackedItem.builder().id(1L).url("https://amazon.com/dp/1").shopName("amazon.com").product(product).build();
+        item = TrackedItem.builder()
+                .id(1L)
+                .url("https://amazon.com/dp/1")
+                .shopName("amazon.com")
+                .product(product)
+                .build();
     }
 
     // --- deleteProduct ---
@@ -101,7 +124,12 @@ class ProductTrackingServiceCrudTest {
     @Test
     void deleteTrackedItem_wrongProduct_throwsException() {
         Product other = Product.builder().id(99L).name("Other").build();
-        TrackedItem foreignItem = TrackedItem.builder().id(1L).url("http://x.com").shopName("x").product(other).build();
+        TrackedItem foreignItem = TrackedItem.builder()
+                .id(1L)
+                .url("http://x.com")
+                .shopName("x")
+                .product(other)
+                .build();
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(foreignItem));
 
         assertThatThrownBy(() -> service.deleteTrackedItem(1L, 1L))
@@ -215,8 +243,11 @@ class ProductTrackingServiceCrudTest {
 
     @Test
     void refreshTrackedItem_recentlyRefreshed_throwsTooManyRequests() {
-        TrackedItem recentItem = TrackedItem.builder().id(1L).url("https://amazon.com/dp/1")
-                .shopName("amazon.com").product(product)
+        TrackedItem recentItem = TrackedItem.builder()
+                .id(1L)
+                .url("https://amazon.com/dp/1")
+                .shopName("amazon.com")
+                .product(product)
                 .lastChecked(Instant.now().minusSeconds(10))
                 .build();
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(recentItem));
@@ -242,7 +273,12 @@ class ProductTrackingServiceCrudTest {
     @Test
     void refreshTrackedItem_wrongProduct_throwsException() {
         Product other = Product.builder().id(99L).name("Other").build();
-        TrackedItem foreignItem = TrackedItem.builder().id(1L).url("http://x.com").shopName("x").product(other).build();
+        TrackedItem foreignItem = TrackedItem.builder()
+                .id(1L)
+                .url("http://x.com")
+                .shopName("x")
+                .product(other)
+                .build();
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(foreignItem));
 
         assertThatThrownBy(() -> service.refreshTrackedItem(1L, 1L))
@@ -253,10 +289,15 @@ class ProductTrackingServiceCrudTest {
 
     @Test
     void refreshTrackedItem_found_callsScraper() {
-        ScrapeResponse scraped = new ScrapeResponse(ExtractionSource.STRUCTURED,
-                new ScrapeResponse.PriceData(new BigDecimal("899.99"), "USD", true), null, null, null);
+        ScrapeResponse scraped = new ScrapeResponse(
+                ExtractionSource.STRUCTURED,
+                new ScrapeResponse.PriceData(new BigDecimal("899.99"), "USD", true),
+                null,
+                null,
+                null);
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item)).thenReturn(Optional.empty());
+        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
+                .thenReturn(Optional.empty());
         when(scraperClient.scrape(item.getUrl())).thenReturn(scraped);
         when(extractionService.extractPrice(scraped))
                 .thenReturn(new PriceInfo(new BigDecimal("899.99"), "USD", true, ExtractionSource.STRUCTURED));
@@ -277,7 +318,8 @@ class ProductTrackingServiceCrudTest {
         // First attempt: scraper returns null. lastChecked never bumped on the entity, but the
         // in-memory rate-limiter is stamped during Phase 1. Second attempt must hit the cap.
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item)).thenReturn(Optional.empty());
+        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
+                .thenReturn(Optional.empty());
         when(scraperClient.scrape(item.getUrl())).thenReturn(null);
 
         TrackResponse first = service.refreshTrackedItem(1L, 1L);
@@ -294,14 +336,22 @@ class ProductTrackingServiceCrudTest {
     @Test
     void scheduledRefresh_savesPriceWithoutRateLimitCheck() {
         // Item was just refreshed — a manual refresh would 429, but the scheduler must bypass.
-        TrackedItem recentItem = TrackedItem.builder().id(1L).url("https://amazon.com/dp/1")
-                .shopName("amazon.com").product(product)
+        TrackedItem recentItem = TrackedItem.builder()
+                .id(1L)
+                .url("https://amazon.com/dp/1")
+                .shopName("amazon.com")
+                .product(product)
                 .lastChecked(Instant.now().minusSeconds(10))
                 .build();
-        ScrapeResponse scraped = new ScrapeResponse(ExtractionSource.STRUCTURED,
-                new ScrapeResponse.PriceData(new BigDecimal("899.99"), "USD", true), null, null, null);
+        ScrapeResponse scraped = new ScrapeResponse(
+                ExtractionSource.STRUCTURED,
+                new ScrapeResponse.PriceData(new BigDecimal("899.99"), "USD", true),
+                null,
+                null,
+                null);
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(recentItem));
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(recentItem)).thenReturn(Optional.empty());
+        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(recentItem))
+                .thenReturn(Optional.empty());
         when(scraperClient.scrape(recentItem.getUrl())).thenReturn(scraped);
         when(extractionService.extractPrice(scraped))
                 .thenReturn(new PriceInfo(new BigDecimal("899.99"), "USD", true, ExtractionSource.STRUCTURED));
@@ -320,10 +370,15 @@ class ProductTrackingServiceCrudTest {
 
     @Test
     void scrapeAndPersist_normalizesCurrencyToUppercase() {
-        ScrapeResponse scraped = new ScrapeResponse(ExtractionSource.STRUCTURED,
-                new ScrapeResponse.PriceData(new BigDecimal("100.00"), "usd", true), null, null, null);
+        ScrapeResponse scraped = new ScrapeResponse(
+                ExtractionSource.STRUCTURED,
+                new ScrapeResponse.PriceData(new BigDecimal("100.00"), "usd", true),
+                null,
+                null,
+                null);
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item)).thenReturn(Optional.empty());
+        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
+                .thenReturn(Optional.empty());
         when(scraperClient.scrape(item.getUrl())).thenReturn(scraped);
         when(extractionService.extractPrice(scraped))
                 .thenReturn(new PriceInfo(new BigDecimal("100.00"), "usd", true, ExtractionSource.STRUCTURED));

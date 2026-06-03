@@ -1,29 +1,29 @@
 package com.np.pricehunt.backend.service.fx;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.when;
+
 import com.np.pricehunt.backend.config.CurrencyProperties;
+import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
+import java.util.Map;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.math.BigDecimal;
-import java.time.Clock;
-import java.time.Instant;
-import java.time.LocalDate;
-import java.time.ZoneOffset;
-import java.util.Map;
-import java.util.Optional;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.when;
-
 @ExtendWith(MockitoExtension.class)
 class PriceConverterTest {
 
-    @Mock private ExchangeRateService rateService;
+    @Mock
+    private ExchangeRateService rateService;
 
     private static final LocalDate TODAY = LocalDate.of(2026, 5, 24);
-    private static final Clock FIXED_CLOCK = Clock.fixed(TODAY.atStartOfDay(ZoneOffset.UTC).toInstant(), ZoneOffset.UTC);
+    private static final Clock FIXED_CLOCK =
+            Clock.fixed(TODAY.atStartOfDay(ZoneOffset.UTC).toInstant(), ZoneOffset.UTC);
 
     // EUR-base rates: 1 EUR = X quote
     private static final Map<String, BigDecimal> RATES = Map.of(
@@ -192,9 +192,7 @@ class PriceConverterTest {
 
     private PriceConverter newConverter(String marginPercent) {
         CurrencyProperties props = new CurrencyProperties(
-                "ILS",
-                new BigDecimal(marginPercent),
-                new CurrencyProperties.Fx("", "", "0 30 16 * * *"));
+                "ILS", new BigDecimal(marginPercent), new CurrencyProperties.Fx("", "", "0 30 16 * * *"));
         return new PriceConverter(rateService, props, FIXED_CLOCK);
     }
 

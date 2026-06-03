@@ -12,8 +12,8 @@ import org.springframework.web.server.ResponseStatusException;
 // client's request.
 public class EmptyExtractionInputException extends ResponseStatusException {
     public EmptyExtractionInputException(String source, int chars) {
-        super(HttpStatus.BAD_GATEWAY,
-                "Scraper returned insufficient text for LLM extraction (source=%s, chars=%d)"
-                        .formatted(source, chars));
+        super(
+                HttpStatus.BAD_GATEWAY,
+                "Scraper returned insufficient text for LLM extraction (source=%s, chars=%d)".formatted(source, chars));
     }
 }

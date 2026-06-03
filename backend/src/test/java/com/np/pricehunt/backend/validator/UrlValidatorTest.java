@@ -1,15 +1,14 @@
 package com.np.pricehunt.backend.validator;
 
-import com.np.pricehunt.backend.config.UrlValidationProperties;
-import org.junit.jupiter.api.Test;
-import org.springframework.http.HttpStatus;
-import org.springframework.web.server.ResponseStatusException;
-
-import java.util.List;
-
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import com.np.pricehunt.backend.config.UrlValidationProperties;
+import java.util.List;
+import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 
 class UrlValidatorTest {
 
@@ -133,9 +132,7 @@ class UrlValidatorTest {
         assertThatThrownBy(() -> custom.validate("https://www.example.com/foo"))
                 .isInstanceOfSatisfying(ResponseStatusException.class, e -> {
                     assertThat(e.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-                    assertThat(e.getReason())
-                            .contains("www.example.com")
-                            .contains("not currently supported");
+                    assertThat(e.getReason()).contains("www.example.com").contains("not currently supported");
                 });
     }
 
@@ -148,12 +145,9 @@ class UrlValidatorTest {
     }
 
     private void assertAmazonRejected(String url) {
-        assertThatThrownBy(() -> validator.validate(url))
-                .isInstanceOfSatisfying(ResponseStatusException.class, e -> {
-                    assertThat(e.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-                    assertThat(e.getReason())
-                            .contains("amazon")
-                            .contains("not currently supported");
-                });
+        assertThatThrownBy(() -> validator.validate(url)).isInstanceOfSatisfying(ResponseStatusException.class, e -> {
+            assertThat(e.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+            assertThat(e.getReason()).contains("amazon").contains("not currently supported");
+        });
     }
 }

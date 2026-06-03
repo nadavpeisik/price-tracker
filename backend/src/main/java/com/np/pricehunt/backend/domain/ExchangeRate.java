@@ -1,23 +1,21 @@
 package com.np.pricehunt.backend.domain;
 
 import jakarta.persistence.*;
+import java.math.BigDecimal;
+import java.time.LocalDate;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.math.BigDecimal;
-import java.time.LocalDate;
-
 @Entity
 @Table(
         name = "exchange_rate",
-        uniqueConstraints = @UniqueConstraint(
-                name = "uq_exchange_rate_quote_as_of",
-                columnNames = {"quote", "as_of"}
-        ),
-        indexes = @Index(name = "idx_exchange_rate_as_of", columnList = "as_of DESC")
-)
+        uniqueConstraints =
+                @UniqueConstraint(
+                        name = "uq_exchange_rate_quote_as_of",
+                        columnNames = {"quote", "as_of"}),
+        indexes = @Index(name = "idx_exchange_rate_as_of", columnList = "as_of DESC"))
 @Data
 @Builder
 @NoArgsConstructor

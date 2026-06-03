@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from enum import Enum
 
 from fastapi import FastAPI, HTTPException, Request
-from playwright.async_api import async_playwright, Browser, Playwright
+from playwright.async_api import Browser, Playwright, async_playwright
 from pydantic import BaseModel
 
 playwright_instance: Playwright = None
@@ -551,7 +551,7 @@ async def scrape(request: ScrapeRequest):
         )
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
     finally:
         await context.close()
 

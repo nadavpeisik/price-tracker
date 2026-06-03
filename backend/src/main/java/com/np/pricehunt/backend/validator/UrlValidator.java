@@ -1,16 +1,15 @@
 package com.np.pricehunt.backend.validator;
 
 import com.np.pricehunt.backend.config.UrlValidationProperties;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.HttpStatus;
-import org.springframework.stereotype.Component;
-import org.springframework.web.server.ResponseStatusException;
-
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.List;
 import java.util.Locale;
 import java.util.regex.Pattern;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Component;
+import org.springframework.web.server.ResponseStatusException;
 
 @Slf4j
 @Component
@@ -26,7 +25,8 @@ public class UrlValidator {
                 .map(s -> Pattern.compile(s, Pattern.CASE_INSENSITIVE))
                 .toList();
         if (!unsupportedSitesEnabled) {
-            log.warn("Unsupported-sites blocklist is DISABLED via configuration; all hosts will be allowed past UrlValidator.");
+            log.warn(
+                    "Unsupported-sites blocklist is DISABLED via configuration; all hosts will be allowed past UrlValidator.");
         }
     }
 
@@ -58,8 +58,8 @@ public class UrlValidator {
         }
         for (Pattern pattern : blockedHostPatterns) {
             if (pattern.matcher(host).find()) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "URLs from " + host + " are not currently supported");
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST, "URLs from " + host + " are not currently supported");
             }
         }
     }

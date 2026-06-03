@@ -17,6 +17,7 @@ dev = [
     "pytest==8.3.4",
     "pytest-asyncio==0.25.2",
     "pytest-cov==6.0.0",
+    "ruff==0.8.4",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -27,3 +28,23 @@ pythonpath = ["."]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "T20", "A"]
+# E/F: pycodestyle + pyflakes (correctness)
+# I: isort (import order)
+# B: bugbear (likely bugs)
+# UP: pyupgrade (modernize syntax)
+# T20: flake8-print (catch stray print() — should be logger in a FastAPI service)
+# A: flake8-builtins (don't shadow list/id/type/etc.)
+
+[tool.ruff.lint.per-file-ignores]
+# main.py embeds JavaScript inside Python triple-quoted strings (sent to the
+# browser via page.evaluate). Wrapping long JS lines would either break JS
+# syntax or require ugly Python-side concatenation. `# noqa` markers can't
+# go inline (they'd become part of the JS payload). Pragmatic exemption.
+"main.py" = ["E501"]

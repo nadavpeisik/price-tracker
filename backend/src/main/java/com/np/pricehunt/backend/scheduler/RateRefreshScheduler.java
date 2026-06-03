@@ -1,12 +1,11 @@
 package com.np.pricehunt.backend.scheduler;
 
 import com.np.pricehunt.backend.service.fx.ExchangeRateService;
+import java.util.UUID;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-
-import java.util.UUID;
 
 @Slf4j
 @Component
