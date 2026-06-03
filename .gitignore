@@ -23,3 +23,6 @@ coverage.xml
 # Env
 .env
 *.log
+
+# Claude Code per-project config (plugin enablement, local permission allowlist)
+.claude/
