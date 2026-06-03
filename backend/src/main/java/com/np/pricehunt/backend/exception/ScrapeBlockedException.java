@@ -11,7 +11,6 @@ import org.springframework.web.server.ResponseStatusException;
 // clients mistaking the failure for a 4xx validation error.
 public class ScrapeBlockedException extends ResponseStatusException {
     public ScrapeBlockedException(String reason) {
-        super(HttpStatus.BAD_GATEWAY,
-                "Scrape blocked by anti-bot protection (%s)".formatted(reason));
+        super(HttpStatus.BAD_GATEWAY, "Scrape blocked by anti-bot protection (%s)".formatted(reason));
     }
 }

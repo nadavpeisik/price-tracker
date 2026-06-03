@@ -9,15 +9,6 @@ import com.np.pricehunt.backend.repository.PriceRecordRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
 import com.np.pricehunt.backend.validator.UrlValidator;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpStatus;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionTemplate;
-import org.springframework.util.StringUtils;
-import org.springframework.web.server.ResponseStatusException;
-
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.net.URI;
@@ -26,6 +17,14 @@ import java.time.Instant;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.util.StringUtils;
+import org.springframework.web.server.ResponseStatusException;
 
 @Slf4j
 @Service
@@ -70,16 +69,16 @@ public class ProductTrackingService {
 
     @Transactional
     public CreateProductResponse createProduct(CreateProductRequest request) {
-        Product product = productRepository.save(Product.builder()
-                .name(request.name())
-                .build());
+        Product product =
+                productRepository.save(Product.builder().name(request.name()).build());
         return new CreateProductResponse(product.getId(), product.getName());
     }
 
     public TrackResponse trackUrl(Long productId, TrackRequest request) {
         urlValidator.validate(request.url());
         ItemSnapshot snapshot = transactionTemplate.execute(status -> {
-            Product product = productRepository.findById(productId)
+            Product product = productRepository
+                    .findById(productId)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found"));
             TrackedItem item = resolveTrackedItem(product, request);
             return new ItemSnapshot(item.getId(), item.getUrl());
@@ -91,7 +90,8 @@ public class ProductTrackingService {
 
     public TrackResponse refreshTrackedItem(Long productId, Long itemId) {
         ItemSnapshot snapshot = transactionTemplate.execute(status -> {
-            TrackedItem item = trackedItemRepository.findById(itemId)
+            TrackedItem item = trackedItemRepository
+                    .findById(itemId)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found"));
             if (!item.getProduct().getId().equals(productId)) {
                 throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found for this product");
@@ -107,7 +107,8 @@ public class ProductTrackingService {
     // System-initiated refresh: bypasses the rate-limit (the scheduler is the system, not a user).
     public TrackResponse scheduledRefresh(Long itemId) {
         ItemSnapshot snapshot = transactionTemplate.execute(status -> {
-            TrackedItem item = trackedItemRepository.findById(itemId)
+            TrackedItem item = trackedItemRepository
+                    .findById(itemId)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found"));
             return new ItemSnapshot(item.getId(), item.getUrl());
         });
@@ -123,26 +124,30 @@ public class ProductTrackingService {
         Instant cutoff = now.minusSeconds(minRefreshIntervalSeconds);
 
         if (persistedLastChecked != null && persistedLastChecked.isAfter(cutoff)) {
-            throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "Item was refreshed recently, try again later");
+            throw new ResponseStatusException(
+                    HttpStatus.TOO_MANY_REQUESTS, "Item was refreshed recently, try again later");
         }
 
-        Instant kept = lastRefreshAttempt.compute(itemId, (k, prev) ->
-                (prev != null && prev.isAfter(cutoff)) ? prev : now);
+        Instant kept =
+                lastRefreshAttempt.compute(itemId, (k, prev) -> (prev != null && prev.isAfter(cutoff)) ? prev : now);
         if (kept != now) {
-            throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "Item was refreshed recently, try again later");
+            throw new ResponseStatusException(
+                    HttpStatus.TOO_MANY_REQUESTS, "Item was refreshed recently, try again later");
         }
     }
 
     @Transactional
     public void deleteProduct(Long id) {
-        Product product = productRepository.findById(id)
+        Product product = productRepository
+                .findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found"));
         productRepository.delete(product);
     }
 
     @Transactional
     public void deleteTrackedItem(Long productId, Long itemId) {
-        TrackedItem item = trackedItemRepository.findById(itemId)
+        TrackedItem item = trackedItemRepository
+                .findById(itemId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found"));
 
         if (!item.getProduct().getId().equals(productId)) {
@@ -161,7 +166,8 @@ public class ProductTrackingService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Name cannot be blank");
         }
 
-        Product product = productRepository.findById(id)
+        Product product = productRepository
+                .findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found"));
 
         if (StringUtils.hasText(request.name())) {
@@ -188,16 +194,24 @@ public class ProductTrackingService {
     // Phase 3: validate + persist in a fresh, short-lived transaction.
     private TrackResponse persistResultInTxn(Long itemId, PriceInfo info) {
         return transactionTemplate.execute(status -> {
-            TrackedItem item = trackedItemRepository.findById(itemId)
+            TrackedItem item = trackedItemRepository
+                    .findById(itemId)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found"));
-            PriceRecord latest = priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item).orElse(null);
+            PriceRecord latest = priceRecordRepository
+                    .findFirstByTrackedItemOrderByTimestampDesc(item)
+                    .orElse(null);
 
             if (info == null || !isValidPrice(info, latest)) {
                 if (info != null) {
-                    log.warn("Extracted price failed validation — skipping save. url={} price={} currency={} source={}",
-                            item.getUrl(), info.price(), info.currency(), info.extractionSource());
+                    log.warn(
+                            "Extracted price failed validation — skipping save. url={} price={} currency={} source={}",
+                            item.getUrl(),
+                            info.price(),
+                            info.currency(),
+                            info.extractionSource());
                 }
-                // intentional: return last known good price rather than an error, so the caller always gets a usable response
+                // intentional: return last known good price rather than an error, so the caller always gets a usable
+                // response
                 return buildTrackResponse(item.getProduct(), item, latest);
             }
 
@@ -211,9 +225,14 @@ public class ProductTrackingService {
 
             item.setLastChecked(record.getTimestamp());
 
-            log.info("Tracked itemId={} url={} source={} price={} {} available={}",
-                    item.getId(), item.getUrl(), info.extractionSource(),
-                    info.price(), info.currency(), info.available());
+            log.info(
+                    "Tracked itemId={} url={} source={} price={} {} available={}",
+                    item.getId(),
+                    item.getUrl(),
+                    info.extractionSource(),
+                    info.price(),
+                    info.currency(),
+                    info.available());
 
             return buildTrackResponse(item.getProduct(), item, record);
         });
@@ -221,7 +240,8 @@ public class ProductTrackingService {
 
     @Transactional
     public TrackResponse updateTrackedItem(Long productId, Long itemId, UpdateTrackedItemRequest request) {
-        TrackedItem item = trackedItemRepository.findById(itemId)
+        TrackedItem item = trackedItemRepository
+                .findById(itemId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found"));
 
         if (!item.getProduct().getId().equals(productId)) {
@@ -233,16 +253,21 @@ public class ProductTrackingService {
             trackedItemRepository.save(item);
         }
 
-        PriceRecord latest = priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item).orElse(null);
+        PriceRecord latest = priceRecordRepository
+                .findFirstByTrackedItemOrderByTimestampDesc(item)
+                .orElse(null);
         return buildTrackResponse(item.getProduct(), item, latest);
     }
 
     private TrackedItem resolveTrackedItem(Product product, TrackRequest request) {
-        return trackedItemRepository.findByUrl(request.url())
+        return trackedItemRepository
+                .findByUrl(request.url())
                 .map(existing -> {
                     if (!existing.getProduct().getId().equals(product.getId())) {
-                        throw new ResponseStatusException(HttpStatus.CONFLICT,
-                                "URL already tracked under product: " + existing.getProduct().getName());
+                        throw new ResponseStatusException(
+                                HttpStatus.CONFLICT,
+                                "URL already tracked under product: "
+                                        + existing.getProduct().getName());
                     }
                     return existing;
                 })
@@ -279,11 +304,14 @@ public class ProductTrackingService {
             return true;
         }
 
-        BigDecimal factor = BigDecimal.valueOf(maxDeltaPercent).divide(BigDecimal.valueOf(100), 4, RoundingMode.HALF_UP).add(BigDecimal.ONE);
+        BigDecimal factor = BigDecimal.valueOf(maxDeltaPercent)
+                .divide(BigDecimal.valueOf(100), 4, RoundingMode.HALF_UP)
+                .add(BigDecimal.ONE);
         BigDecimal max = previous.getPrice().multiply(factor).setScale(4, RoundingMode.HALF_UP);
         BigDecimal min = previous.getPrice().divide(factor, 4, RoundingMode.HALF_UP);
         if (info.price().compareTo(max) > 0 || info.price().compareTo(min) < 0) {
-            log.warn("Validation failed: price {} is outside {}% delta of previous {} {}",
+            log.warn(
+                    "Validation failed: price {} is outside {}% delta of previous {} {}",
                     info.price(), maxDeltaPercent, previous.getPrice(), previous.getCurrency());
             return false;
         }
@@ -301,7 +329,6 @@ public class ProductTrackingService {
                 record != null ? record.getCurrency() : null,
                 record != null && record.isAvailable(),
                 record != null ? record.getTimestamp() : null,
-                record != null ? record.getExtractionSource() : null
-        );
+                record != null ? record.getExtractionSource() : null);
     }
 }

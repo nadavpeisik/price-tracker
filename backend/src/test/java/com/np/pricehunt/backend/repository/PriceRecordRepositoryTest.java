@@ -1,9 +1,14 @@
 package com.np.pricehunt.backend.repository;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.domain.PriceRecord;
 import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.domain.TrackedItem;
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -11,20 +16,21 @@ import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import org.springframework.boot.jpa.test.autoconfigure.TestEntityManager;
 import org.springframework.test.context.ActiveProfiles;
 
-import java.math.BigDecimal;
-import java.time.Instant;
-import java.util.List;
-
-import static org.assertj.core.api.Assertions.assertThat;
-
 @DataJpaTest
 @ActiveProfiles("test")
 class PriceRecordRepositoryTest {
 
-    @Autowired private TestEntityManager em;
-    @Autowired private ProductRepository productRepository;
-    @Autowired private TrackedItemRepository trackedItemRepository;
-    @Autowired private PriceRecordRepository priceRecordRepository;
+    @Autowired
+    private TestEntityManager em;
+
+    @Autowired
+    private ProductRepository productRepository;
+
+    @Autowired
+    private TrackedItemRepository trackedItemRepository;
+
+    @Autowired
+    private PriceRecordRepository priceRecordRepository;
 
     private TrackedItem item;
     private Instant t1;
@@ -85,7 +91,8 @@ class PriceRecordRepositoryTest {
         em.flush();
         em.clear();
 
-        assertThat(priceRecordRepository.findByTrackedItemOrderByTimestampDesc(loaded)).isEmpty();
+        assertThat(priceRecordRepository.findByTrackedItemOrderByTimestampDesc(loaded))
+                .isEmpty();
     }
 
     // --- Date-range query methods ---
@@ -101,8 +108,8 @@ class PriceRecordRepositoryTest {
 
     @Test
     void findBetween_returnsOnlyRecordsInRange_orderedDesc() {
-        List<PriceRecord> results = priceRecordRepository
-                .findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(item, t1, t2);
+        List<PriceRecord> results =
+                priceRecordRepository.findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(item, t1, t2);
 
         assertThat(results).hasSize(2);
         assertThat(results.get(0).getTimestamp()).isEqualTo(t2);

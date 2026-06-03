@@ -13,8 +13,8 @@ public class OllamaPriceExtractionService {
     private final ChatClient chatClient;
 
     public OllamaPriceExtractionService(ChatClient.Builder builder) {
-        this.chatClient = builder
-                .defaultSystem("""
+        this.chatClient = builder.defaultSystem(
+                        """
                         You are a specialized e-commerce data extraction engine.
                         Your output is deterministic and follows the provided schema exactly.
 
@@ -33,9 +33,11 @@ public class OllamaPriceExtractionService {
 
         // Per-call options only set `model`; Spring AI merges with bean-level defaults
         // (temperature, format=json, num-ctx) from spring.ai.ollama.chat.options.* in application.properties.
-        PriceLlmResult result = chatClient.prompt()
+        PriceLlmResult result = chatClient
+                .prompt()
                 .options(OllamaChatOptions.builder().model(model).build())
-                .user(u -> u.text("""
+                .user(u -> u.text(
+                                """
                         /no_think
 
                         # TASK
@@ -53,13 +55,18 @@ public class OllamaPriceExtractionService {
 
                         # DATA
                         {text}
-                        """).param("text", text))
+                        """)
+                        .param("text", text))
                 .call()
                 .entity(PriceLlmResult.class);
 
         long durationMs = System.currentTimeMillis() - start;
-        log.info("LLM extraction model={} inputChars={} durationMs={} result={}",
-                model, text.length(), durationMs, result);
+        log.info(
+                "LLM extraction model={} inputChars={} durationMs={} result={}",
+                model,
+                text.length(),
+                durationMs,
+                result);
         return result;
     }
 }

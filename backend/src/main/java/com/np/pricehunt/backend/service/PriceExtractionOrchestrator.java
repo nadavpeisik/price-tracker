@@ -1,19 +1,18 @@
 package com.np.pricehunt.backend.service;
 
 import com.np.pricehunt.backend.domain.ExtractionSource;
-import com.np.pricehunt.backend.dto.PriceLlmResult;
 import com.np.pricehunt.backend.dto.PriceInfo;
+import com.np.pricehunt.backend.dto.PriceLlmResult;
 import com.np.pricehunt.backend.dto.ScrapeResponse;
 import com.np.pricehunt.backend.exception.EmptyExtractionInputException;
 import com.np.pricehunt.backend.exception.ScrapeBlockedException;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Service;
-
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
 
 @Slf4j
 @Service
@@ -31,12 +30,10 @@ public class PriceExtractionOrchestrator implements PriceExtractionService {
 
     // Matches currency symbols/codes and price-related keywords (US and EU number formats)
     private static final Pattern PRICE_LINE_PATTERN = Pattern.compile(
-            "[$£€¥₩]\\s*[\\d.,]+" +
-            "|[\\d.,]+\\s*[$£€¥₩]" +
-            "|\\b(USD|GBP|EUR|JPY|CAD|AUD|CHF|CNY|ILS|price|cost|sale|discount|" +
-            "in stock|out of stock|add to cart|buy now|availability)\\b",
-            Pattern.CASE_INSENSITIVE
-    );
+            "[$£€¥₩]\\s*[\\d.,]+" + "|[\\d.,]+\\s*[$£€¥₩]"
+                    + "|\\b(USD|GBP|EUR|JPY|CAD|AUD|CHF|CNY|ILS|price|cost|sale|discount|"
+                    + "in stock|out of stock|add to cart|buy now|availability)\\b",
+            Pattern.CASE_INSENSITIVE);
 
     private final OllamaPriceExtractionService ollamaService;
     private final String snippetModel;
@@ -69,8 +66,10 @@ public class PriceExtractionOrchestrator implements PriceExtractionService {
                 } catch (Exception e) {
                     // Small models occasionally emit malformed JSON, which makes Spring AI's
                     // structured-output parser throw. Treat that the same as an invalid result.
-                    log.warn("SNIPPET fast model threw {}: {} — retrying with accurate model",
-                            e.getClass().getSimpleName(), e.getMessage());
+                    log.warn(
+                            "SNIPPET fast model threw {}: {} — retrying with accurate model",
+                            e.getClass().getSimpleName(),
+                            e.getMessage());
                     raw = ollamaService.extractPriceFromText(text, fulltextModel);
                 }
                 yield new PriceInfo(raw.price(), raw.currency(), raw.available(), ExtractionSource.SNIPPET);

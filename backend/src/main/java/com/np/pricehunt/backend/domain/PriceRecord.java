@@ -1,19 +1,16 @@
 package com.np.pricehunt.backend.domain;
 
 import jakarta.persistence.*;
+import java.math.BigDecimal;
+import java.time.Instant;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.math.BigDecimal;
-import java.time.Instant;
-
 @Entity
 // `timestamp DESC` honored by Hibernate 6+ on Postgres; older providers ignore the column order silently.
-@Table(indexes = {
-    @Index(name = "idx_price_record_item_timestamp", columnList = "tracked_item_id, timestamp DESC")
-})
+@Table(indexes = {@Index(name = "idx_price_record_item_timestamp", columnList = "tracked_item_id, timestamp DESC")})
 @Data
 @Builder
 @NoArgsConstructor

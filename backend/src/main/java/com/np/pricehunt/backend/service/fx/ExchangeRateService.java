@@ -3,11 +3,6 @@ package com.np.pricehunt.backend.service.fx;
 import com.np.pricehunt.backend.domain.ExchangeRate;
 import com.np.pricehunt.backend.repository.ExchangeRateRepository;
 import jakarta.annotation.PostConstruct;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.context.event.ApplicationReadyEvent;
-import org.springframework.context.event.EventListener;
-import org.springframework.stereotype.Service;
-
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.LocalDate;
@@ -17,6 +12,10 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
+import org.springframework.stereotype.Service;
 
 @Slf4j
 @Service
@@ -42,7 +41,10 @@ public class ExchangeRateService {
         try {
             loadFromDb().ifPresent(snap -> {
                 this.snapshot = snap;
-                log.info("Loaded FX snapshot from DB: asOf={}, currencies={}", snap.asOf(), snap.rates().size());
+                log.info(
+                        "Loaded FX snapshot from DB: asOf={}, currencies={}",
+                        snap.asOf(),
+                        snap.rates().size());
             });
         } catch (Exception e) {
             log.error("Failed to load FX snapshot from DB on startup; will retry on refresh", e);
@@ -60,8 +62,10 @@ public class ExchangeRateService {
             try {
                 loadFromDb().ifPresent(snap -> {
                     this.snapshot = snap;
-                    log.info("Loaded FX snapshot from DB on ApplicationReadyEvent: asOf={}, currencies={}",
-                            snap.asOf(), snap.rates().size());
+                    log.info(
+                            "Loaded FX snapshot from DB on ApplicationReadyEvent: asOf={}, currencies={}",
+                            snap.asOf(),
+                            snap.rates().size());
                 });
             } catch (Exception e) {
                 log.error("Retry of DB load failed on ApplicationReadyEvent; falling through to refresh", e);
@@ -69,8 +73,7 @@ public class ExchangeRateService {
         }
         // 1-day buffer matches the daily cron cadence: a yesterday-snapshot restart is normal,
         // an older one means we missed at least one cron window and should catch up eagerly.
-        if (snapshot == null
-                || snapshot.asOf().isBefore(LocalDate.now(clock).minusDays(1))) {
+        if (snapshot == null || snapshot.asOf().isBefore(LocalDate.now(clock).minusDays(1))) {
             log.info("FX snapshot missing or stale; triggering initial refresh");
             refresh();
         }
@@ -88,7 +91,10 @@ public class ExchangeRateService {
             RateSnapshot fresh = provider.fetchLatest();
             persist(fresh);
             this.snapshot = fresh;
-            log.info("FX rates refreshed: asOf={}, currencies={}", fresh.asOf(), fresh.rates().size());
+            log.info(
+                    "FX rates refreshed: asOf={}, currencies={}",
+                    fresh.asOf(),
+                    fresh.rates().size());
         } catch (Exception e) {
             log.error("FX refresh failed; keeping last known snapshot", e);
         }

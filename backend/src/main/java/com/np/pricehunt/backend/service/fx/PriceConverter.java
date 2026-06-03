@@ -1,8 +1,6 @@
 package com.np.pricehunt.backend.service.fx;
 
 import com.np.pricehunt.backend.config.CurrencyProperties;
-import org.springframework.stereotype.Service;
-
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Clock;
@@ -10,6 +8,7 @@ import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.Locale;
 import java.util.Optional;
+import org.springframework.stereotype.Service;
 
 @Service
 public class PriceConverter {
@@ -51,8 +50,7 @@ public class PriceConverter {
         if (fromRate == null || toRate == null) return null;
 
         // EUR-base triangulation: amount * (toRate / fromRate), then apply margin multiplier.
-        BigDecimal converted = amount
-                .multiply(toRate)
+        BigDecimal converted = amount.multiply(toRate)
                 .divide(fromRate, INTERMEDIATE_SCALE, RoundingMode.HALF_UP)
                 .multiply(fxMarginMultiplier)
                 .setScale(OUTPUT_SCALE, RoundingMode.HALF_UP);
@@ -68,7 +66,8 @@ public class PriceConverter {
         // No snapshot loaded yet (cold-start before first refresh): fail open so the API doesn't
         // 400 every request during the startup window. Conversion will return null per-record,
         // preserving the existing graceful-degradation contract.
-        return rateService.currentSnapshot()
+        return rateService
+                .currentSnapshot()
                 .map(snap -> snap.rates().containsKey(upper))
                 .orElse(true);
     }

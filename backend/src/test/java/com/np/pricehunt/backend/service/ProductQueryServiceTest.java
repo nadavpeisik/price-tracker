@@ -1,5 +1,13 @@
 package com.np.pricehunt.backend.service;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.within;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
 import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.domain.PriceRecord;
 import com.np.pricehunt.backend.domain.Product;
@@ -13,6 +21,13 @@ import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
 import com.np.pricehunt.backend.service.fx.ConvertedAmount;
 import com.np.pricehunt.backend.service.fx.PriceConverter;
+import java.math.BigDecimal;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -25,31 +40,22 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.math.BigDecimal;
-import java.time.Instant;
-import java.time.LocalDate;
-import java.time.temporal.ChronoUnit;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.assertj.core.api.Assertions.within;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
-
 @ExtendWith(MockitoExtension.class)
 class ProductQueryServiceTest {
 
     private static final LocalDate TODAY = LocalDate.of(2026, 5, 24);
 
-    @Mock private ProductRepository productRepository;
-    @Mock private TrackedItemRepository trackedItemRepository;
-    @Mock private PriceRecordRepository priceRecordRepository;
-    @Mock private PriceConverter priceConverter;
+    @Mock
+    private ProductRepository productRepository;
+
+    @Mock
+    private TrackedItemRepository trackedItemRepository;
+
+    @Mock
+    private PriceRecordRepository priceRecordRepository;
+
+    @Mock
+    private PriceConverter priceConverter;
 
     private ProductQueryService service;
 
@@ -59,10 +65,21 @@ class ProductQueryServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new ProductQueryService(productRepository, trackedItemRepository, priceRecordRepository, priceConverter, 90);
+        service = new ProductQueryService(
+                productRepository, trackedItemRepository, priceRecordRepository, priceConverter, 90);
         product = Product.builder().id(1L).name("Laptop").build();
-        itemA = TrackedItem.builder().id(1L).url("https://amazon.com/dp/1").shopName("amazon.com").product(product).build();
-        itemB = TrackedItem.builder().id(2L).url("https://bestbuy.com/p/1").shopName("bestbuy.com").product(product).build();
+        itemA = TrackedItem.builder()
+                .id(1L)
+                .url("https://amazon.com/dp/1")
+                .shopName("amazon.com")
+                .product(product)
+                .build();
+        itemB = TrackedItem.builder()
+                .id(2L)
+                .url("https://bestbuy.com/p/1")
+                .shopName("bestbuy.com")
+                .product(product)
+                .build();
     }
 
     // --- getAllProducts ---
@@ -100,7 +117,9 @@ class ProductQueryServiceTest {
         when(priceConverter.convert(new BigDecimal("500"), "ILS", "ILS"))
                 .thenReturn(new ConvertedAmount(new BigDecimal("500"), null, false));
 
-        ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "ILS").getContent().get(0);
+        ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "ILS")
+                .getContent()
+                .get(0);
 
         assertThat(summary.bestPriceConverted()).isEqualByComparingTo("363.6364");
         assertThat(summary.bestPriceConvertedCurrency()).isEqualTo("ILS");
@@ -124,7 +143,9 @@ class ProductQueryServiceTest {
         when(priceConverter.convert(new BigDecimal("100"), "USD", "ILS"))
                 .thenReturn(new ConvertedAmount(new BigDecimal("363.6364"), TODAY, false));
 
-        ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "ILS").getContent().get(0);
+        ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "ILS")
+                .getContent()
+                .get(0);
 
         assertThat(summary.bestPriceShop()).isEqualTo("amazon.com");
         assertThat(summary.bestPriceOriginalCurrency()).isEqualTo("ILS");
@@ -133,10 +154,14 @@ class ProductQueryServiceTest {
     @Test
     void getAllProducts_noItemsHavePrices_emptyBestPrice() {
         stubProductWithItems(List.of(itemA, itemB));
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(itemA)).thenReturn(Optional.empty());
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(itemB)).thenReturn(Optional.empty());
+        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(itemA))
+                .thenReturn(Optional.empty());
+        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(itemB))
+                .thenReturn(Optional.empty());
 
-        ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "ILS").getContent().get(0);
+        ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "ILS")
+                .getContent()
+                .get(0);
 
         assertThat(summary.bestPriceConverted()).isNull();
         assertThat(summary.bestPriceOriginal()).isNull();
@@ -153,7 +178,9 @@ class ProductQueryServiceTest {
         when(priceConverter.convert(new BigDecimal("100"), "USD", "ZZZ")).thenReturn(null);
         when(priceConverter.convert(new BigDecimal("85"), "EUR", "ZZZ")).thenReturn(null);
 
-        ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "ZZZ").getContent().get(0);
+        ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "ZZZ")
+                .getContent()
+                .get(0);
 
         assertThat(summary.bestPriceConverted()).isNull();
         assertThat(summary.mixedCurrencies()).isTrue();
@@ -163,10 +190,20 @@ class ProductQueryServiceTest {
 
     @Test
     void getAllProducts_anyAvailable_trueWhenAtLeastOneItemInStock() {
-        PriceRecord unavailable = PriceRecord.builder().price(new BigDecimal("50")).currency("USD").available(false)
-                .extractionSource(ExtractionSource.STRUCTURED).trackedItem(itemA).build();
-        PriceRecord available = PriceRecord.builder().price(new BigDecimal("55")).currency("USD").available(true)
-                .extractionSource(ExtractionSource.STRUCTURED).trackedItem(itemB).build();
+        PriceRecord unavailable = PriceRecord.builder()
+                .price(new BigDecimal("50"))
+                .currency("USD")
+                .available(false)
+                .extractionSource(ExtractionSource.STRUCTURED)
+                .trackedItem(itemA)
+                .build();
+        PriceRecord available = PriceRecord.builder()
+                .price(new BigDecimal("55"))
+                .currency("USD")
+                .available(true)
+                .extractionSource(ExtractionSource.STRUCTURED)
+                .trackedItem(itemB)
+                .build();
         stubProductWithItems(List.of(itemA, itemB));
         stubLatestPrices(Map.of(itemA, unavailable, itemB, available));
         when(priceConverter.convert(new BigDecimal("50"), "USD", "USD"))
@@ -174,7 +211,9 @@ class ProductQueryServiceTest {
         when(priceConverter.convert(new BigDecimal("55"), "USD", "USD"))
                 .thenReturn(new ConvertedAmount(new BigDecimal("55"), null, false));
 
-        ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "USD").getContent().get(0);
+        ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "USD")
+                .getContent()
+                .get(0);
 
         assertThat(summary.anyAvailable()).isTrue();
     }
@@ -187,7 +226,9 @@ class ProductQueryServiceTest {
         when(priceConverter.convert(new BigDecimal("100"), "USD", "ILS"))
                 .thenReturn(new ConvertedAmount(new BigDecimal("363.6364"), TODAY.minusDays(10), true));
 
-        ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "ILS").getContent().get(0);
+        ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "ILS")
+                .getContent()
+                .get(0);
 
         assertThat(summary.conversionStale()).isTrue();
         assertThat(summary.conversionAsOf()).isEqualTo(TODAY.minusDays(10));
@@ -210,7 +251,8 @@ class ProductQueryServiceTest {
         PriceRecord latest = priceRecord(itemA, "999.99", "USD");
         when(productRepository.findById(1L)).thenReturn(Optional.of(product));
         when(trackedItemRepository.findByProduct(product)).thenReturn(List.of(itemA));
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(itemA)).thenReturn(Optional.of(latest));
+        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(itemA))
+                .thenReturn(Optional.of(latest));
 
         ProductDetailResponse detail = service.getProduct(1L);
 
@@ -224,7 +266,8 @@ class ProductQueryServiceTest {
     void getProduct_itemWithNoPrice_currentPriceIsNull() {
         when(productRepository.findById(1L)).thenReturn(Optional.of(product));
         when(trackedItemRepository.findByProduct(product)).thenReturn(List.of(itemA));
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(itemA)).thenReturn(Optional.empty());
+        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(itemA))
+                .thenReturn(Optional.empty());
 
         ProductDetailResponse detail = service.getProduct(1L);
 
@@ -237,16 +280,19 @@ class ProductQueryServiceTest {
     void getPriceHistory_noBounds_defaultsToWindowEndingNow() {
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
         when(priceRecordRepository.findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(
-                eq(itemA), any(Instant.class), any(Instant.class))).thenReturn(List.of());
+                        eq(itemA), any(Instant.class), any(Instant.class)))
+                .thenReturn(List.of());
 
         service.getPriceHistory(1L, 1L, null, null);
 
         ArgumentCaptor<Instant> fromCaptor = ArgumentCaptor.forClass(Instant.class);
         ArgumentCaptor<Instant> toCaptor = ArgumentCaptor.forClass(Instant.class);
-        verify(priceRecordRepository).findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(
-                eq(itemA), fromCaptor.capture(), toCaptor.capture());
+        verify(priceRecordRepository)
+                .findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(
+                        eq(itemA), fromCaptor.capture(), toCaptor.capture());
         assertThat(toCaptor.getValue()).isCloseTo(Instant.now(), within(5, ChronoUnit.SECONDS));
-        assertThat(fromCaptor.getValue()).isCloseTo(Instant.now().minus(90, ChronoUnit.DAYS), within(5, ChronoUnit.SECONDS));
+        assertThat(fromCaptor.getValue())
+                .isCloseTo(Instant.now().minus(90, ChronoUnit.DAYS), within(5, ChronoUnit.SECONDS));
     }
 
     @Test
@@ -254,13 +300,14 @@ class ProductQueryServiceTest {
         Instant from = Instant.parse("2026-01-01T00:00:00Z");
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
         when(priceRecordRepository.findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(
-                eq(itemA), any(Instant.class), any(Instant.class))).thenReturn(List.of());
+                        eq(itemA), any(Instant.class), any(Instant.class)))
+                .thenReturn(List.of());
 
         service.getPriceHistory(1L, 1L, from, null);
 
         ArgumentCaptor<Instant> toCaptor = ArgumentCaptor.forClass(Instant.class);
-        verify(priceRecordRepository).findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(
-                eq(itemA), eq(from), toCaptor.capture());
+        verify(priceRecordRepository)
+                .findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(eq(itemA), eq(from), toCaptor.capture());
         assertThat(toCaptor.getValue()).isCloseTo(Instant.now(), within(5, ChronoUnit.SECONDS));
     }
 
@@ -269,13 +316,14 @@ class ProductQueryServiceTest {
         Instant to = Instant.parse("2026-04-01T00:00:00Z");
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
         when(priceRecordRepository.findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(
-                eq(itemA), any(Instant.class), any(Instant.class))).thenReturn(List.of());
+                        eq(itemA), any(Instant.class), any(Instant.class)))
+                .thenReturn(List.of());
 
         service.getPriceHistory(1L, 1L, null, to);
 
         ArgumentCaptor<Instant> fromCaptor = ArgumentCaptor.forClass(Instant.class);
-        verify(priceRecordRepository).findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(
-                eq(itemA), fromCaptor.capture(), eq(to));
+        verify(priceRecordRepository)
+                .findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(eq(itemA), fromCaptor.capture(), eq(to));
         assertThat(fromCaptor.getValue()).isEqualTo(to.minus(90, ChronoUnit.DAYS));
     }
 
@@ -299,18 +347,23 @@ class ProductQueryServiceTest {
         Instant expectedFrom = to.minus(365L * 2, ChronoUnit.DAYS);
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
         when(priceRecordRepository.findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(
-                eq(itemA), any(Instant.class), any(Instant.class))).thenReturn(List.of());
+                        eq(itemA), any(Instant.class), any(Instant.class)))
+                .thenReturn(List.of());
 
         service.getPriceHistory(1L, 1L, farBack, to);
 
-        verify(priceRecordRepository).findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(
-                itemA, expectedFrom, to);
+        verify(priceRecordRepository).findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(itemA, expectedFrom, to);
     }
 
     @Test
     void getPriceHistory_wrongProduct_throwsNotFound() {
         Product other = Product.builder().id(99L).name("Other").build();
-        TrackedItem foreignItem = TrackedItem.builder().id(1L).url("http://x.com").shopName("x").product(other).build();
+        TrackedItem foreignItem = TrackedItem.builder()
+                .id(1L)
+                .url("http://x.com")
+                .shopName("x")
+                .product(other)
+                .build();
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(foreignItem));
 
         assertThatThrownBy(() -> service.getPriceHistory(1L, 1L, null, null))
@@ -340,15 +393,13 @@ class ProductQueryServiceTest {
     }
 
     private void stubLatestPrices(Map<TrackedItem, PriceRecord> prices) {
-        prices.forEach((item, price) ->
-                when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
-                        .thenReturn(Optional.of(price)));
+        prices.forEach((item, price) -> when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
+                .thenReturn(Optional.of(price)));
     }
 
     private void stubIdentityConversion(String amount, String currency) {
         BigDecimal value = new BigDecimal(amount);
-        when(priceConverter.convert(value, currency, currency))
-                .thenReturn(new ConvertedAmount(value, null, false));
+        when(priceConverter.convert(value, currency, currency)).thenReturn(new ConvertedAmount(value, null, false));
     }
 
     private PriceRecord priceRecord(TrackedItem item, String price, String currency) {

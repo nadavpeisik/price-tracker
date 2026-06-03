@@ -17,5 +17,4 @@ public record ProductSummaryResponse(
         boolean conversionStale,
         PriceBasis priceBasis,
         boolean anyAvailable,
-        boolean mixedCurrencies
-) {}
+        boolean mixedCurrencies) {}

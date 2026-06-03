@@ -5,6 +5,9 @@ import com.np.pricehunt.backend.dto.*;
 import com.np.pricehunt.backend.service.ProductQueryService;
 import com.np.pricehunt.backend.service.ProductTrackingService;
 import com.np.pricehunt.backend.service.fx.PriceConverter;
+import java.time.Instant;
+import java.util.Locale;
+import java.util.regex.Pattern;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -16,10 +19,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
-
-import java.time.Instant;
-import java.util.Locale;
-import java.util.regex.Pattern;
 
 @RestController
 @RequestMapping("/api/products")
@@ -41,9 +40,13 @@ public class ProductController {
 
     @GetMapping
     public ResponseEntity<Page<ProductSummaryResponse>> getAllProducts(
-            @PageableDefault(size = 20, sort = {"name", "id"}) Pageable pageable,
+            @PageableDefault(
+                            size = 20,
+                            sort = {"name", "id"})
+                    Pageable pageable,
             @RequestParam(required = false) String displayCurrency) {
-        return ResponseEntity.ok(queryService.getAllProducts(withStableSort(pageable), resolveDisplayCurrency(displayCurrency)));
+        return ResponseEntity.ok(
+                queryService.getAllProducts(withStableSort(pageable), resolveDisplayCurrency(displayCurrency)));
     }
 
     // Caller-provided ?sort overrides @PageableDefault entirely; append `id` so pagination stays deterministic.
@@ -60,15 +63,14 @@ public class ProductController {
         } else {
             resolved = requested.trim().toUpperCase(Locale.ROOT);
             if (!ISO_4217_CODE.matcher(resolved).matches()) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "displayCurrency must be a 3-letter ISO 4217 code");
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST, "displayCurrency must be a 3-letter ISO 4217 code");
             }
         }
         // Check support on the resolved value so a misconfigured default also surfaces as 400
         // once the FX snapshot has loaded (isSupported fails open during cold-start).
         if (!priceConverter.isSupported(resolved)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "Unsupported display currency: " + resolved);
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported display currency: " + resolved);
         }
         return resolved;
     }
@@ -79,32 +81,25 @@ public class ProductController {
     }
 
     @PostMapping("/{id}/track")
-    public ResponseEntity<TrackResponse> trackUrl(
-            @PathVariable Long id,
-            @RequestBody TrackRequest request) {
+    public ResponseEntity<TrackResponse> trackUrl(@PathVariable Long id, @RequestBody TrackRequest request) {
         TrackResponse response = trackingService.trackUrl(id, request);
         return ResponseEntity.ok(response);
     }
 
     @PostMapping("/{id}/tracked-items/{itemId}/refresh")
-    public ResponseEntity<TrackResponse> refreshTrackedItem(
-            @PathVariable Long id,
-            @PathVariable Long itemId) {
+    public ResponseEntity<TrackResponse> refreshTrackedItem(@PathVariable Long id, @PathVariable Long itemId) {
         return ResponseEntity.ok(trackingService.refreshTrackedItem(id, itemId));
     }
 
     @PatchMapping("/{id}")
     public ResponseEntity<ProductResponse> updateProduct(
-            @PathVariable Long id,
-            @RequestBody UpdateProductRequest request) {
+            @PathVariable Long id, @RequestBody UpdateProductRequest request) {
         return ResponseEntity.ok(trackingService.updateProduct(id, request));
     }
 
     @PatchMapping("/{id}/tracked-items/{itemId}")
     public ResponseEntity<TrackResponse> updateTrackedItem(
-            @PathVariable Long id,
-            @PathVariable Long itemId,
-            @RequestBody UpdateTrackedItemRequest request) {
+            @PathVariable Long id, @PathVariable Long itemId, @RequestBody UpdateTrackedItemRequest request) {
         TrackResponse response = trackingService.updateTrackedItem(id, itemId, request);
         return ResponseEntity.ok(response);
     }
@@ -116,9 +111,7 @@ public class ProductController {
     }
 
     @DeleteMapping("/{id}/tracked-items/{itemId}")
-    public ResponseEntity<Void> deleteTrackedItem(
-            @PathVariable Long id,
-            @PathVariable Long itemId) {
+    public ResponseEntity<Void> deleteTrackedItem(@PathVariable Long id, @PathVariable Long itemId) {
         trackingService.deleteTrackedItem(id, itemId);
         return ResponseEntity.noContent().build();
     }

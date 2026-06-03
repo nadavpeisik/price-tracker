@@ -3,14 +3,13 @@ package com.np.pricehunt.backend.repository;
 import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.domain.TrackedItem;
 import com.np.pricehunt.backend.dto.TrackedItemRefreshView;
+import java.time.Instant;
+import java.util.List;
+import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
-
-import java.time.Instant;
-import java.util.List;
-import java.util.Optional;
 
 @Repository
 public interface TrackedItemRepository extends JpaRepository<TrackedItem, Long> {
@@ -30,7 +29,8 @@ public interface TrackedItemRepository extends JpaRepository<TrackedItem, Long> 
     // Narrow projection + DB-side stale filter for the scheduler. Avoids hydrating the LAZY
     // priceHistory collection (the @Data toString/equals/hashCode foot-gun) and keeps freshly-
     // refreshed rows from ever reaching the JVM.
-    @Query("""
+    @Query(
+            """
            SELECT new com.np.pricehunt.backend.dto.TrackedItemRefreshView(t.id, t.url, t.lastChecked)
            FROM TrackedItem t
            WHERE t.lastChecked IS NULL OR t.lastChecked < :cutoff
