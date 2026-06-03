@@ -64,8 +64,7 @@ jobs:
         run: ./mvnw -B verify
 
       - name: Run scraper tests with coverage
-        working-directory: scraper
-        run: pytest -v --cov=main --cov-branch --cov-report=xml:coverage.xml --cov-report=term
+        run: pytest -v scraper/tests --cov=scraper --cov-branch --cov-report=xml:scraper/coverage.xml --cov-report=term
 
       - name: SonarCloud scan
         uses: SonarSource/sonarqube-scan-action@v8
