@@ -50,8 +50,7 @@ public class JobRunRecorder {
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void complete(
-            Long runId, JobStatus status, int processed, int succeeded, int failed, String errorSummary) {
+    public void complete(Long runId, JobStatus status, int processed, int succeeded, int failed, String errorSummary) {
         ScheduledJobRun run = runRepository.findById(runId).orElseThrow();
         run.setFinishedAt(Instant.now());
         run.setStatus(status);
