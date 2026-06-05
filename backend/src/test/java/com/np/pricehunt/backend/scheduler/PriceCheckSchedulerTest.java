@@ -4,6 +4,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 import com.np.pricehunt.backend.dto.TrackedItemRefreshView;
+import com.np.pricehunt.backend.observability.JobRunRecorder;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
 import com.np.pricehunt.backend.service.ProductTrackingService;
 import java.time.Instant;
@@ -25,11 +26,14 @@ class PriceCheckSchedulerTest {
     @Mock
     private TrackedItemRepository trackedItemRepository;
 
+    @Mock
+    private JobRunRecorder jobRunRecorder;
+
     private PriceCheckScheduler scheduler;
 
     @BeforeEach
     void setUp() {
-        scheduler = new PriceCheckScheduler(trackingService, trackedItemRepository, SIX_HOURS_MS);
+        scheduler = new PriceCheckScheduler(trackingService, trackedItemRepository, jobRunRecorder, SIX_HOURS_MS);
     }
 
     @Test

@@ -17,6 +17,25 @@ services:
     volumes:
       - ./scraper:/app
     command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001", "--reload"]
+  grafana:
+    image: 'grafana/grafana:11.4.0'
+    environment:
+      # admin/admin default — local-only; gate before any cloud deploy.
+      - 'GF_SECURITY_ADMIN_USER=admin'
+      - 'GF_SECURITY_ADMIN_PASSWORD=admin'
+      # Forwarded so the datasource provisioning YAML can interpolate them.
+      - 'POSTGRES_DB=${POSTGRES_DB}'
+      - 'POSTGRES_USER=${POSTGRES_USER}'
+      - 'POSTGRES_PASSWORD=${POSTGRES_PASSWORD}'
+    ports:
+      - '3000:3000'
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - postgres
 
 volumes:
   postgres_data:
+  grafana_data:

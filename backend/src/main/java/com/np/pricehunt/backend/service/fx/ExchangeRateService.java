@@ -86,7 +86,10 @@ public class ExchangeRateService {
     // on persist() — without it, two concurrent refreshes can both see no rows in findByAsOf() and
     // both try to insert, hitting the uq_exchange_rate_quote_as_of unique constraint. Per-JVM only;
     // a multi-instance deployment would need a DB advisory lock.
-    public synchronized void refresh() {
+    //
+    // Returns Optional<RateSnapshot> so callers (e.g. RateRefreshScheduler) can detect success
+    // without breaking the "FX failure must not crash the cron" contract: empty = caught exception.
+    public synchronized Optional<RateSnapshot> refresh() {
         try {
             RateSnapshot fresh = provider.fetchLatest();
             persist(fresh);
@@ -95,8 +98,10 @@ public class ExchangeRateService {
                     "FX rates refreshed: asOf={}, currencies={}",
                     fresh.asOf(),
                     fresh.rates().size());
+            return Optional.of(fresh);
         } catch (Exception e) {
             log.error("FX refresh failed; keeping last known snapshot", e);
+            return Optional.empty();
         }
     }
 

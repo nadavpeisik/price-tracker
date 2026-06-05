@@ -1,0 +1,206 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": {"type": "postgres", "uid": "pricehunt-postgres"},
+      "fieldConfig": {
+        "defaults": {"custom": {"align": "left", "displayMode": "auto"}},
+        "overrides": [
+          {
+            "matcher": {"id": "byName", "options": "Latest price"},
+            "properties": [{"id": "custom.align", "value": "center"}]
+          }
+        ]
+      },
+      "gridPos": {"h": 12, "w": 24, "x": 0, "y": 0},
+      "id": 1,
+      "options": {"showHeader": true},
+      "targets": [
+        {
+          "datasource": {"type": "postgres", "uid": "pricehunt-postgres"},
+          "format": "table",
+          "rawSql": "SELECT p.name AS \"Product\", ti.shop_name AS \"Shop\", ti.url AS \"URL\", pr.price AS \"Latest price\", pr.currency AS \"Currency\", pr.available AS \"Available\", pr.timestamp AS \"Last checked\" FROM tracked_item ti JOIN product p ON ti.product_id = p.id LEFT JOIN LATERAL (SELECT price, currency, available, timestamp FROM price_record WHERE tracked_item_id = ti.id ORDER BY timestamp DESC LIMIT 1) pr ON TRUE ORDER BY p.name, ti.shop_name",
+          "refId": "A"
+        }
+      ],
+      "title": "All tracked items (latest price)",
+      "type": "table"
+    },
+    {
+      "datasource": {"type": "postgres", "uid": "pricehunt-postgres"},
+      "fieldConfig": {
+        "defaults": {"custom": {"align": "left", "displayMode": "auto"}},
+        "overrides": [
+          {
+            "matcher": {"id": "byName", "options": "Latest price"},
+            "properties": [{"id": "custom.align", "value": "center"}]
+          }
+        ]
+      },
+      "gridPos": {"h": 6, "w": 24, "x": 0, "y": 12},
+      "id": 5,
+      "options": {"showHeader": true},
+      "targets": [
+        {
+          "datasource": {"type": "postgres", "uid": "pricehunt-postgres"},
+          "format": "table",
+          "rawSql": "SELECT ti.shop_name AS \"Shop\", ti.url AS \"URL\", pr.price AS \"Latest price\", pr.currency AS \"Currency\", pr.available AS \"Available\", pr.timestamp AS \"Last checked\" FROM tracked_item ti LEFT JOIN LATERAL (SELECT price, currency, available, timestamp FROM price_record WHERE tracked_item_id = ti.id ORDER BY timestamp DESC LIMIT 1) pr ON TRUE WHERE ti.product_id = $product_id ORDER BY ti.shop_name",
+          "refId": "A"
+        }
+      ],
+      "title": "Tracked items by product",
+      "type": "table"
+    },
+    {
+      "datasource": {"type": "postgres", "uid": "pricehunt-postgres"},
+      "fieldConfig": {
+        "defaults": {"custom": {"align": "left", "displayMode": "auto"}},
+        "overrides": [
+          {
+            "matcher": {"id": "byName", "options": "% change"},
+            "properties": [
+              {"id": "unit", "value": "percent"},
+              {"id": "custom.cellOptions", "value": {"type": "color-text"}},
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"color": "green", "value": null},
+                    {"color": "red", "value": 0.0001}
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 18},
+      "id": 2,
+      "options": {"showHeader": true},
+      "targets": [
+        {
+          "datasource": {"type": "postgres", "uid": "pricehunt-postgres"},
+          "format": "table",
+          "rawSql": "SELECT \"When\", \"Product\", \"Shop\", \"Currency\", prev_price AS \"Prev\", curr_price AS \"Now\", ROUND((curr_price - prev_price) * 100.0 / NULLIF(prev_price, 0), 2) AS \"% change\" FROM (SELECT p.name AS \"Product\", ti.shop_name AS \"Shop\", pr.currency AS \"Currency\", pr.timestamp AS \"When\", LAG(pr.price) OVER (PARTITION BY pr.tracked_item_id ORDER BY pr.timestamp) AS prev_price, pr.price AS curr_price FROM price_record pr JOIN tracked_item ti ON pr.tracked_item_id = ti.id JOIN product p ON ti.product_id = p.id WHERE $__timeFilter(pr.timestamp)) sub WHERE prev_price IS NOT NULL AND prev_price <> curr_price ORDER BY \"When\" DESC LIMIT 50",
+          "refId": "A"
+        }
+      ],
+      "title": "Recent price changes (time-picker scoped)",
+      "type": "table"
+    },
+    {
+      "datasource": {"type": "postgres", "uid": "pricehunt-postgres"},
+      "fieldConfig": {
+        "defaults": {"custom": {"drawStyle": "line", "lineWidth": 2, "pointSize": 5}},
+        "overrides": []
+      },
+      "gridPos": {"h": 10, "w": 12, "x": 0, "y": 28},
+      "id": 3,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single"}},
+      "targets": [
+        {
+          "datasource": {"type": "postgres", "uid": "pricehunt-postgres"},
+          "format": "time_series",
+          "rawSql": "SELECT timestamp AS time, price AS value, currency AS metric FROM price_record WHERE tracked_item_id = $tracked_item_id AND $__timeFilter(timestamp) ORDER BY timestamp",
+          "refId": "A"
+        }
+      ],
+      "title": "Price history (select an item above)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "postgres", "uid": "pricehunt-postgres"},
+      "fieldConfig": {
+        "defaults": {"custom": {"drawStyle": "line", "lineWidth": 2, "pointSize": 5}},
+        "overrides": []
+      },
+      "gridPos": {"h": 10, "w": 12, "x": 12, "y": 28},
+      "id": 4,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single"}},
+      "targets": [
+        {
+          "datasource": {"type": "postgres", "uid": "pricehunt-postgres"},
+          "format": "time_series",
+          "rawSql": "SELECT e.as_of AS time, CASE WHEN '$base' = 'EUR' THEN e.rate ELSE e.rate / b.rate END AS value, e.quote AS metric FROM exchange_rate e LEFT JOIN exchange_rate b ON b.as_of = e.as_of AND b.quote = '$base' AND '$base' <> 'EUR' WHERE e.quote IN ($currency) AND $__timeFilter(e.as_of) ORDER BY e.as_of",
+          "refId": "A"
+        }
+      ],
+      "title": "FX rate history (${base} base)",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["pricehunt", "domain"],
+  "templating": {
+    "list": [
+      {
+        "name": "product_id",
+        "label": "Product",
+        "type": "query",
+        "datasource": {"type": "postgres", "uid": "pricehunt-postgres"},
+        "query": "SELECT name AS __text, id::text AS __value FROM product ORDER BY name",
+        "refresh": 1,
+        "regex": "",
+        "sort": 0,
+        "multi": false,
+        "includeAll": false,
+        "current": {}
+      },
+      {
+        "name": "tracked_item_id",
+        "label": "Tracked item",
+        "type": "query",
+        "datasource": {"type": "postgres", "uid": "pricehunt-postgres"},
+        "query": "SELECT COALESCE(p.name || ' @ ' || ti.shop_name, ti.url) AS __text, ti.id::text AS __value FROM tracked_item ti JOIN product p ON ti.product_id = p.id ORDER BY p.name, ti.shop_name",
+        "refresh": 1,
+        "regex": "",
+        "sort": 0,
+        "multi": false,
+        "includeAll": false,
+        "current": {}
+      },
+      {
+        "name": "currency",
+        "label": "Currency",
+        "type": "query",
+        "datasource": {"type": "postgres", "uid": "pricehunt-postgres"},
+        "query": "SELECT DISTINCT quote FROM exchange_rate ORDER BY quote",
+        "refresh": 1,
+        "regex": "",
+        "sort": 0,
+        "multi": true,
+        "includeAll": true,
+        "allValue": null,
+        "current": {}
+      },
+      {
+        "name": "base",
+        "label": "Base",
+        "type": "query",
+        "datasource": {"type": "postgres", "uid": "pricehunt-postgres"},
+        "query": "SELECT 'EUR' AS quote UNION SELECT DISTINCT quote FROM exchange_rate ORDER BY quote",
+        "refresh": 1,
+        "regex": "",
+        "sort": 0,
+        "multi": false,
+        "includeAll": false,
+        "current": {"text": "EUR", "value": "EUR"}
+      }
+    ]
+  },
+  "time": {"from": "now-30d", "to": "now"},
+  "timepicker": {},
+  "timezone": "",
+  "title": "Tracked Items & Prices",
+  "uid": "tracked-items",
+  "version": 1,
+  "weekStart": ""
+}
