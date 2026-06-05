@@ -86,7 +86,7 @@ class RateRefreshSchedulerTest {
 
     @Test
     void scheduledRefresh_clearsMdcAfterRun() {
-        when(service.refresh()).thenReturn(Optional.of(new RateSnapshot(LocalDate.now(), Map.of())));
+        when(service.refresh()).thenReturn(Optional.of(new RateSnapshot(LocalDate.parse("2026-06-04"), Map.of())));
 
         scheduler.scheduledRefresh();
 
