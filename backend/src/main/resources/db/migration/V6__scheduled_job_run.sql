@@ -16,7 +16,7 @@ CREATE TABLE scheduled_job_run (
     items_succeeded integer NOT NULL DEFAULT 0,
     items_failed integer NOT NULL DEFAULT 0,
     error_summary text,
-    correlation_id varchar(64),
+    correlation_id varchar(255),
     CONSTRAINT scheduled_job_run_status_check
         CHECK (status IN ('RUNNING', 'SUCCESS', 'PARTIAL', 'FAILED'))
 );

@@ -58,7 +58,7 @@ public class ScheduledJobRun {
     @Column(name = "error_summary", columnDefinition = "text")
     private String errorSummary;
 
-    @Column(name = "correlation_id", length = 64)
+    @Column(name = "correlation_id", length = 255)
     private String correlationId;
 
     @PrePersist
