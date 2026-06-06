@@ -5,6 +5,8 @@ import com.np.pricehunt.backend.dto.TrackedItemRefreshView;
 import com.np.pricehunt.backend.observability.JobRunRecorder;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
 import com.np.pricehunt.backend.service.ProductTrackingService;
+import com.np.pricehunt.backend.util.Throwables;
+import com.np.pricehunt.backend.util.Timing;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -44,49 +46,58 @@ public class PriceCheckScheduler {
             initialDelayString = "${price.scheduler.initial-delay-ms:60000}")
     public void refreshAll() {
         MDC.put("correlationId", "sched-" + UUID.randomUUID());
-        Long runId = jobRunRecorder.start(JOB_NAME);
-        int success = 0;
-        int failed = 0;
-        Exception lastException = null;
         try {
-            Instant cutoff = Instant.now().minusMillis(fixedDelayMs);
-            List<TrackedItemRefreshView> items = trackedItemRepository.findStaleItems(cutoff);
-            log.info("Scheduled refresh starting for {} stale items", items.size());
-            for (TrackedItemRefreshView item : items) {
-                long startMs = System.currentTimeMillis();
-                try {
-                    trackingService.scheduledRefresh(item.id());
-                    success++;
-                    jobRunRecorder.recordItem(
-                            runId, item.url(), JobStatus.SUCCESS, System.currentTimeMillis() - startMs, null);
-                } catch (Exception e) {
-                    failed++;
-                    lastException = e;
-                    log.warn(
-                            "Scheduled refresh failed for itemId={} url={} type={}: {}",
-                            item.id(),
-                            item.url(),
-                            e.getClass().getSimpleName(),
-                            e.getMessage());
-                    jobRunRecorder.recordItem(
-                            runId,
-                            item.url(),
-                            JobStatus.FAILED,
-                            System.currentTimeMillis() - startMs,
-                            e.getClass().getSimpleName() + ": " + e.getMessage());
-                }
+            Long runId;
+            try {
+                runId = jobRunRecorder.start(JOB_NAME);
+            } catch (Exception e) {
+                log.error("Failed to start job run for {}", JOB_NAME, e);
+                return;
             }
-            log.info("Scheduled refresh done: {} success, {} failed", success, failed);
-            jobRunRecorder.complete(
-                    runId,
-                    computeFinalStatus(success, failed),
-                    success + failed,
-                    success,
-                    failed,
-                    lastException == null ? null : summarize(lastException));
-        } catch (Exception e) {
-            log.error("Scheduled refresh aborted unexpectedly", e);
-            jobRunRecorder.complete(runId, JobStatus.FAILED, success + failed, success, failed, summarize(e));
+
+            int success = 0;
+            int failed = 0;
+            Exception loopException = null;
+            try {
+                Instant cutoff = Instant.now().minusMillis(fixedDelayMs);
+                List<TrackedItemRefreshView> items = trackedItemRepository.findStaleItems(cutoff);
+                log.info("Scheduled refresh starting for {} stale items", items.size());
+                for (TrackedItemRefreshView item : items) {
+                    long startNanos = System.nanoTime();
+                    try {
+                        trackingService.scheduledRefresh(item.id());
+                        success++;
+                        jobRunRecorder.recordItem(
+                                runId, item.url(), JobStatus.SUCCESS, Timing.elapsedMs(startNanos), null);
+                    } catch (Exception e) {
+                        failed++;
+                        log.warn(
+                                "Scheduled refresh failed for itemId={} url={} type={}: {}",
+                                item.id(),
+                                item.url(),
+                                e.getClass().getSimpleName(),
+                                e.getMessage());
+                        jobRunRecorder.recordItem(
+                                runId,
+                                item.url(),
+                                JobStatus.FAILED,
+                                Timing.elapsedMs(startNanos),
+                                Throwables.summarize(e));
+                    }
+                }
+                log.info("Scheduled refresh done: {} success, {} failed", success, failed);
+            } catch (Exception e) {
+                log.error("Scheduled refresh loop aborted unexpectedly", e);
+                loopException = e;
+            }
+
+            try {
+                JobStatus status = loopException != null ? JobStatus.FAILED : computeFinalStatus(success, failed);
+                jobRunRecorder.complete(
+                        runId, status, success + failed, success, failed, Throwables.summarize(loopException));
+            } catch (Exception e) {
+                log.error("Failed to record completion for runId {}", runId, e);
+            }
         } finally {
             MDC.clear();
         }
@@ -96,9 +107,5 @@ public class PriceCheckScheduler {
         if (failed == 0) return JobStatus.SUCCESS;
         if (success == 0) return JobStatus.FAILED;
         return JobStatus.PARTIAL;
-    }
-
-    private static String summarize(Exception e) {
-        return e.getClass().getSimpleName() + ": " + e.getMessage();
     }
 }

@@ -1,8 +1,13 @@
 package com.np.pricehunt.backend.scheduler;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.*;
 
+import com.np.pricehunt.backend.domain.JobStatus;
 import com.np.pricehunt.backend.dto.TrackedItemRefreshView;
 import com.np.pricehunt.backend.observability.JobRunRecorder;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
@@ -19,6 +24,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 class PriceCheckSchedulerTest {
 
     private static final long SIX_HOURS_MS = 21_600_000L;
+    private static final Long RUN_ID = 99L;
 
     @Mock
     private ProductTrackingService trackingService;
@@ -34,6 +40,7 @@ class PriceCheckSchedulerTest {
     @BeforeEach
     void setUp() {
         scheduler = new PriceCheckScheduler(trackingService, trackedItemRepository, jobRunRecorder, SIX_HOURS_MS);
+        when(jobRunRecorder.start(PriceCheckScheduler.JOB_NAME)).thenReturn(RUN_ID);
     }
 
     @Test
@@ -51,6 +58,11 @@ class PriceCheckSchedulerTest {
         verify(trackingService).scheduledRefresh(2L);
         verify(trackingService).scheduledRefresh(3L);
         verifyNoMoreInteractions(trackingService);
+
+        verify(jobRunRecorder).start(PriceCheckScheduler.JOB_NAME);
+        verify(jobRunRecorder, times(3))
+                .recordItem(eq(RUN_ID), any(String.class), eq(JobStatus.SUCCESS), anyLong(), isNull());
+        verify(jobRunRecorder).complete(eq(RUN_ID), eq(JobStatus.SUCCESS), eq(3), eq(3), eq(0), isNull());
     }
 
     @Test
@@ -70,6 +82,14 @@ class PriceCheckSchedulerTest {
         verify(trackingService).scheduledRefresh(1L);
         verify(trackingService).scheduledRefresh(2L);
         verify(trackingService).scheduledRefresh(3L);
+
+        verify(jobRunRecorder).start(PriceCheckScheduler.JOB_NAME);
+        verify(jobRunRecorder, times(2))
+                .recordItem(eq(RUN_ID), any(String.class), eq(JobStatus.SUCCESS), anyLong(), isNull());
+        verify(jobRunRecorder)
+                .recordItem(
+                        eq(RUN_ID), eq("https://b.com/2"), eq(JobStatus.FAILED), anyLong(), contains("scraper down"));
+        verify(jobRunRecorder).complete(eq(RUN_ID), eq(JobStatus.PARTIAL), eq(3), eq(2), eq(1), isNull());
     }
 
     @Test
@@ -79,5 +99,9 @@ class PriceCheckSchedulerTest {
         scheduler.refreshAll();
 
         verifyNoInteractions(trackingService);
+
+        verify(jobRunRecorder).start(PriceCheckScheduler.JOB_NAME);
+        verify(jobRunRecorder, never()).recordItem(anyLong(), any(), any(), anyLong(), any());
+        verify(jobRunRecorder).complete(eq(RUN_ID), eq(JobStatus.SUCCESS), eq(0), eq(0), eq(0), isNull());
     }
 }

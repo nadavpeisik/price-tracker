@@ -48,7 +48,7 @@ class RateRefreshSchedulerTest {
     }
 
     @Test
-    void scheduledRefresh_success_recordsSuccessWithRateCount() {
+    void scheduledRefresh_success_recordsSuccess() {
         RateSnapshot snapshot = new RateSnapshot(
                 LocalDate.parse("2026-06-04"),
                 Map.of(
@@ -59,7 +59,7 @@ class RateRefreshSchedulerTest {
 
         scheduler.scheduledRefresh();
 
-        verify(jobRunRecorder).complete(101L, JobStatus.SUCCESS, 3, 3, 0, null);
+        verify(jobRunRecorder).complete(101L, JobStatus.SUCCESS, 1, 1, 0, null);
     }
 
     @Test
@@ -69,7 +69,7 @@ class RateRefreshSchedulerTest {
         scheduler.scheduledRefresh();
 
         ArgumentCaptor<String> summary = ArgumentCaptor.forClass(String.class);
-        verify(jobRunRecorder).complete(eq(101L), eq(JobStatus.FAILED), eq(0), eq(0), eq(1), summary.capture());
+        verify(jobRunRecorder).complete(eq(101L), eq(JobStatus.FAILED), eq(1), eq(0), eq(1), summary.capture());
         assertThat(summary.getValue()).contains("FX refresh failed");
     }
 
@@ -80,7 +80,7 @@ class RateRefreshSchedulerTest {
         scheduler.scheduledRefresh();
 
         ArgumentCaptor<String> summary = ArgumentCaptor.forClass(String.class);
-        verify(jobRunRecorder).complete(eq(101L), eq(JobStatus.FAILED), eq(0), eq(0), eq(1), summary.capture());
+        verify(jobRunRecorder).complete(eq(101L), eq(JobStatus.FAILED), eq(1), eq(0), eq(1), summary.capture());
         assertThat(summary.getValue()).isEqualTo("RuntimeException: ECB unreachable");
     }
 

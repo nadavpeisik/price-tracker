@@ -4,6 +4,7 @@ import com.np.pricehunt.backend.domain.JobStatus;
 import com.np.pricehunt.backend.observability.JobRunRecorder;
 import com.np.pricehunt.backend.service.fx.ExchangeRateService;
 import com.np.pricehunt.backend.service.fx.RateSnapshot;
+import com.np.pricehunt.backend.util.Throwables;
 import java.util.Optional;
 import java.util.UUID;
 import lombok.extern.slf4j.Slf4j;
@@ -28,26 +29,44 @@ public class RateRefreshScheduler {
     @Scheduled(cron = "${pricehunt.currency.fx.refresh-cron}", zone = "UTC")
     public void scheduledRefresh() {
         MDC.put("correlationId", "fx-" + UUID.randomUUID());
-        Long runId = jobRunRecorder.start(JOB_NAME);
         try {
-            log.info("Scheduled FX rate refresh starting");
-            Optional<RateSnapshot> result = service.refresh();
-            if (result.isPresent()) {
-                int count = result.get().rates().size();
-                jobRunRecorder.complete(runId, JobStatus.SUCCESS, count, count, 0, null);
-            } else {
-                jobRunRecorder.complete(
-                        runId,
-                        JobStatus.FAILED,
-                        0,
-                        0,
-                        1,
-                        "FX refresh failed (see logs for the correlationId stack trace)");
+            Long runId;
+            try {
+                runId = jobRunRecorder.start(JOB_NAME);
+            } catch (Exception e) {
+                log.error("Failed to start job run for {}", JOB_NAME, e);
+                return;
             }
-        } catch (Exception e) {
-            log.error("FX scheduled refresh aborted unexpectedly", e);
-            jobRunRecorder.complete(
-                    runId, JobStatus.FAILED, 0, 0, 1, e.getClass().getSimpleName() + ": " + e.getMessage());
+
+            int succeeded = 0;
+            int failed = 0;
+            String errorSummary = null;
+            Exception loopException = null;
+            try {
+                log.info("Scheduled FX rate refresh starting");
+                Optional<RateSnapshot> result = service.refresh();
+                if (result.isPresent()) {
+                    succeeded = 1;
+                    log.info(
+                            "FX refresh persisted {} rates",
+                            result.get().rates().size());
+                } else {
+                    failed = 1;
+                    errorSummary = "FX refresh failed (see logs for the correlationId stack trace)";
+                }
+            } catch (Exception e) {
+                log.error("FX scheduled refresh loop aborted unexpectedly", e);
+                loopException = e;
+                failed = 1;
+            }
+
+            try {
+                JobStatus status = (loopException != null || failed > 0) ? JobStatus.FAILED : JobStatus.SUCCESS;
+                String summary = loopException != null ? Throwables.summarize(loopException) : errorSummary;
+                jobRunRecorder.complete(runId, status, 1, succeeded, failed, summary);
+            } catch (Exception e) {
+                log.error("Failed to record completion for runId {}", runId, e);
+            }
         } finally {
             MDC.clear();
         }
