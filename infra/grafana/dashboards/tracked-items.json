@@ -88,7 +88,7 @@
         {
           "datasource": {"type": "postgres", "uid": "pricehunt-postgres"},
           "format": "table",
-          "rawSql": "SELECT pr.timestamp AS \"When\", p.name AS \"Product\", ti.shop_name AS \"Shop\", pr.currency AS \"Currency\", prev.price AS \"Prev\", pr.price AS \"Now\", ROUND((pr.price - prev.price) * 100.0 / NULLIF(prev.price, 0), 2) AS \"% change\" FROM price_record pr JOIN tracked_item ti ON pr.tracked_item_id = ti.id JOIN product p ON ti.product_id = p.id LEFT JOIN LATERAL (SELECT price FROM price_record WHERE tracked_item_id = pr.tracked_item_id AND timestamp < pr.timestamp ORDER BY timestamp DESC LIMIT 1) prev ON TRUE WHERE $__timeFilter(pr.timestamp) AND prev.price IS NOT NULL AND prev.price <> pr.price ORDER BY pr.timestamp DESC LIMIT 50",
+          "rawSql": "SELECT pr.timestamp AS \"When\", p.name AS \"Product\", ti.shop_name AS \"Shop\", pr.currency AS \"Currency\", prev.price AS \"Prev\", pr.price AS \"Now\", ROUND((pr.price - prev.price) * 100.0 / NULLIF(prev.price, 0), 2) AS \"% change\" FROM price_record pr JOIN tracked_item ti ON pr.tracked_item_id = ti.id JOIN product p ON ti.product_id = p.id LEFT JOIN LATERAL (SELECT price, currency FROM price_record WHERE tracked_item_id = pr.tracked_item_id AND timestamp < pr.timestamp ORDER BY timestamp DESC LIMIT 1) prev ON TRUE WHERE $__timeFilter(pr.timestamp) AND prev.price IS NOT NULL AND prev.currency = pr.currency AND prev.price <> pr.price ORDER BY pr.timestamp DESC LIMIT 50",
           "refId": "A"
         }
       ],
