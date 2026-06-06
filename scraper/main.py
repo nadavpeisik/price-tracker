@@ -43,6 +43,19 @@ _DOM_PRUNE_SCRIPT = """() => {
     selectors.forEach(s => document.querySelectorAll(s).forEach(el => el.remove()));
 }"""
 
+# Chrome-only prune: the _DOM_PRUNE_SCRIPT selectors MINUS <script>/<noscript>. Run before
+# _wait_for_render so the render-settle signal measures product content, not nav/footer/cookie/
+# promo chrome (which renders early and would false-settle the gate). Keeps <script> intact so
+# Tier-1 JSON-LD still works; the full _DOM_PRUNE_SCRIPT removes scripts later, after Tier 1.
+_PRUNE_CHROME_SCRIPT = """() => {
+    const selectors = [
+        'nav', 'footer',
+        '[class*="cookie"]', '[class*="banner"]', '[class*="ad-"]',
+        '[id*="cookie"]', '[id*="popup"]'
+    ];
+    selectors.forEach(s => document.querySelectorAll(s).forEach(el => el.remove()));
+}"""
+
 # JavaScript run via page.evaluate() to extract structured price data. Tries
 # JSON-LD first (Schema.org as embedded script); if that yields nothing, falls
 # back to Schema.org Microdata (itemprop/itemtype attributes on the HTML itself).
@@ -245,17 +258,21 @@ _HAS_PRICE_SIGNAL_SCRIPT = """() => {
     // Tier 1 signal: a JSON-LD block that actually carries price/offer data.
     for (const s of document.querySelectorAll('script[type="application/ld+json"]'))
         if (/"(price|offers|Offer)"/.test(s.textContent || '')) return true;
-    // Tier 2 signal: a price/availability element rendered into the DOM.
-    return !!document.querySelector(
-        '[itemprop="price"], meta[property="product:price:amount"], [class*="price"]');
+    // Structured microdata/meta: a valid signal even when not visually rendered.
+    if (document.querySelector('[itemprop="price"], meta[property="product:price:amount"]'))
+        return true;
+    // Tier 2 heuristic: a [class*="price"] element, but only if actually visible. SPA
+    // shells ship hidden price skeletons/templates that would otherwise trip the gate at
+    // first paint, before the real product renders.
+    for (const el of document.querySelectorAll('[class*="price"]'))
+        if (el.checkVisibility && el.checkVisibility()) return true;
+    return false;
 }"""
 
 # Length of the page's *visible* text, whitespace-collapsed. innerText (not textContent)
 # so hidden display:none templates — which the scraper deliberately keeps in the DOM —
 # don't inflate the count and trip the stability check before the real content renders.
-_VISIBLE_TEXT_LEN_SCRIPT = (
-    """() => (document.body ? (document.body.innerText || '') : '').replace(/\\s+/g, ' ').trim().length"""
-)
+_VISIBLE_TEXT_LEN_SCRIPT = """() => (document.body ? (document.body.innerText || '') : '').replace(/\\s+/g, ' ').trim().length"""
 
 # Render-wait tuning. The scraper reads the DOM at domcontentloaded, but SPAs inject product
 # data afterward. Absent a price signal, we poll the visible-text length until it stops
@@ -500,6 +517,8 @@ async def _wait_for_render(
     last_len = -1
     unchanged = 0
     while time.monotonic() < deadline:
+        # Narrow try around the volatile browser evals only, so a genuine Python logic
+        # bug below (e.g. a TypeError) still surfaces a traceback instead of being swallowed.
         try:
             if await page.evaluate(_HAS_PRICE_SIGNAL_SCRIPT):
                 return
@@ -513,7 +532,12 @@ async def _wait_for_render(
         else:
             last_len = length
             unchanged = 0
-        await page.wait_for_timeout(poll_ms)
+        # Separate guard: the page closing/navigating during the wait (TargetClosedError)
+        # must not crash the scrape — return best-effort, same as the eval failure above.
+        try:
+            await page.wait_for_timeout(poll_ms)
+        except Exception:
+            return
 
 
 def _snippet_has_useful_content(snippet: str) -> bool:
@@ -577,6 +601,14 @@ async def scrape(request: ScrapeRequest):
                         extractionSource=ExtractionSource.BLOCKED,
                         blockedReason=reason,
                     )
+
+        # Prune chrome (nav/footer/cookie/banner/ads) BEFORE the render-wait so the
+        # stabilization signal tracks product content, not chrome that renders early and
+        # would false-settle the gate. Keeps <script> intact for Tier-1 JSON-LD below.
+        try:
+            await page.evaluate(_PRUNE_CHROME_SCRIPT)
+        except Exception:
+            pass
 
         # Wait for content to render. goto returns at domcontentloaded (initial HTML
         # parsed); SPAs inject product data afterward via async JS. Runs only for

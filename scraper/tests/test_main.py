@@ -1,12 +1,12 @@
+import time
 from pathlib import Path
 
 import pytest_asyncio
 from playwright.async_api import async_playwright
 
-import time
-
 from main import (
     _HAS_PRICE_SIGNAL_SCRIPT,
+    _PRUNE_CHROME_SCRIPT,
     _STRIP_DECOY_PRICES_SCRIPT,
     _STRUCTURED_DATA_SCRIPT,
     _VISIBLE_TEXT_LEN_SCRIPT,
@@ -551,12 +551,49 @@ async def test_price_signal_absent_on_shell(page):
     assert await page.evaluate(_HAS_PRICE_SIGNAL_SCRIPT) is False
 
 
+# Price-signal fast-path — a HIDDEN [class*="price"] (skeleton/template, common in SPA
+# shells) must NOT trip the fast-path, or the gate would exit before the real price renders.
+async def test_price_signal_ignores_hidden_price_element(page):
+    await page.set_content(
+        '<html><body><span class="price" style="display:none">₪0</span></body></html>'
+    )
+    assert await page.evaluate(_HAS_PRICE_SIGNAL_SCRIPT) is False
+
+
+# _PRUNE_CHROME_SCRIPT strips nav/footer/cookie chrome (so it can't inflate the render-settle
+# signal) but keeps <script> intact — Tier-1 JSON-LD must survive; only the later full prune
+# removes scripts.
+async def test_prune_chrome_keeps_scripts(page):
+    await page.set_content(
+        "<html><head>"
+        '<script type="application/ld+json">{"@type":"Product"}</script>'
+        "</head><body>"
+        "<nav>menu</nav><footer>foot</footer>"
+        '<div class="cookie-banner">cookies</div>'
+        "<main>product</main>"
+        "</body></html>"
+    )
+    await page.evaluate(_PRUNE_CHROME_SCRIPT)
+    counts = await page.evaluate(
+        """() => ({
+            nav: document.querySelectorAll('nav').length,
+            footer: document.querySelectorAll('footer').length,
+            cookie: document.querySelectorAll('[class*="cookie"]').length,
+            scripts: document.querySelectorAll('script[type="application/ld+json"]').length,
+            main: document.querySelectorAll('main').length,
+        })"""
+    )
+    assert counts == {"nav": 0, "footer": 0, "cookie": 0, "scripts": 1, "main": 1}
+
+
 # Visible-text length must ignore hidden display:none text. innerText (visible-only),
 # not textContent — an SPA shell that ships hidden templates must not inflate the
 # length and trip the stability check before the real content renders.
 async def test_visible_text_len_ignores_hidden(page):
     hidden = "x" * 300
-    await page.set_content(f'<html><body><span>abc</span><div style="display:none">{hidden}</div></body></html>')
+    await page.set_content(
+        f'<html><body><span>abc</span><div style="display:none">{hidden}</div></body></html>'
+    )
     assert await page.evaluate(_VISIBLE_TEXT_LEN_SCRIPT) == 3
 
 
@@ -606,7 +643,7 @@ async def test_wait_for_render_caps_when_text_never_settles(page):
 # ₪0" but its price sits in a non-semantic class the snippet selectors can't see.)
 async def test_extract_snippet_skips_shipping_only_page(page):
     await page.set_content(
-        '<html><body>'
+        "<html><body>"
         '<div class="delivery-option">1-6 days ₪0</div>'
         '<div class="delivery-row">courier ₪30</div>'
         "</body></html>"
@@ -618,7 +655,7 @@ async def test_extract_snippet_skips_shipping_only_page(page):
 # longer drags in shipping-cost text from delivery elements.
 async def test_extract_snippet_keeps_price_excludes_shipping(page):
     await page.set_content(
-        '<html><body>'
+        "<html><body>"
         '<span class="product-price">₪349</span>'
         '<div class="delivery-row">courier ₪30</div>'
         "</body></html>"
