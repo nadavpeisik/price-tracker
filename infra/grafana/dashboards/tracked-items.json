@@ -88,7 +88,7 @@
         {
           "datasource": {"type": "postgres", "uid": "pricehunt-postgres"},
           "format": "table",
-          "rawSql": "SELECT \"When\", \"Product\", \"Shop\", \"Currency\", prev_price AS \"Prev\", curr_price AS \"Now\", ROUND((curr_price - prev_price) * 100.0 / NULLIF(prev_price, 0), 2) AS \"% change\" FROM (SELECT p.name AS \"Product\", ti.shop_name AS \"Shop\", pr.currency AS \"Currency\", pr.timestamp AS \"When\", LAG(pr.price) OVER (PARTITION BY pr.tracked_item_id ORDER BY pr.timestamp) AS prev_price, pr.price AS curr_price FROM price_record pr JOIN tracked_item ti ON pr.tracked_item_id = ti.id JOIN product p ON ti.product_id = p.id WHERE $__timeFilter(pr.timestamp)) sub WHERE prev_price IS NOT NULL AND prev_price <> curr_price ORDER BY \"When\" DESC LIMIT 50",
+          "rawSql": "SELECT \"When\", \"Product\", \"Shop\", \"Currency\", prev_price AS \"Prev\", curr_price AS \"Now\", ROUND((curr_price - prev_price) * 100.0 / NULLIF(prev_price, 0), 2) AS \"% change\" FROM (SELECT p.name AS \"Product\", ti.shop_name AS \"Shop\", pr.currency AS \"Currency\", pr.timestamp AS \"When\", LAG(pr.price) OVER (PARTITION BY pr.tracked_item_id ORDER BY pr.timestamp) AS prev_price, pr.price AS curr_price FROM price_record pr JOIN tracked_item ti ON pr.tracked_item_id = ti.id JOIN product p ON ti.product_id = p.id) sub WHERE prev_price IS NOT NULL AND prev_price <> curr_price AND $__timeFilter(\"When\") ORDER BY \"When\" DESC LIMIT 50",
           "refId": "A"
         }
       ],
