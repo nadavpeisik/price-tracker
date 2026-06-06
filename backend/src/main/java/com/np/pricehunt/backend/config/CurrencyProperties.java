@@ -12,5 +12,7 @@ public record CurrencyProperties(
     public record Fx(
             @DefaultValue("https://api.frankfurter.dev/v1/latest?base=EUR") String primaryUrl,
             @DefaultValue("https://api.exchangerate.host/latest?base=EUR") String fallbackUrl,
-            @DefaultValue("0 30 16 * * *") String refreshCron) {}
+            @DefaultValue("0 30 16 * * *") String refreshCron,
+            @DefaultValue("5000") long connectTimeoutMs,
+            @DefaultValue("10000") long readTimeoutMs) {}
 }
