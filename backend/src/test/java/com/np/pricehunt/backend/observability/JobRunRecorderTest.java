@@ -3,6 +3,7 @@ package com.np.pricehunt.backend.observability;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -109,7 +110,7 @@ class JobRunRecorderTest {
     }
 
     @Test
-    void complete_updatesFinishedAtAndCountersAndSaves() {
+    void complete_mutatesManagedEntityWithoutExplicitSave() {
         ScheduledJobRun existing = ScheduledJobRun.builder()
                 .id(5L)
                 .jobName("PRICE_REFRESH")
@@ -120,7 +121,7 @@ class JobRunRecorderTest {
 
         recorder.complete(5L, JobStatus.PARTIAL, 10, 7, 3, "RuntimeException: scraper down");
 
-        verify(runRepository).save(existing);
+        verify(runRepository, never()).save(any(ScheduledJobRun.class));
         assertThat(existing.getStatus()).isEqualTo(JobStatus.PARTIAL);
         assertThat(existing.getItemsProcessed()).isEqualTo(10);
         assertThat(existing.getItemsSucceeded()).isEqualTo(7);

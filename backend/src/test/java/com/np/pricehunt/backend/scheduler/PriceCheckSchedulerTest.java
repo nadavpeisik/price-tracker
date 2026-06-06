@@ -93,6 +93,21 @@ class PriceCheckSchedulerTest {
     }
 
     @Test
+    void refreshAll_recordItemFailureDoesNotMiscountSuccessfulWork() {
+        Instant old = Instant.now().minusSeconds(60 * 60 * 24);
+        when(trackedItemRepository.findStaleItems(any(Instant.class)))
+                .thenReturn(List.of(new TrackedItemRefreshView(1L, "https://a.com/1", old)));
+        doThrow(new RuntimeException("audit DB blip"))
+                .when(jobRunRecorder)
+                .recordItem(eq(RUN_ID), eq("https://a.com/1"), eq(JobStatus.SUCCESS), anyLong(), isNull());
+
+        scheduler.refreshAll();
+
+        verify(trackingService).scheduledRefresh(1L);
+        verify(jobRunRecorder).complete(eq(RUN_ID), eq(JobStatus.SUCCESS), eq(1), eq(1), eq(0), isNull());
+    }
+
+    @Test
     void refreshAll_emptyList_logsAndExits() {
         when(trackedItemRepository.findStaleItems(any(Instant.class))).thenReturn(List.of());
 

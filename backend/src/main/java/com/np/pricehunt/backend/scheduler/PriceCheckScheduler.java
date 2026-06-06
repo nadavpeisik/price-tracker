@@ -64,12 +64,15 @@ public class PriceCheckScheduler {
                 log.info("Scheduled refresh starting for {} stale items", items.size());
                 for (TrackedItemRefreshView item : items) {
                     long startNanos = System.nanoTime();
+                    JobStatus itemStatus;
+                    String itemError = null;
                     try {
                         trackingService.scheduledRefresh(item.id());
+                        itemStatus = JobStatus.SUCCESS;
                         success++;
-                        jobRunRecorder.recordItem(
-                                runId, item.url(), JobStatus.SUCCESS, Timing.elapsedMs(startNanos), null);
                     } catch (Exception e) {
+                        itemStatus = JobStatus.FAILED;
+                        itemError = Throwables.summarize(e);
                         failed++;
                         log.warn(
                                 "Scheduled refresh failed for itemId={} url={} type={}: {}",
@@ -77,12 +80,12 @@ public class PriceCheckScheduler {
                                 item.url(),
                                 e.getClass().getSimpleName(),
                                 e.getMessage());
+                    }
+                    try {
                         jobRunRecorder.recordItem(
-                                runId,
-                                item.url(),
-                                JobStatus.FAILED,
-                                Timing.elapsedMs(startNanos),
-                                Throwables.summarize(e));
+                                runId, item.url(), itemStatus, Timing.elapsedMs(startNanos), itemError);
+                    } catch (Exception e) {
+                        log.warn("Failed to record item for url={}: {}", item.url(), e.getMessage());
                     }
                 }
                 log.info("Scheduled refresh done: {} success, {} failed", success, failed);

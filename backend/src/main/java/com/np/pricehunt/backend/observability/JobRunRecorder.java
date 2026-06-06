@@ -49,6 +49,8 @@ public class JobRunRecorder {
         itemRepository.save(item);
     }
 
+    // No explicit save: `run` is loaded inside this @Transactional, so it's managed
+    // and Hibernate's dirty checking flushes the field updates on commit.
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void complete(Long runId, JobStatus status, int processed, int succeeded, int failed, String errorSummary) {
         ScheduledJobRun run = runRepository.findById(runId).orElseThrow();
@@ -58,6 +60,5 @@ public class JobRunRecorder {
         run.setItemsSucceeded(succeeded);
         run.setItemsFailed(failed);
         run.setErrorSummary(errorSummary);
-        runRepository.save(run);
     }
 }
