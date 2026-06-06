@@ -3,11 +3,16 @@ from pathlib import Path
 import pytest_asyncio
 from playwright.async_api import async_playwright
 
+import time
+
 from main import (
+    _HAS_PRICE_SIGNAL_SCRIPT,
     _STRIP_DECOY_PRICES_SCRIPT,
     _STRUCTURED_DATA_SCRIPT,
+    _VISIBLE_TEXT_LEN_SCRIPT,
     _detect_block,
     _extract_snippet,
+    _wait_for_render,
 )
 
 _FIXTURES = Path(__file__).parent / "fixtures"
@@ -517,3 +522,108 @@ async def test_detect_normal_page_html(page):
     blocked, reason = await _detect_block(page, response)
     assert blocked is False
     assert reason is None
+
+
+# Price-signal fast-path — Tier 1 signal. JSON-LD carrying a price means the
+# structured tier can succeed, so _wait_for_render can stop immediately.
+async def test_price_signal_jsonld(page):
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@context":"https://schema.org","@type":"Product","name":"X",
+     "offers":{"@type":"Offer","price":"349","priceCurrency":"ILS"}}
+    </script></head><body></body></html>
+    """
+    await page.set_content(html)
+    assert await page.evaluate(_HAS_PRICE_SIGNAL_SCRIPT) is True
+
+
+# Price-signal fast-path — Tier 2 signal. A rendered [class*="price"] element.
+async def test_price_signal_price_element(page):
+    await page.set_content('<html><body><span class="product-price">₪349</span></body></html>')
+    assert await page.evaluate(_HAS_PRICE_SIGNAL_SCRIPT) is True
+
+
+# Price-signal fast-path — an unrendered SPA shell has neither signal, so the
+# fast-path declines and _wait_for_render falls through to the stabilization wait.
+async def test_price_signal_absent_on_shell(page):
+    await page.set_content('<html><body><div id="app">KSP</div></body></html>')
+    assert await page.evaluate(_HAS_PRICE_SIGNAL_SCRIPT) is False
+
+
+# Visible-text length must ignore hidden display:none text. innerText (visible-only),
+# not textContent — an SPA shell that ships hidden templates must not inflate the
+# length and trip the stability check before the real content renders.
+async def test_visible_text_len_ignores_hidden(page):
+    hidden = "x" * 300
+    await page.set_content(f'<html><body><span>abc</span><div style="display:none">{hidden}</div></body></html>')
+    assert await page.evaluate(_VISIBLE_TEXT_LEN_SCRIPT) == 3
+
+
+# _wait_for_render — fast-path. A price signal present at first paint returns well
+# under the cap (the escape hatch for pages whose text never settles).
+async def test_wait_for_render_returns_on_price_signal(page):
+    await page.set_content('<html><body><span class="price">₪349</span></body></html>')
+    start = time.monotonic()
+    await _wait_for_render(page, 3000, poll_ms=50)
+    assert time.monotonic() - start < 1.0
+
+
+# _wait_for_render — the core SPA case. No price signal; product text is injected
+# late (like KSP at ~750ms). Must wait until the text settles, not capture it early.
+async def test_wait_for_render_waits_for_late_text(page):
+    await page.set_content("<html><body><p>Loading</p></body></html>")
+    await page.evaluate(
+        """() => setTimeout(() => {
+            const d = document.createElement('div');
+            d.textContent = 'x'.repeat(300);
+            document.body.appendChild(d);
+        }, 300)"""
+    )
+    await _wait_for_render(page, 4000, poll_ms=50, stable_polls=2, min_chars=50)
+    assert await page.evaluate(_VISIBLE_TEXT_LEN_SCRIPT) >= 300
+
+
+# _wait_for_render — never-settling page (text grows forever, no price signal) must
+# hit the cap rather than false-settle. Guards the stability logic against runaway DOMs.
+async def test_wait_for_render_caps_when_text_never_settles(page):
+    await page.set_content("<html><body><p id='c'>start</p></body></html>")
+    await page.evaluate(
+        """() => { window.__grow = setInterval(() => {
+            document.getElementById('c').textContent += ' more-text-chunk';
+        }, 30); }"""
+    )
+    start = time.monotonic()
+    await _wait_for_render(page, 800, poll_ms=50)
+    elapsed = time.monotonic() - start
+    await page.evaluate("() => clearInterval(window.__grow)")
+    assert elapsed >= 0.8
+
+
+# Tier 2 — a shipping/delivery-only page (no price element) must NOT yield a snippet:
+# shipping costs aren't the product price, and a price-less snippet would wrongly
+# short-circuit the FULLTEXT fallback. (KSP exposes shipping options like "1-6 ימי עסקים
+# ₪0" but its price sits in a non-semantic class the snippet selectors can't see.)
+async def test_extract_snippet_skips_shipping_only_page(page):
+    await page.set_content(
+        '<html><body>'
+        '<div class="delivery-option">1-6 days ₪0</div>'
+        '<div class="delivery-row">courier ₪30</div>'
+        "</body></html>"
+    )
+    assert await _extract_snippet(page) is None
+
+
+# Tier 2 — with a real price element present, the snippet captures the price and no
+# longer drags in shipping-cost text from delivery elements.
+async def test_extract_snippet_keeps_price_excludes_shipping(page):
+    await page.set_content(
+        '<html><body>'
+        '<span class="product-price">₪349</span>'
+        '<div class="delivery-row">courier ₪30</div>'
+        "</body></html>"
+    )
+    snippet = await _extract_snippet(page)
+    assert snippet is not None
+    assert "349" in snippet
+    assert "courier" not in snippet
