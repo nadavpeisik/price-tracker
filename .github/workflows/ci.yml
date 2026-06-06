@@ -66,8 +66,31 @@ jobs:
       - name: Run scraper tests with coverage
         run: pytest -v scraper/tests --cov=. --cov-branch --cov-report=xml:scraper/coverage.xml --cov-report=term
 
+      # The scanner pulls a scanner-engine JAR from scanner.sonarcloud.io on every run.
+      # That CDN intermittently returns 403, with no env var to skip or pre-cache the
+      # fetch. We retry once after a short backoff before failing the job.
       - name: SonarCloud scan
+        id: sonar-scan
+        continue-on-error: true
         uses: SonarSource/sonarqube-scan-action@v8
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          # Use the runner's already-installed Temurin 21 instead of letting
+          # the scanner fetch its own JRE from scanner.sonarcloud.io, which
+          # intermittently returns 403 and fails the job.
+          SONAR_SCANNER_JAVA_EXE_PATH: ${{ env.JAVA_HOME }}/bin/java
+
+      - name: Backoff before SonarCloud retry
+        if: steps.sonar-scan.outcome == 'failure'
+        run: |
+          echo "First SonarCloud attempt failed; sleeping 30s before retry."
+          sleep 30
+
+      - name: SonarCloud scan (retry)
+        if: steps.sonar-scan.outcome == 'failure'
+        uses: SonarSource/sonarqube-scan-action@v8
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_SCANNER_JAVA_EXE_PATH: ${{ env.JAVA_HOME }}/bin/java

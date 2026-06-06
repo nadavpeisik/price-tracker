@@ -1,0 +1,201 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "datasource": {"type": "postgres", "uid": "pricehunt-postgres"},
+      "fieldConfig": {
+        "defaults": {
+          "custom": {"align": "left", "displayMode": "auto"},
+          "mappings": [],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green"}]}
+        },
+        "overrides": [
+          {
+            "matcher": {"id": "byName", "options": "Status"},
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {"type": "value", "options": {"SUCCESS": {"color": "green", "index": 0}}},
+                  {"type": "value", "options": {"PARTIAL": {"color": "orange", "index": 1}}},
+                  {"type": "value", "options": {"FAILED": {"color": "red", "index": 2}}},
+                  {"type": "value", "options": {"RUNNING": {"color": "blue", "index": 3}}}
+                ]
+              },
+              {"id": "custom.cellOptions", "value": {"type": "color-background"}}
+            ]
+          },
+          {
+            "matcher": {"id": "byName", "options": "Duration"},
+            "properties": [{"id": "unit", "value": "ms"}]
+          }
+        ]
+      },
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 0},
+      "id": 1,
+      "options": {"showHeader": true},
+      "targets": [
+        {
+          "datasource": {"type": "postgres", "uid": "pricehunt-postgres"},
+          "format": "table",
+          "rawSql": "SELECT id AS \"Run ID\", job_name AS \"Job\", started_at AS \"Started\", finished_at AS \"Finished\", (EXTRACT(EPOCH FROM (finished_at - started_at)) * 1000)::int AS \"Duration\", status AS \"Status\", items_processed AS \"Processed\", items_succeeded AS \"OK\", items_failed AS \"Fail\", error_summary AS \"Error\", correlation_id AS \"Correlation\" FROM scheduled_job_run ORDER BY started_at DESC LIMIT 50",
+          "refId": "A"
+        }
+      ],
+      "title": "Recent runs (last 50)",
+      "type": "table"
+    },
+    {
+      "datasource": {"type": "postgres", "uid": "pricehunt-postgres"},
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "red", "value": null},
+              {"color": "orange", "value": 80},
+              {"color": "green", "value": 95}
+            ]
+          },
+          "unit": "percent",
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 6, "w": 8, "x": 0, "y": 10},
+      "id": 2,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "datasource": {"type": "postgres", "uid": "pricehunt-postgres"},
+          "format": "table",
+          "rawSql": "SELECT CASE WHEN COUNT(*) = 0 THEN NULL ELSE ROUND(COUNT(*) FILTER (WHERE status = 'SUCCESS') * 100.0 / COUNT(*), 1) END AS success_rate FROM scheduled_job_run WHERE $__timeFilter(started_at) AND status <> 'RUNNING'",
+          "refId": "A"
+        }
+      ],
+      "title": "Success rate (time-picker scoped)",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "postgres", "uid": "pricehunt-postgres"},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "orange", "value": 10000},
+              {"color": "red", "value": 30000}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 6, "w": 8, "x": 8, "y": 10},
+      "id": 3,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "reduceOptions": {"calcs": ["mean"], "fields": "", "values": false}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "postgres", "uid": "pricehunt-postgres"},
+          "format": "table",
+          "rawSql": "SELECT AVG(EXTRACT(EPOCH FROM (finished_at - started_at)) * 1000)::int AS avg_duration_ms FROM scheduled_job_run WHERE finished_at IS NOT NULL AND $__timeFilter(started_at)",
+          "refId": "A"
+        }
+      ],
+      "title": "Avg run duration",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "postgres", "uid": "pricehunt-postgres"},
+      "fieldConfig": {"defaults": {}, "overrides": []},
+      "gridPos": {"h": 6, "w": 8, "x": 16, "y": 10},
+      "id": 4,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "postgres", "uid": "pricehunt-postgres"},
+          "format": "table",
+          "rawSql": "SELECT COUNT(*) AS failed_runs FROM scheduled_job_run WHERE status IN ('FAILED', 'PARTIAL') AND $__timeFilter(started_at)",
+          "refId": "A"
+        }
+      ],
+      "title": "Failed/partial runs",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "postgres", "uid": "pricehunt-postgres"},
+      "fieldConfig": {
+        "defaults": {"custom": {"align": "left", "displayMode": "auto"}},
+        "overrides": []
+      },
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 16},
+      "id": 5,
+      "options": {"showHeader": true},
+      "targets": [
+        {
+          "datasource": {"type": "postgres", "uid": "pricehunt-postgres"},
+          "format": "table",
+          "rawSql": "SELECT r.started_at AS \"Started\", r.job_name AS \"Job\", i.label AS \"Item\", i.error_message AS \"Error\", i.duration_ms AS \"Duration (ms)\" FROM scheduled_job_run_item i JOIN scheduled_job_run r ON i.job_run_id = r.id WHERE i.status = 'FAILED' AND $__timeFilter(r.started_at) ORDER BY r.started_at DESC LIMIT 100",
+          "refId": "A"
+        }
+      ],
+      "title": "Failed items (time-picker scoped)",
+      "type": "table"
+    },
+    {
+      "datasource": {"type": "postgres", "uid": "pricehunt-postgres"},
+      "fieldConfig": {
+        "defaults": {"unit": "ms", "custom": {"drawStyle": "bars", "lineWidth": 1, "fillOpacity": 80}},
+        "overrides": []
+      },
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 26},
+      "id": 6,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single"}},
+      "targets": [
+        {
+          "datasource": {"type": "postgres", "uid": "pricehunt-postgres"},
+          "format": "time_series",
+          "rawSql": "SELECT started_at AS time, EXTRACT(EPOCH FROM (finished_at - started_at)) * 1000 AS value, job_name AS metric FROM scheduled_job_run WHERE finished_at IS NOT NULL AND $__timeFilter(started_at) ORDER BY started_at",
+          "refId": "A"
+        }
+      ],
+      "title": "Run duration by job",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["pricehunt", "operations"],
+  "templating": {"list": []},
+  "time": {"from": "now-7d", "to": "now"},
+  "timepicker": {},
+  "timezone": "",
+  "title": "Scheduled Jobs",
+  "uid": "scheduled-jobs",
+  "version": 1,
+  "weekStart": ""
+}

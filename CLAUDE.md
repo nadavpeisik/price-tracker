@@ -8,9 +8,10 @@ This is a monorepo. The git root is `price-tracker/`, one level above this direc
 
 ```
 price-tracker/
-├── compose.yaml      ← orchestrates all services (postgres, ollama, scraper)
+├── compose.yaml      ← orchestrates all services (postgres, ollama, scraper, grafana)
 ├── backend/          ← Spring Boot (this directory)
-└── scraper/          ← Python FastAPI + Playwright scraper
+├── scraper/          ← Python FastAPI + Playwright scraper
+└── infra/grafana/    ← provisioned Grafana datasource + dashboards
 ```
 
 ## Build & Run Commands
@@ -24,7 +25,7 @@ price-tracker/
 ./mvnw package                # Create JAR
 ```
 
-`compose.yaml` lives at the repo root (`../compose.yaml`). Spring Boot finds it via `spring.docker.compose.file=../compose.yaml` in `application.properties`. It spins up PostgreSQL (5432), Ollama (11434), and the Python scraper (8001) automatically — no manual `docker-compose up` needed.
+`compose.yaml` lives at the repo root (`../compose.yaml`). Spring Boot finds it via `spring.docker.compose.file=../compose.yaml` in `application.properties`. It spins up PostgreSQL (5432), Ollama (11434), the Python scraper (8001), and Grafana (3000) automatically — no manual `docker-compose up` needed.
 
 ## Architecture
 
@@ -56,6 +57,7 @@ The scraper response carries an `extractionSource` enum (`STRUCTURED | SNIPPET |
 - `PriceRecord` — immutable price snapshot (BigDecimal, LocalDateTime set via `@PrePersist`, availability flag, `extractionSource`)
 - `PriceInfo` — Java record DTO carrying `price`, `currency`, `available`, and `extractionSource`
 - `ExtractionSource` — shared enum (`STRUCTURED | SNIPPET | FULLTEXT`) used across `ScrapeResponse`, `PriceInfo`, and `PriceRecord`
+- `ScheduledJobRun` / `ScheduledJobRunItem` — audit trail for each `@Scheduled` execution; one parent row per run, one child row per item processed (URL for price refresh, currency for FX). Status uses the shared `JobStatus` enum (`RUNNING | SUCCESS | PARTIAL | FAILED`).
 
 **Python scraper service (`scraper/`):**
 - FastAPI app, single endpoint `POST /scrape { "url" }` → `ScrapeResponse { extractionSource, priceData?, snippet?, innerText? }`
@@ -74,6 +76,20 @@ The scraper response carries an `extractionSource` enum (`STRUCTURED | SNIPPET |
 - If a prior price exists for the `TrackedItem` **and the currency matches**, new price must not differ by more than 200% (i.e. no more than 3x the previous price) — configurable via `price.validation.max-delta-percent` in `application.properties`
 - Delta check is skipped entirely if the currency changed (cross-currency comparison is meaningless)
 - Currency change is logged as a warning; does not block the save
+
+## Scheduled job observability
+
+Every `@Scheduled` method records its outcome through `JobRunRecorder` (in `observability/`):
+
+- `start(jobName)` → returns `runId`; captures MDC `correlationId`.
+- `recordItem(runId, label, status, durationMs, errorMessage)` per processed item.
+- `complete(runId, status, processed, succeeded, failed, errorSummary)` in a finally block.
+
+All three methods are `@Transactional(propagation = REQUIRES_NEW)` so audit rows commit independently of any scheduler work that fails or rolls back.
+
+**Hard rule:** scheduler methods themselves must stay non-`@Transactional`. They make outbound HTTP calls (scraper, ECB) and holding a DB connection across that I/O starves the pool. Wiring the recorder in does not change that — only the recorder methods carry `@Transactional`.
+
+New scheduler? Wire the recorder the same way `PriceCheckScheduler.refreshAll()` does: start at the top, per-item record inside the loop, complete in a finally, outer try/catch routes catastrophic failure into a final `complete(..., JobStatus.FAILED, ...)`.
 
 ## Key Conventions
 
@@ -124,4 +140,5 @@ Schema is managed by **Flyway**. SQL files live in `backend/src/main/resources/d
 - **LLM:** Ollama (local, via Docker)
 - **Scraper:** Python FastAPI + Playwright at `localhost:8001` (built from `scraper/Dockerfile` by Docker Compose)
 - **Kafka** — in `pom.xml`, wired up in Phase 2
+- **Dashboards:** Grafana 11.4.0 at `localhost:3000` (admin/admin local-only — gate before any cloud deploy). Provisioned datasource + dashboards under `infra/grafana/`. All time-scoped Postgres panels MUST use the Grafana `$__timeFilter(column)` macro — hardcoded `WHERE x > NOW() - INTERVAL ...` makes the dashboard's time picker inert. New dashboards: drop a JSON into `infra/grafana/dashboards/`; the file provider picks it up every 30s.
 - Spring Boot version: **4.0.3** | Spring AI version: **2.0.0-M2** | Java: **21**
