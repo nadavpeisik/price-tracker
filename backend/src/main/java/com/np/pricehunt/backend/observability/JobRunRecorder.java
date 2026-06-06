@@ -43,7 +43,7 @@ public class JobRunRecorder {
                 .run(ref)
                 .label(label)
                 .status(status)
-                .durationMs(durationMs > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) durationMs)
+                .durationMs((int) Math.clamp(durationMs, 0, Integer.MAX_VALUE))
                 .errorMessage(errorMessage)
                 .build();
         itemRepository.save(item);
