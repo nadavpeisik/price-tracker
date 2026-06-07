@@ -6,7 +6,7 @@ from playwright.async_api import async_playwright
 
 from main import (
     _HAS_PRICE_SIGNAL_SCRIPT,
-    _PRUNE_CHROME_SCRIPT,
+    _HIDE_CHROME_SCRIPT,
     _STRIP_DECOY_PRICES_SCRIPT,
     _STRUCTURED_DATA_SCRIPT,
     _VISIBLE_TEXT_LEN_SCRIPT,
@@ -560,30 +560,76 @@ async def test_price_signal_ignores_hidden_price_element(page):
     assert await page.evaluate(_HAS_PRICE_SIGNAL_SCRIPT) is False
 
 
-# _PRUNE_CHROME_SCRIPT strips nav/footer/cookie chrome (so it can't inflate the render-settle
-# signal) but keeps <script> intact — Tier-1 JSON-LD must survive; only the later full prune
-# removes scripts.
-async def test_prune_chrome_keeps_scripts(page):
+# _HIDE_CHROME_SCRIPT sets nav/footer/cookie chrome to display:none (so it can't inflate the
+# render-settle signal) WITHOUT removing the nodes — removing them mid-hydration could crash the
+# SPA's scripts. The nodes stay in the DOM, their text leaves innerText, and <script> survives for
+# Tier-1 JSON-LD (only the later full prune removes scripts).
+async def test_hide_chrome_keeps_scripts(page):
     await page.set_content(
         "<html><head>"
         '<script type="application/ld+json">{"@type":"Product"}</script>'
         "</head><body>"
         "<nav>menu</nav><footer>foot</footer>"
         '<div class="cookie-banner">cookies</div>'
-        "<main>product</main>"
+        "<main>product text</main>"
         "</body></html>"
     )
-    await page.evaluate(_PRUNE_CHROME_SCRIPT)
-    counts = await page.evaluate(
+    await page.evaluate(_HIDE_CHROME_SCRIPT)
+    state = await page.evaluate(
         """() => ({
-            nav: document.querySelectorAll('nav').length,
-            footer: document.querySelectorAll('footer').length,
-            cookie: document.querySelectorAll('[class*="cookie"]').length,
+            navStillInDom: document.querySelectorAll('nav').length,
+            navVisible: document.querySelector('nav').checkVisibility(),
+            footerVisible: document.querySelector('footer').checkVisibility(),
+            cookieVisible: document.querySelector('[class*="cookie"]').checkVisibility(),
+            mainVisible: document.querySelector('main').checkVisibility(),
             scripts: document.querySelectorAll('script[type="application/ld+json"]').length,
-            main: document.querySelectorAll('main').length,
+            bodyText: document.body.innerText,
         })"""
     )
-    assert counts == {"nav": 0, "footer": 0, "cookie": 0, "scripts": 1, "main": 1}
+    assert state["navStillInDom"] == 1  # hidden, not removed
+    assert state["navVisible"] is False
+    assert state["footerVisible"] is False
+    assert state["cookieVisible"] is False
+    assert state["mainVisible"] is True
+    assert state["scripts"] == 1  # Tier-1 JSON-LD survives
+    assert "menu" not in state["bodyText"]
+    assert "cookies" not in state["bodyText"]
+    assert "product text" in state["bodyText"]
+
+
+# _wait_for_render — best-effort on a dead page: if the context/page is already closed, the
+# browser evals raise and the helper returns instead of propagating (no scrape-killing 500).
+async def test_wait_for_render_returns_on_closed_page(page):
+    await page.context.close()
+    # Must not raise despite every page.evaluate failing on the closed context.
+    await _wait_for_render(page, 3000, poll_ms=50)
+
+
+class _FakeRenderPage:
+    """Minimal page stand-in (no browser) for _wait_for_render branch coverage: feeds a
+    visible-text-length sequence and can fail wait_for_timeout mid-loop."""
+
+    def __init__(self, lengths, fail_wait=False):
+        self._lengths = lengths
+        self._i = 0
+        self._fail_wait = fail_wait
+
+    async def evaluate(self, script):
+        if script is _HAS_PRICE_SIGNAL_SCRIPT:
+            return False
+        value = self._lengths[min(self._i, len(self._lengths) - 1)]
+        self._i += 1
+        return value
+
+    async def wait_for_timeout(self, _ms):
+        if self._fail_wait:
+            raise RuntimeError("target closed")
+
+
+# _wait_for_render — wait_for_timeout failing mid-loop (page closing during the wait) is
+# swallowed and returns best-effort, not propagated past the separate guard.
+async def test_wait_for_render_returns_when_wait_for_timeout_raises():
+    await _wait_for_render(_FakeRenderPage([100, 100], fail_wait=True), 3000)
 
 
 # Visible-text length must ignore hidden display:none text. innerText (visible-only),
