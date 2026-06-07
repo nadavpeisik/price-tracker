@@ -29,6 +29,27 @@ class RestClientFactoriesTest {
     }
 
     @Test
+    void timed_rejectsNegativeConnect() {
+        assertThatThrownBy(() -> RestClientFactories.timed(Duration.ofSeconds(-1), Duration.ofSeconds(10)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("connect");
+    }
+
+    @Test
+    void timed_rejectsNullRead() {
+        assertThatThrownBy(() -> RestClientFactories.timed(Duration.ofSeconds(5), null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("read");
+    }
+
+    @Test
+    void timed_rejectsZeroRead() {
+        assertThatThrownBy(() -> RestClientFactories.timed(Duration.ofSeconds(5), Duration.ZERO))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("read");
+    }
+
+    @Test
     void timed_rejectsNegativeRead() {
         assertThatThrownBy(() -> RestClientFactories.timed(Duration.ofSeconds(5), Duration.ofSeconds(-1)))
                 .isInstanceOf(IllegalArgumentException.class)
