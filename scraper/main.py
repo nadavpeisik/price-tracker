@@ -43,17 +43,20 @@ _DOM_PRUNE_SCRIPT = """() => {
     selectors.forEach(s => document.querySelectorAll(s).forEach(el => el.remove()));
 }"""
 
-# Chrome-only prune: the _DOM_PRUNE_SCRIPT selectors MINUS <script>/<noscript>. Run before
-# _wait_for_render so the render-settle signal measures product content, not nav/footer/cookie/
-# promo chrome (which renders early and would false-settle the gate). Keeps <script> intact so
-# Tier-1 JSON-LD still works; the full _DOM_PRUNE_SCRIPT removes scripts later, after Tier 1.
-_PRUNE_CHROME_SCRIPT = """() => {
+# Chrome hider: the _DOM_PRUNE_SCRIPT selectors MINUS <script>/<noscript>, set to display:none
+# (not removed) before _wait_for_render. innerText excludes display:none text, so the render-settle
+# signal measures product content, not nav/footer/cookie/promo chrome that renders early and would
+# false-settle the gate. We HIDE rather than remove: removing nodes mid-hydration can crash the SPA's
+# own scripts (framework refs / querySelector null-derefs) and halt rendering. Hiding leaves the nodes
+# in place — worst case a re-render reverts the style and chrome reappears, no crash. <script> stays
+# intact for Tier-1 JSON-LD; the full _DOM_PRUNE_SCRIPT removes the hidden nodes later, post-Tier-1.
+_HIDE_CHROME_SCRIPT = """() => {
     const selectors = [
         'nav', 'footer',
         '[class*="cookie"]', '[class*="banner"]', '[class*="ad-"]',
         '[id*="cookie"]', '[id*="popup"]'
     ];
-    selectors.forEach(s => document.querySelectorAll(s).forEach(el => el.remove()));
+    selectors.forEach(s => document.querySelectorAll(s).forEach(el => { el.style.display = 'none'; }));
 }"""
 
 # JavaScript run via page.evaluate() to extract structured price data. Tries
@@ -283,7 +286,7 @@ _VISIBLE_TEXT_LEN_SCRIPT = """() => (document.body ? (document.body.innerText ||
 _RENDER_WAIT_MS = 8000  # overall cap, alongside the goto (30000) / CF-wait (15000) timeouts
 _RENDER_POLL_MS = 500
 _RENDER_STABLE_POLLS = 2
-_RENDER_MIN_CHARS = 50  # floor: never declare an empty/near-empty page settled
+_RENDER_MIN_CHARS = 20  # floor: never declare an empty/near-empty page settled
 
 
 class ExtractionSource(str, Enum):
@@ -602,11 +605,12 @@ async def scrape(request: ScrapeRequest):
                         blockedReason=reason,
                     )
 
-        # Prune chrome (nav/footer/cookie/banner/ads) BEFORE the render-wait so the
-        # stabilization signal tracks product content, not chrome that renders early and
-        # would false-settle the gate. Keeps <script> intact for Tier-1 JSON-LD below.
+        # Hide chrome (nav/footer/cookie/banner/ads) BEFORE the render-wait so the stabilization
+        # signal tracks product content, not chrome that renders early and would false-settle the
+        # gate. display:none (not removal) so we don't crash the SPA's scripts mid-hydration; <script>
+        # stays intact for Tier-1 JSON-LD below.
         try:
-            await page.evaluate(_PRUNE_CHROME_SCRIPT)
+            await page.evaluate(_HIDE_CHROME_SCRIPT)
         except Exception:
             pass
 
