@@ -27,6 +27,13 @@ price-tracker/
 
 `compose.yaml` lives at the repo root (`../compose.yaml`). Spring Boot finds it via `spring.docker.compose.file=../compose.yaml` in `application.properties`. It spins up PostgreSQL (5432), Ollama (11434), the Python scraper (8001), and Grafana (3000) automatically — no manual `docker-compose up` needed.
 
+## Code style & linting
+
+CI (`.github/workflows/ci.yml`) fails on formatting violations in **both** languages, so format before pushing:
+
+- **Java (backend):** `./mvnw spotless:apply` from `backend/`, then re-stage. CI runs `spotless:check` via `./mvnw verify`.
+- **Python (scraper):** ruff. CI runs `ruff check .` + `ruff format --check .`. A **pre-commit hook** (`.pre-commit-config.yaml`, ruff pinned to match CI) auto-fixes on commit — run `pre-commit install` once per clone (`pip install -e '.[dev]'` provides `pre-commit`). When the hook auto-fixes files the commit **aborts**: re-stage (`git add`) the fixed files and commit again. To fix manually instead: `cd scraper && ruff check --fix . && ruff format .`.
+
 ## Architecture
 
 **Layered architecture:** `Controller → Service → Repository → Domain`

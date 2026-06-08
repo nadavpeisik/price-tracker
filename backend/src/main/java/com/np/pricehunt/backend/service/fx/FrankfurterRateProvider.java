@@ -2,13 +2,12 @@ package com.np.pricehunt.backend.service.fx;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.np.pricehunt.backend.config.CurrencyProperties;
+import com.np.pricehunt.backend.config.RestClientFactories;
 import java.math.BigDecimal;
-import java.net.http.HttpClient;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
@@ -21,16 +20,14 @@ public class FrankfurterRateProvider {
     private final String fallbackUrl;
 
     public FrankfurterRateProvider(RestClient.Builder restClientBuilder, CurrencyProperties properties) {
-        // Connect timeout lives on the HttpClient; read timeout on the factory. JdkClientHttpRequestFactory
-        // exposes only setReadTimeout, so the connect side must be configured on the underlying HttpClient.
-        HttpClient httpClient =
-                HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
-        JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory(httpClient);
-        factory.setReadTimeout(Duration.ofSeconds(10));
-
         // clone() before mutating: RestClient.Builder is a shared Spring bean — calling
-        // requestFactory() directly on it would set our 5s/10s timeouts on every other consumer too.
-        this.restClient = restClientBuilder.clone().requestFactory(factory).build();
+        // requestFactory() directly on it would set these timeouts on every other consumer too.
+        this.restClient = restClientBuilder
+                .clone()
+                .requestFactory(RestClientFactories.timed(
+                        Duration.ofMillis(properties.fx().connectTimeoutMs()),
+                        Duration.ofMillis(properties.fx().readTimeoutMs())))
+                .build();
         this.primaryUrl = properties.fx().primaryUrl();
         this.fallbackUrl = properties.fx().fallbackUrl();
     }

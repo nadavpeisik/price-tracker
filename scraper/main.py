@@ -1,5 +1,6 @@
 import contextvars
 import logging
+import time
 import uuid
 from contextlib import asynccontextmanager
 from enum import Enum
@@ -40,6 +41,33 @@ _DOM_PRUNE_SCRIPT = """() => {
         '[id*="cookie"]', '[id*="popup"]'
     ];
     selectors.forEach(s => document.querySelectorAll(s).forEach(el => el.remove()));
+}"""
+
+# Chrome hider: injects a <style> that display:none's the _DOM_PRUNE_SCRIPT selectors MINUS
+# <script>/<noscript>, run before _wait_for_render. innerText (and checkVisibility) honor computed
+# style, so hidden chrome leaves the render-settle measurement — the gate tracks product content,
+# not nav/footer/cookie/promo chrome that renders early and would false-settle it.
+#
+# A *stylesheet rule* rather than removing nodes or setting inline styles, because:
+#   - non-destructive: nodes stay in the DOM, so removing-mid-hydration crashes (framework refs /
+#     querySelector null-derefs) can't happen;
+#   - reactive: the rule applies to *any* matching node, so SPA re-renders that tear down and recreate
+#     nav/banner/footer get hidden too — inline styles would be lost on the new nodes and let chrome
+#     back into innerText, re-settling the gate on chrome.
+# <script> stays intact for Tier-1 JSON-LD; the full _DOM_PRUNE_SCRIPT removes the hidden nodes
+# post-Tier-1. document.head may not exist this early, so fall back to documentElement.
+_HIDE_CHROME_SCRIPT = """() => {
+    const styleId = 'scraper-hide-chrome';
+    if (document.getElementById(styleId)) return;
+    const selectors = [
+        'nav', 'footer',
+        '[class*="cookie"]', '[class*="banner"]', '[class*="ad-"]',
+        '[id*="cookie"]', '[id*="popup"]'
+    ];
+    const style = document.createElement('style');
+    style.id = styleId;
+    style.textContent = selectors.map(s => s + ' { display: none !important; }').join('\\n');
+    (document.head || document.documentElement).appendChild(style);
 }"""
 
 # JavaScript run via page.evaluate() to extract structured price data. Tries
@@ -233,6 +261,46 @@ _STRIP_DECOY_PRICES_SCRIPT = """() => {
 }"""
 
 
+# Fast-path signal for _wait_for_render(): a price already exists in the DOM, so an
+# extraction tier can succeed now — stop waiting immediately. This is also the escape
+# hatch for pages whose text never settles (lazy reviews / recommendation carousels keep
+# appending) — without it they'd burn the full render-wait cap even though the price was
+# ready at first paint. (The Tier 3 / body-text clause that used to live here was removed:
+# a fixed length threshold trips on page chrome before the product renders — see
+# _wait_for_render, which waits for the text to *settle* instead.)
+_HAS_PRICE_SIGNAL_SCRIPT = """() => {
+    // Tier 1 signal: a JSON-LD block that actually carries price/offer data.
+    for (const s of document.querySelectorAll('script[type="application/ld+json"]'))
+        if (/"(price|offers|Offer)"/.test(s.textContent || '')) return true;
+    // Structured microdata/meta: a valid signal even when not visually rendered.
+    if (document.querySelector('[itemprop="price"], meta[property="product:price:amount"]'))
+        return true;
+    // Tier 2 heuristic: a [class*="price"] element, but only if it's visible AND holds a
+    // digit. Visibility skips hidden skeletons; the digit check skips *visible* empty
+    // skeletons/placeholders (e.g. <div class="price-skeleton">) that render before the
+    // price data is fetched — both would otherwise trip the gate before the price exists.
+    for (const el of document.querySelectorAll('[class*="price"]'))
+        if (el.checkVisibility && el.checkVisibility() && /[0-9]/.test(el.textContent || '')) return true;
+    return false;
+}"""
+
+# Length of the page's *visible* text, whitespace-collapsed. innerText (not textContent)
+# so hidden display:none templates — which the scraper deliberately keeps in the DOM —
+# don't inflate the count and trip the stability check before the real content renders.
+_VISIBLE_TEXT_LEN_SCRIPT = """() => (document.body ? (document.body.innerText || '') : '').replace(/\\s+/g, ' ').trim().length"""
+
+# Render-wait tuning. The scraper reads the DOM at domcontentloaded, but SPAs inject product
+# data afterward. Absent a price signal, we poll the visible-text length until it stops
+# growing (render settled) or the cap elapses. STABLE_POLLS=2 means two consecutive unchanged
+# polls: at a 500ms cadence a brief chrome-only phase (e.g. KSP's ₪499 promo banner ~250-500ms,
+# before the ₪349 product at ~750ms) can't produce two equal consecutive samples, so it can't
+# false-settle on chrome. POLL_MS also bounds how often the layout-forcing innerText read runs.
+_RENDER_WAIT_MS = 8000  # overall cap, alongside the goto (30000) / CF-wait (15000) timeouts
+_RENDER_POLL_MS = 500
+_RENDER_STABLE_POLLS = 2
+_RENDER_MIN_CHARS = 20  # floor: never declare an empty/near-empty page settled
+
+
 class ExtractionSource(str, Enum):
     STRUCTURED = "structured"
     SNIPPET = "snippet"
@@ -323,11 +391,15 @@ async def _extract_snippet(page) -> str | None:
     MAX_ELEMENT_CHARS = 200
     PER_SELECTOR_LIMIT = 3
     PRICE_SELECTOR = '[class*="price"]'
+    # Deliberately no [class*="delivery"]/[class*="shipping"]: those elements carry
+    # shipping COSTS (e.g. KSP's "1-6 ימי עסקים ₪0 | ₪10 | ₪30"), which pollute price
+    # extraction and — on a page whose price uses a non-semantic class — can form a
+    # price-less snippet that wrongly short-circuits the FULLTEXT fallback. Availability
+    # timing from delivery text is still covered by FULLTEXT and the stock selectors below.
     css_selectors = [
         PRICE_SELECTOR,
         '[class*="stock"]',
         '[class*="availability"]',
-        '[class*="delivery"]',
         '[id*="availability"]',
         '[id*="stock"]',
     ]
@@ -442,6 +514,47 @@ async def _detect_block(page, response) -> tuple[bool, str | None]:
     return False, None
 
 
+async def _wait_for_render(
+    page,
+    timeout_ms: int,
+    poll_ms: int = _RENDER_POLL_MS,
+    stable_polls: int = _RENDER_STABLE_POLLS,
+    min_chars: int = _RENDER_MIN_CHARS,
+) -> None:
+    # Wait for the page to finish rendering before extraction. goto returns at
+    # domcontentloaded (initial HTML parsed); an SPA injects its product data later via
+    # async JS. We can't key on "a price appeared" to stop, because decoy/promo prices often
+    # render with the page chrome before the real one (KSP shows a ₪499 coupon banner ~250ms
+    # before the ₪349 product at ~750ms). So absent an immediate price signal, we wait for the
+    # visible-text length to *stop changing* — the render has settled. Best-effort: on timeout
+    # or a destroyed execution context we just proceed with whatever has rendered so far.
+    deadline = time.monotonic() + timeout_ms / 1000
+    last_len = -1
+    unchanged = 0
+    while time.monotonic() < deadline:
+        # Narrow try around the volatile browser evals only, so a genuine Python logic
+        # bug below (e.g. a TypeError) still surfaces a traceback instead of being swallowed.
+        try:
+            if await page.evaluate(_HAS_PRICE_SIGNAL_SCRIPT):
+                return
+            length = await page.evaluate(_VISIBLE_TEXT_LEN_SCRIPT)
+        except Exception:
+            return
+        if length == last_len:
+            unchanged += 1
+            if unchanged >= stable_polls and length >= min_chars:
+                return
+        else:
+            last_len = length
+            unchanged = 0
+        # Separate guard: the page closing/navigating during the wait (TargetClosedError)
+        # must not crash the scrape — return best-effort, same as the eval failure above.
+        try:
+            await page.wait_for_timeout(poll_ms)
+        except Exception:
+            return
+
+
 def _snippet_has_useful_content(snippet: str) -> bool:
     # A snippet is useful only if it has descriptive text (alphabetic characters,
     # Unicode-aware so Hebrew/Latin both count). Pure currency strings like "₪1,025"
@@ -503,6 +616,23 @@ async def scrape(request: ScrapeRequest):
                         extractionSource=ExtractionSource.BLOCKED,
                         blockedReason=reason,
                     )
+
+        # Hide chrome (nav/footer/cookie/banner/ads) BEFORE the render-wait so the stabilization
+        # signal tracks product content, not chrome that renders early and would false-settle the
+        # gate. Injects a display:none stylesheet (not node removal / inline styles): non-destructive
+        # so SPA hydration can't crash, and reactive so re-rendered chrome stays hidden. <script>
+        # stays intact for Tier-1 JSON-LD below.
+        try:
+            await page.evaluate(_HIDE_CHROME_SCRIPT)
+        except Exception:
+            pass
+
+        # Wait for content to render. goto returns at domcontentloaded (initial HTML
+        # parsed); SPAs inject product data afterward via async JS. Runs only for
+        # non-blocked pages — a bot wall never produces price content, so it would
+        # otherwise burn the full timeout. Must precede DOM pruning (which strips the
+        # <script> tags JSON-LD lives in) and strip-decoy.
+        await _wait_for_render(page, _RENDER_WAIT_MS)
 
         # Pre-Tier 1: strip decoy prices (strikethrough MSRP + paired .regular-price)
         # from the rendered DOM. Safe before structured-data because it does not

@@ -1,0 +1,12 @@
+# Auto-fixes Python lint/format on commit so CI's `ruff check` / `ruff format --check`
+# (.github/workflows/ci.yml) pass on the first push instead of round-tripping through CI.
+# One-time setup per clone: `pre-commit install`. When a hook auto-fixes files the commit
+# aborts — re-stage (`git add`) the fixed files and commit again.
+# Pinned to the same ruff version as the scraper's [dev] extra / CI to avoid local↔CI drift.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.4
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format

@@ -1,13 +1,18 @@
+import time
 from pathlib import Path
 
 import pytest_asyncio
 from playwright.async_api import async_playwright
 
 from main import (
+    _HAS_PRICE_SIGNAL_SCRIPT,
+    _HIDE_CHROME_SCRIPT,
     _STRIP_DECOY_PRICES_SCRIPT,
     _STRUCTURED_DATA_SCRIPT,
+    _VISIBLE_TEXT_LEN_SCRIPT,
     _detect_block,
     _extract_snippet,
+    _wait_for_render,
 )
 
 _FIXTURES = Path(__file__).parent / "fixtures"
@@ -517,3 +522,209 @@ async def test_detect_normal_page_html(page):
     blocked, reason = await _detect_block(page, response)
     assert blocked is False
     assert reason is None
+
+
+# Price-signal fast-path — Tier 1 signal. JSON-LD carrying a price means the
+# structured tier can succeed, so _wait_for_render can stop immediately.
+async def test_price_signal_jsonld(page):
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@context":"https://schema.org","@type":"Product","name":"X",
+     "offers":{"@type":"Offer","price":"349","priceCurrency":"ILS"}}
+    </script></head><body></body></html>
+    """
+    await page.set_content(html)
+    assert await page.evaluate(_HAS_PRICE_SIGNAL_SCRIPT) is True
+
+
+# Price-signal fast-path — Tier 2 signal. A rendered [class*="price"] element.
+async def test_price_signal_price_element(page):
+    await page.set_content('<html><body><span class="product-price">₪349</span></body></html>')
+    assert await page.evaluate(_HAS_PRICE_SIGNAL_SCRIPT) is True
+
+
+# Price-signal fast-path — an unrendered SPA shell has neither signal, so the
+# fast-path declines and _wait_for_render falls through to the stabilization wait.
+async def test_price_signal_absent_on_shell(page):
+    await page.set_content('<html><body><div id="app">KSP</div></body></html>')
+    assert await page.evaluate(_HAS_PRICE_SIGNAL_SCRIPT) is False
+
+
+# Price-signal fast-path — a HIDDEN [class*="price"] (skeleton/template, common in SPA
+# shells) must NOT trip the fast-path, or the gate would exit before the real price renders.
+async def test_price_signal_ignores_hidden_price_element(page):
+    await page.set_content(
+        '<html><body><span class="price" style="display:none">₪0</span></body></html>'
+    )
+    assert await page.evaluate(_HAS_PRICE_SIGNAL_SCRIPT) is False
+
+
+# Price-signal fast-path — a VISIBLE but digit-less price skeleton/placeholder must NOT trip
+# the fast-path; the price data hasn't arrived yet. A real price (with a digit) does.
+async def test_price_signal_ignores_visible_empty_skeleton(page):
+    await page.set_content('<html><body><div class="price-skeleton"></div></body></html>')
+    assert await page.evaluate(_HAS_PRICE_SIGNAL_SCRIPT) is False
+    await page.set_content('<html><body><div class="product-price">₪349</div></body></html>')
+    assert await page.evaluate(_HAS_PRICE_SIGNAL_SCRIPT) is True
+
+
+# _HIDE_CHROME_SCRIPT injects a display:none stylesheet for chrome selectors. It must (a) leave
+# nodes in the DOM (non-destructive — removing mid-hydration could crash the SPA), (b) drop chrome
+# text out of innerText, (c) keep <script> for Tier-1, and crucially (d) be REACTIVE: chrome nodes
+# created *after* injection (SPA re-renders) are hidden too, since it's a stylesheet rule not an
+# inline style.
+async def test_hide_chrome_is_reactive_and_keeps_scripts(page):
+    await page.set_content(
+        "<html><head>"
+        '<script type="application/ld+json">{"@type":"Product"}</script>'
+        "</head><body>"
+        "<nav>menu</nav><footer>foot</footer>"
+        '<div class="cookie-banner">cookies</div>'
+        "<main>product text</main>"
+        "</body></html>"
+    )
+    await page.evaluate(_HIDE_CHROME_SCRIPT)
+    # Simulate an SPA re-render replacing nav with a fresh node AFTER injection.
+    await page.evaluate(
+        "() => { document.querySelector('nav').remove();"
+        " const n = document.createElement('nav'); n.textContent = 'rerendered menu';"
+        " document.body.appendChild(n); }"
+    )
+    state = await page.evaluate(
+        """() => ({
+            navStillInDom: document.querySelectorAll('nav').length,
+            navVisible: document.querySelector('nav').checkVisibility(),
+            footerVisible: document.querySelector('footer').checkVisibility(),
+            cookieVisible: document.querySelector('[class*="cookie"]').checkVisibility(),
+            mainVisible: document.querySelector('main').checkVisibility(),
+            styleInjected: !!document.getElementById('scraper-hide-chrome'),
+            scripts: document.querySelectorAll('script[type="application/ld+json"]').length,
+            bodyText: document.body.innerText,
+        })"""
+    )
+    assert state["navStillInDom"] == 1  # hidden, not removed
+    assert state["navVisible"] is False  # the RE-RENDERED nav is hidden too (reactive)
+    assert state["footerVisible"] is False
+    assert state["cookieVisible"] is False
+    assert state["mainVisible"] is True
+    assert state["styleInjected"] is True
+    assert state["scripts"] == 1  # Tier-1 JSON-LD survives
+    assert "rerendered menu" not in state["bodyText"]
+    assert "cookies" not in state["bodyText"]
+    assert "product text" in state["bodyText"]
+
+
+# _wait_for_render — best-effort on a dead page: if the context/page is already closed, the
+# browser evals raise and the helper returns instead of propagating (no scrape-killing 500).
+async def test_wait_for_render_returns_on_closed_page(page):
+    await page.context.close()
+    # Must not raise despite every page.evaluate failing on the closed context.
+    await _wait_for_render(page, 3000, poll_ms=50)
+
+
+class _FakeRenderPage:
+    """Minimal page stand-in (no browser) for _wait_for_render branch coverage: feeds a
+    visible-text-length sequence and can fail wait_for_timeout mid-loop."""
+
+    def __init__(self, lengths, fail_wait=False):
+        self._lengths = lengths
+        self._i = 0
+        self._fail_wait = fail_wait
+
+    async def evaluate(self, script):
+        if script is _HAS_PRICE_SIGNAL_SCRIPT:
+            return False
+        value = self._lengths[min(self._i, len(self._lengths) - 1)]
+        self._i += 1
+        return value
+
+    async def wait_for_timeout(self, _ms):
+        if self._fail_wait:
+            raise RuntimeError("target closed")
+
+
+# _wait_for_render — wait_for_timeout failing mid-loop (page closing during the wait) is
+# swallowed and returns best-effort, not propagated past the separate guard.
+async def test_wait_for_render_returns_when_wait_for_timeout_raises():
+    await _wait_for_render(_FakeRenderPage([100, 100], fail_wait=True), 3000)
+
+
+# Visible-text length must ignore hidden display:none text. innerText (visible-only),
+# not textContent — an SPA shell that ships hidden templates must not inflate the
+# length and trip the stability check before the real content renders.
+async def test_visible_text_len_ignores_hidden(page):
+    hidden = "x" * 300
+    await page.set_content(
+        f'<html><body><span>abc</span><div style="display:none">{hidden}</div></body></html>'
+    )
+    assert await page.evaluate(_VISIBLE_TEXT_LEN_SCRIPT) == 3
+
+
+# _wait_for_render — fast-path. A price signal present at first paint returns well
+# under the cap (the escape hatch for pages whose text never settles).
+async def test_wait_for_render_returns_on_price_signal(page):
+    await page.set_content('<html><body><span class="price">₪349</span></body></html>')
+    start = time.monotonic()
+    await _wait_for_render(page, 3000, poll_ms=50)
+    assert time.monotonic() - start < 1.0
+
+
+# _wait_for_render — the core SPA case. No price signal; product text is injected
+# late (like KSP at ~750ms). Must wait until the text settles, not capture it early.
+async def test_wait_for_render_waits_for_late_text(page):
+    await page.set_content("<html><body><p>Loading</p></body></html>")
+    await page.evaluate(
+        """() => setTimeout(() => {
+            const d = document.createElement('div');
+            d.textContent = 'x'.repeat(300);
+            document.body.appendChild(d);
+        }, 300)"""
+    )
+    await _wait_for_render(page, 4000, poll_ms=50, stable_polls=2, min_chars=50)
+    assert await page.evaluate(_VISIBLE_TEXT_LEN_SCRIPT) >= 300
+
+
+# _wait_for_render — never-settling page (text grows forever, no price signal) must
+# hit the cap rather than false-settle. Guards the stability logic against runaway DOMs.
+async def test_wait_for_render_caps_when_text_never_settles(page):
+    await page.set_content("<html><body><p id='c'>start</p></body></html>")
+    await page.evaluate(
+        """() => { window.__grow = setInterval(() => {
+            document.getElementById('c').textContent += ' more-text-chunk';
+        }, 30); }"""
+    )
+    start = time.monotonic()
+    await _wait_for_render(page, 800, poll_ms=50)
+    elapsed = time.monotonic() - start
+    await page.evaluate("() => clearInterval(window.__grow)")
+    assert elapsed >= 0.8
+
+
+# Tier 2 — a shipping/delivery-only page (no price element) must NOT yield a snippet:
+# shipping costs aren't the product price, and a price-less snippet would wrongly
+# short-circuit the FULLTEXT fallback. (KSP exposes shipping options like "1-6 ימי עסקים
+# ₪0" but its price sits in a non-semantic class the snippet selectors can't see.)
+async def test_extract_snippet_skips_shipping_only_page(page):
+    await page.set_content(
+        "<html><body>"
+        '<div class="delivery-option">1-6 days ₪0</div>'
+        '<div class="delivery-row">courier ₪30</div>'
+        "</body></html>"
+    )
+    assert await _extract_snippet(page) is None
+
+
+# Tier 2 — with a real price element present, the snippet captures the price and no
+# longer drags in shipping-cost text from delivery elements.
+async def test_extract_snippet_keeps_price_excludes_shipping(page):
+    await page.set_content(
+        "<html><body>"
+        '<span class="product-price">₪349</span>'
+        '<div class="delivery-row">courier ₪30</div>'
+        "</body></html>"
+    )
+    snippet = await _extract_snippet(page)
+    assert snippet is not None
+    assert "349" in snippet
+    assert "courier" not in snippet

@@ -192,7 +192,7 @@ class PriceConverterTest {
 
     private PriceConverter newConverter(String marginPercent) {
         CurrencyProperties props = new CurrencyProperties(
-                "ILS", new BigDecimal(marginPercent), new CurrencyProperties.Fx("", "", "0 30 16 * * *"));
+                "ILS", new BigDecimal(marginPercent), new CurrencyProperties.Fx("", "", "0 30 16 * * *", 5000, 10000));
         return new PriceConverter(rateService, props, FIXED_CLOCK);
     }
 
