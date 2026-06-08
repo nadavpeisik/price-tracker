@@ -560,11 +560,21 @@ async def test_price_signal_ignores_hidden_price_element(page):
     assert await page.evaluate(_HAS_PRICE_SIGNAL_SCRIPT) is False
 
 
-# _HIDE_CHROME_SCRIPT sets nav/footer/cookie chrome to display:none (so it can't inflate the
-# render-settle signal) WITHOUT removing the nodes — removing them mid-hydration could crash the
-# SPA's scripts. The nodes stay in the DOM, their text leaves innerText, and <script> survives for
-# Tier-1 JSON-LD (only the later full prune removes scripts).
-async def test_hide_chrome_keeps_scripts(page):
+# Price-signal fast-path — a VISIBLE but digit-less price skeleton/placeholder must NOT trip
+# the fast-path; the price data hasn't arrived yet. A real price (with a digit) does.
+async def test_price_signal_ignores_visible_empty_skeleton(page):
+    await page.set_content('<html><body><div class="price-skeleton"></div></body></html>')
+    assert await page.evaluate(_HAS_PRICE_SIGNAL_SCRIPT) is False
+    await page.set_content('<html><body><div class="product-price">₪349</div></body></html>')
+    assert await page.evaluate(_HAS_PRICE_SIGNAL_SCRIPT) is True
+
+
+# _HIDE_CHROME_SCRIPT injects a display:none stylesheet for chrome selectors. It must (a) leave
+# nodes in the DOM (non-destructive — removing mid-hydration could crash the SPA), (b) drop chrome
+# text out of innerText, (c) keep <script> for Tier-1, and crucially (d) be REACTIVE: chrome nodes
+# created *after* injection (SPA re-renders) are hidden too, since it's a stylesheet rule not an
+# inline style.
+async def test_hide_chrome_is_reactive_and_keeps_scripts(page):
     await page.set_content(
         "<html><head>"
         '<script type="application/ld+json">{"@type":"Product"}</script>'
@@ -575,6 +585,12 @@ async def test_hide_chrome_keeps_scripts(page):
         "</body></html>"
     )
     await page.evaluate(_HIDE_CHROME_SCRIPT)
+    # Simulate an SPA re-render replacing nav with a fresh node AFTER injection.
+    await page.evaluate(
+        "() => { document.querySelector('nav').remove();"
+        " const n = document.createElement('nav'); n.textContent = 'rerendered menu';"
+        " document.body.appendChild(n); }"
+    )
     state = await page.evaluate(
         """() => ({
             navStillInDom: document.querySelectorAll('nav').length,
@@ -582,17 +598,19 @@ async def test_hide_chrome_keeps_scripts(page):
             footerVisible: document.querySelector('footer').checkVisibility(),
             cookieVisible: document.querySelector('[class*="cookie"]').checkVisibility(),
             mainVisible: document.querySelector('main').checkVisibility(),
+            styleInjected: !!document.getElementById('scraper-hide-chrome'),
             scripts: document.querySelectorAll('script[type="application/ld+json"]').length,
             bodyText: document.body.innerText,
         })"""
     )
     assert state["navStillInDom"] == 1  # hidden, not removed
-    assert state["navVisible"] is False
+    assert state["navVisible"] is False  # the RE-RENDERED nav is hidden too (reactive)
     assert state["footerVisible"] is False
     assert state["cookieVisible"] is False
     assert state["mainVisible"] is True
+    assert state["styleInjected"] is True
     assert state["scripts"] == 1  # Tier-1 JSON-LD survives
-    assert "menu" not in state["bodyText"]
+    assert "rerendered menu" not in state["bodyText"]
     assert "cookies" not in state["bodyText"]
     assert "product text" in state["bodyText"]
 

@@ -43,20 +43,31 @@ _DOM_PRUNE_SCRIPT = """() => {
     selectors.forEach(s => document.querySelectorAll(s).forEach(el => el.remove()));
 }"""
 
-# Chrome hider: the _DOM_PRUNE_SCRIPT selectors MINUS <script>/<noscript>, set to display:none
-# (not removed) before _wait_for_render. innerText excludes display:none text, so the render-settle
-# signal measures product content, not nav/footer/cookie/promo chrome that renders early and would
-# false-settle the gate. We HIDE rather than remove: removing nodes mid-hydration can crash the SPA's
-# own scripts (framework refs / querySelector null-derefs) and halt rendering. Hiding leaves the nodes
-# in place — worst case a re-render reverts the style and chrome reappears, no crash. <script> stays
-# intact for Tier-1 JSON-LD; the full _DOM_PRUNE_SCRIPT removes the hidden nodes later, post-Tier-1.
+# Chrome hider: injects a <style> that display:none's the _DOM_PRUNE_SCRIPT selectors MINUS
+# <script>/<noscript>, run before _wait_for_render. innerText (and checkVisibility) honor computed
+# style, so hidden chrome leaves the render-settle measurement — the gate tracks product content,
+# not nav/footer/cookie/promo chrome that renders early and would false-settle it.
+#
+# A *stylesheet rule* rather than removing nodes or setting inline styles, because:
+#   - non-destructive: nodes stay in the DOM, so removing-mid-hydration crashes (framework refs /
+#     querySelector null-derefs) can't happen;
+#   - reactive: the rule applies to *any* matching node, so SPA re-renders that tear down and recreate
+#     nav/banner/footer get hidden too — inline styles would be lost on the new nodes and let chrome
+#     back into innerText, re-settling the gate on chrome.
+# <script> stays intact for Tier-1 JSON-LD; the full _DOM_PRUNE_SCRIPT removes the hidden nodes
+# post-Tier-1. document.head may not exist this early, so fall back to documentElement.
 _HIDE_CHROME_SCRIPT = """() => {
+    const styleId = 'scraper-hide-chrome';
+    if (document.getElementById(styleId)) return;
     const selectors = [
         'nav', 'footer',
         '[class*="cookie"]', '[class*="banner"]', '[class*="ad-"]',
         '[id*="cookie"]', '[id*="popup"]'
     ];
-    selectors.forEach(s => document.querySelectorAll(s).forEach(el => { el.style.display = 'none'; }));
+    const style = document.createElement('style');
+    style.id = styleId;
+    style.textContent = selectors.map(s => s + ' { display: none !important; }').join('\\n');
+    (document.head || document.documentElement).appendChild(style);
 }"""
 
 # JavaScript run via page.evaluate() to extract structured price data. Tries
@@ -264,11 +275,12 @@ _HAS_PRICE_SIGNAL_SCRIPT = """() => {
     // Structured microdata/meta: a valid signal even when not visually rendered.
     if (document.querySelector('[itemprop="price"], meta[property="product:price:amount"]'))
         return true;
-    // Tier 2 heuristic: a [class*="price"] element, but only if actually visible. SPA
-    // shells ship hidden price skeletons/templates that would otherwise trip the gate at
-    // first paint, before the real product renders.
+    // Tier 2 heuristic: a [class*="price"] element, but only if it's visible AND holds a
+    // digit. Visibility skips hidden skeletons; the digit check skips *visible* empty
+    // skeletons/placeholders (e.g. <div class="price-skeleton">) that render before the
+    // price data is fetched — both would otherwise trip the gate before the price exists.
     for (const el of document.querySelectorAll('[class*="price"]'))
-        if (el.checkVisibility && el.checkVisibility()) return true;
+        if (el.checkVisibility && el.checkVisibility() && /[0-9]/.test(el.textContent || '')) return true;
     return false;
 }"""
 
@@ -607,7 +619,8 @@ async def scrape(request: ScrapeRequest):
 
         # Hide chrome (nav/footer/cookie/banner/ads) BEFORE the render-wait so the stabilization
         # signal tracks product content, not chrome that renders early and would false-settle the
-        # gate. display:none (not removal) so we don't crash the SPA's scripts mid-hydration; <script>
+        # gate. Injects a display:none stylesheet (not node removal / inline styles): non-destructive
+        # so SPA hydration can't crash, and reactive so re-rendered chrome stays hidden. <script>
         # stays intact for Tier-1 JSON-LD below.
         try:
             await page.evaluate(_HIDE_CHROME_SCRIPT)
