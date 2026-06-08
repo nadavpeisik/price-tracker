@@ -34,6 +34,23 @@ CI (`.github/workflows/ci.yml`) fails on formatting violations in **both** langu
 - **Java (backend):** `./mvnw spotless:apply` from `backend/`, then re-stage. CI runs `spotless:check` via `./mvnw verify`.
 - **Python (scraper):** ruff. CI runs `ruff check .` + `ruff format --check .`. A **pre-commit hook** (`.pre-commit-config.yaml`, ruff pinned to match CI) auto-fixes on commit — run `pre-commit install` once per clone (`pip install -e '.[dev]'` provides `pre-commit`). When the hook auto-fixes files the commit **aborts**: re-stage (`git add`) the fixed files and commit again. To fix manually instead: `cd scraper && ruff check --fix . && ruff format .`.
 
+## Local pre-commit review (Antigravity / Gemini)
+
+**After writing code and before committing**, run a local Gemini review so fixes land in the *same* commit (clean history) rather than as follow-up "address review" commits:
+
+```bash
+scripts/agy-review.sh            # everything not yet on origin/main (committed + uncommitted + new files)
+scripts/agy-review.sh --staged   # only what's staged
+```
+
+Workflow: **write code → `scripts/agy-review.sh` → surface the raw review → fix accepted findings → then commit.** This preserves the Gemini-bot review quality locally after the GitHub `gemini-code-assist` bot sunsets (2026-07-17). The script wraps the **Antigravity CLI** (`agy -p`), default model **Gemini 3.5 Flash (High)** (set `AGY_REVIEW_MODEL`, e.g. `Gemini 3.1 Pro (High)` off the free tier), and prints severity-tagged findings. On the free tier a quota/rate-limit shows as `REVIEW FAILED`, never as a clean review.
+
+Guardrails (mirror the agent-coordination model in issue #81):
+- **Read-only:** runs `agy --sandbox` — it can't edit/commit/push, only review. One owner per branch (Claude implements, Gemini critiques).
+- **Surface the raw review** to the user every time; **the human breaks ties** when Gemini and Claude disagree.
+- **Bounded rounds:** stop re-reviewing once a round yields no accepted findings (don't ping-pong).
+- **CI + SonarCloud remain the objective backstop** — this review is advisory, not a gate.
+
 ## Architecture
 
 **Layered architecture:** `Controller → Service → Repository → Domain`
