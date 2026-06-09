@@ -92,7 +92,11 @@ if [ "$#" -gt 0 ]; then
 else
   # Default: everything not yet on origin/main — committed AND uncommitted.
   if ! git rev-parse --verify --quiet HEAD >/dev/null; then
-    BASE=""
+    # No commits yet: diff against the empty tree so staged/tracked files are still
+    # reviewed. git mktree writes + returns this repo's empty tree (hash-agnostic and
+    # guaranteed to resolve; the well-known hardcoded SHA-1 empty tree does not resolve
+    # in every repo).
+    BASE="$(git mktree </dev/null)"
     RANGE_DESC="working tree (no commits yet)"
   elif git rev-parse --verify --quiet "$BASE_REF" >/dev/null &&
     BASE="$(git merge-base "$BASE_REF" HEAD 2>/dev/null)"; then
@@ -177,12 +181,15 @@ trap 'rm -f "$errfile"' EXIT
 
 before="$(git status --porcelain)"
 
-set +e
+# Build the agy args once; --sandbox is conditionally prepended (read-only by default).
+# The array is never empty, so "${agy_args[@]}" is safe under set -u on bash 3.2.
+agy_args=(--model "$MODEL" --print-timeout "$TIMEOUT" -p -)
 if [ "$SANDBOX" != "0" ]; then
-  OUTPUT="$(printf '%s' "$PROMPT" | agy --sandbox --model "$MODEL" --print-timeout "$TIMEOUT" -p - 2>"$errfile")"
-else
-  OUTPUT="$(printf '%s' "$PROMPT" | agy --model "$MODEL" --print-timeout "$TIMEOUT" -p - 2>"$errfile")"
+  agy_args=(--sandbox "${agy_args[@]}")
 fi
+
+set +e
+OUTPUT="$(printf '%s' "$PROMPT" | agy "${agy_args[@]}" 2>"$errfile")"
 status=$?
 set -e
 ERR="$(cat "$errfile")"
