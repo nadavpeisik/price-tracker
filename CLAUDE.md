@@ -39,6 +39,7 @@ CI (`.github/workflows/ci.yml`) fails on formatting violations in **both** langu
 **After writing code and before committing**, run a local Gemini review so fixes land in the *same* commit (clean history) rather than as follow-up "address review" commits:
 
 ```bash
+# Run from the repo root (price-tracker/), not backend/
 scripts/agy-review.sh            # everything not yet on origin/main (committed + uncommitted + new files)
 scripts/agy-review.sh --staged   # only what's staged
 ```

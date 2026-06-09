@@ -14,7 +14,7 @@ set -euo pipefail
 
 MODEL="${AGY_REVIEW_MODEL:-Gemini 3.5 Flash (High)}"
 TIMEOUT="${AGY_REVIEW_TIMEOUT:-240s}"
-SANDBOX="${AGY_REVIEW_SANDBOX:-1}" # 1 = run agy --sandbox (no command/file access); 0 = allow it
+SANDBOX="${AGY_REVIEW_SANDBOX:-1}" # sandbox ON unless explicitly "0" (fail-safe); 0 = allow agy command/file access
 BASE_REF="${AGY_REVIEW_BASE:-origin/main}"
 
 usage() {
@@ -31,16 +31,24 @@ Usage:
   scripts/agy-review.sh HEAD~3..HEAD    Review an explicit git range
   scripts/agy-review.sh -h | --help     Show this help
 
+Note: the script runs from the repo root, so explicit path arguments are resolved
+relative to the repo root (price-tracker/), not your current directory.
+
 Environment:
   AGY_REVIEW_MODEL    Model (default: "Gemini 3.5 Flash (High)"; switch to
                       "Gemini 3.1 Pro (High)" when off the free tier).
   AGY_REVIEW_TIMEOUT  agy --print-timeout value (default: 240s).
-  AGY_REVIEW_SANDBOX  1 (default) runs agy with --sandbox so it cannot run commands
-                      or edit files (defends against prompt injection in the diff);
-                      set 0 to let agy explore the repo for extra context.
+  AGY_REVIEW_SANDBOX  On by default — runs agy with --sandbox so it cannot run commands
+                      or edit files (defends against prompt injection in the diff).
+                      ONLY the value 0 disables it (fail-safe: a typo can't silently
+                      turn off the sandbox); set 0 to let agy explore for extra context.
   AGY_REVIEW_BASE     Base ref for the default range (default: origin/main).
   AGY_REVIEW_FETCH    1 (default) refreshes the base ref with a best-effort
                       'git fetch'; set 0 to skip (offline / slow remote).
+  AGY_REVIEW_MAX_FILE_BYTES
+                      Max size of an untracked file to include in full (default:
+                      102400 = 100 KiB). Larger untracked files are listed but their
+                      contents are skipped, to avoid bloating the prompt / quota.
 
 Exit codes:
   0    review produced (or nothing to review)
@@ -90,8 +98,10 @@ else
     BASE="$(git merge-base "$BASE_REF" HEAD 2>/dev/null)"; then
     RANGE_DESC="$BASE_REF → working tree (committed + uncommitted)"
   else
-    BASE="$(git rev-parse HEAD)"
-    RANGE_DESC="HEAD → working tree ($BASE_REF not found or unrelated; uncommitted only)"
+    echo "error: cannot determine a review base — '$BASE_REF' is missing locally or" >&2
+    echo "       shares no history with HEAD. Run 'git fetch', set AGY_REVIEW_BASE to" >&2
+    echo "       a valid ref, or pass an explicit range (e.g. HEAD~3..HEAD)." >&2
+    exit 1
   fi
 
   if [ -n "$BASE" ]; then
@@ -102,8 +112,26 @@ else
 
   # git diff ignores untracked files; append new files explicitly so they're reviewed.
   # -z + read -d '' handles paths with spaces / quotes / non-ASCII safely.
+  # Skip oversized untracked files (datasets, logs, build artifacts): dumping their
+  # full contents would bloat the prompt and burn quota for no review value.
+  max_untracked_bytes="${AGY_REVIEW_MAX_FILE_BYTES:-102400}" # 100 KiB
+  case "$max_untracked_bytes" in
+    '' | *[!0-9]*)
+      echo "error: AGY_REVIEW_MAX_FILE_BYTES must be a plain integer in bytes" >&2
+      echo "       (no suffixes like K/KB); got '$max_untracked_bytes'." >&2
+      exit 1
+      ;;
+  esac
   while IFS= read -r -d '' f; do
     [ -n "$f" ] || continue
+    if [ -f "$f" ]; then
+      size="$(wc -c 2>/dev/null <"$f" || echo 0)" # || echo 0 keeps set -e from killing us
+      size="${size//[[:space:]]/}"
+      if [ -n "$size" ] && [ "$size" -gt "$max_untracked_bytes" ]; then
+        DIFF+=$'\n'"--- $f (skipped: large untracked file, ${size} bytes) ---"
+        continue
+      fi
+    fi
     DIFF+=$'\n'"$(git diff -U15 --no-index -- /dev/null "$f" 2>/dev/null || true)"
   done < <(git ls-files -z --others --exclude-standard)
 fi
@@ -150,7 +178,7 @@ trap 'rm -f "$errfile"' EXIT
 before="$(git status --porcelain)"
 
 set +e
-if [ "$SANDBOX" = "1" ]; then
+if [ "$SANDBOX" != "0" ]; then
   OUTPUT="$(printf '%s' "$PROMPT" | agy --sandbox --model "$MODEL" --print-timeout "$TIMEOUT" -p - 2>"$errfile")"
 else
   OUTPUT="$(printf '%s' "$PROMPT" | agy --model "$MODEL" --print-timeout "$TIMEOUT" -p - 2>"$errfile")"
@@ -191,10 +219,20 @@ if [ "$status" -ne 0 ] || printf '%s' "$ERR" | grep -qiE \
   exit 2
 fi
 
-# --- read-only safety net: warn if agy mutated the working tree ---------------
+# --- read-only safety net: fail if agy mutated the working tree ---------------
+# A read-only review must never change files. If the tree changed, --sandbox failed to
+# contain agy; treat it as a hard failure so a caller can't mistake a tampered run for a
+# clean review and commit from a mutated state.
 if [ "$before" != "$after" ]; then
-  echo "WARNING: the working tree changed during the review — agy may have modified" >&2
-  echo "files despite the read-only mandate. Inspect with 'git status' / 'git diff'." >&2
+  {
+    echo "============== REVIEW FAILED (read-only violation) =============="
+    echo "The working tree changed during the review — agy modified files despite the"
+    echo "read-only mandate (--sandbox), or a concurrent process edited tracked files"
+    echo "mid-review. Inspect with 'git status' / 'git diff' and do NOT commit until the"
+    echo "cause is confirmed: this is NOT a valid review."
+    echo "================================================================"
+  } >&2
+  exit 2
 fi
 
 # --- emit the review ---------------------------------------------------------
