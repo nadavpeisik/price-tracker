@@ -52,6 +52,27 @@ Guardrails (mirror the agent-coordination model in issue #81):
 - **Bounded rounds:** stop re-reviewing once a round yields no accepted findings (don't ping-pong).
 - **CI + SonarCloud remain the objective backstop** — this review is advisory, not a gate.
 
+## Local plan review (Antigravity / Gemini)
+
+One step earlier than the diff review: **before implementing a new code-implementation plan, review the *plan* itself.** Catching a flawed approach at the plan stage is far cheaper than catching it in code review.
+
+**When:** in plan mode, for plans that involve writing code — after the plan file is written, **before** calling `ExitPlanMode`. Skip it for trivial/non-code plans (research-only, config tweaks, doc edits).
+
+```bash
+# Run from the repo root (price-tracker/), not backend/
+scripts/agy-plan-review.sh ~/.claude/plans/<plan-file>.md   # review a specific plan
+scripts/agy-plan-review.sh                                  # review the newest plan in ~/.claude/plans
+scripts/agy-plan-review.sh -                                # review plan content from stdin
+```
+
+Workflow: **write plan → `scripts/agy-plan-review.sh` → surface the raw review → human decides (implement as-is / revise the plan / dismiss) → then `ExitPlanMode`.** Same `agy` wrapper as the diff review (shares `AGY_REVIEW_MODEL` / `AGY_REVIEW_TIMEOUT` / `AGY_REVIEW_SANDBOX`; plan dir overridable via `AGY_PLAN_DIR`); prints severity-tagged findings ending in a `VERDICT:` line. On the free tier a quota/rate-limit shows as `REVIEW FAILED`, never as a clean review.
+
+Guardrails (same model as the diff review and issue #81):
+- **Read-only:** runs `agy --sandbox` — it can't edit/commit/push, only review (set `AGY_REVIEW_SANDBOX=0` to let it read the codebase for richer plan critique).
+- **Surface the raw review** to the user every time; **the human breaks ties** when Gemini and Claude disagree.
+- **Bounded rounds:** stop re-reviewing once a round yields no accepted findings (don't ping-pong).
+- **Advisory, not a gate** — the human approves the plan via `ExitPlanMode`, not Gemini.
+
 ## Architecture
 
 **Layered architecture:** `Controller → Service → Repository → Domain`

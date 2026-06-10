@@ -179,7 +179,13 @@ $DIFF"
 errfile="$(mktemp)"
 trap 'rm -f "$errfile"' EXIT
 
-before="$(git status --porcelain)"
+# Baseline of TRACKED files only (-uno): a read-only review must not mutate tracked files.
+# Untracked files are excluded so unrelated concurrent churn (e.g. a co-running tool
+# regenerating an untracked file mid-review) can't trip a false "read-only violation"; agy
+# creating a brand-new file is already prevented by --sandbox. The `&& git diff` appends the
+# actual tracked content, so re-editing an already-modified file (whose status flag alone
+# wouldn't change) is still caught.
+before="$(git status --porcelain -uno && git diff)"
 
 # Build the agy args once; --sandbox is conditionally prepended (read-only by default).
 # The array is never empty, so "${agy_args[@]}" is safe under set -u on bash 3.2.
@@ -194,7 +200,7 @@ status=$?
 set -e
 ERR="$(cat "$errfile")"
 
-after="$(git status --porcelain)"
+after="$(git status --porcelain -uno && git diff)"
 
 # --- user abort (Ctrl+C) -----------------------------------------------------
 if [ "$status" -eq 130 ]; then
@@ -209,7 +215,7 @@ fi
 # 59 remaining") won't trip them. NOTE: stderr is scanned even when status==0 because
 # agy's exit code on a real quota error is not yet confirmed; revisit once observed.
 if [ "$status" -ne 0 ] || printf '%s' "$ERR" | grep -qiE \
-  'resource[_ ]?exhausted|rate[ _-]?limit(ed| exceeded| reached)|quota exceeded|exceeded your[^.]*quota|too many requests|\b429\b|unauthenticated|authentication failed|invalid api key'; then
+  'resource[_ ]?exhausted|rate[ _-]?limit(ed| exceeded| reached)|quota exceeded|exceeded your[^.]*quota|too many requests|(^|[^0-9])429([^0-9]|$)|unauthenticated|authentication failed|invalid api key'; then
   {
     echo "================ REVIEW FAILED (quota/error) ================"
     echo "agy exit status: $status   model: $MODEL"
