@@ -182,8 +182,10 @@ trap 'rm -f "$errfile"' EXIT
 # Baseline of TRACKED files only (-uno): a read-only review must not mutate tracked files.
 # Untracked files are excluded so unrelated concurrent churn (e.g. a co-running tool
 # regenerating an untracked file mid-review) can't trip a false "read-only violation"; agy
-# creating a brand-new file is already prevented by --sandbox.
-before="$(git status --porcelain -uno)"
+# creating a brand-new file is already prevented by --sandbox. The `&& git diff` appends the
+# actual tracked content, so re-editing an already-modified file (whose status flag alone
+# wouldn't change) is still caught.
+before="$(git status --porcelain -uno && git diff)"
 
 # Build the agy args once; --sandbox is conditionally prepended (read-only by default).
 # The array is never empty, so "${agy_args[@]}" is safe under set -u on bash 3.2.
@@ -198,7 +200,7 @@ status=$?
 set -e
 ERR="$(cat "$errfile")"
 
-after="$(git status --porcelain -uno)"
+after="$(git status --porcelain -uno && git diff)"
 
 # --- user abort (Ctrl+C) -----------------------------------------------------
 if [ "$status" -eq 130 ]; then
