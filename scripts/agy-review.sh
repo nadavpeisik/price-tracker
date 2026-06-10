@@ -213,7 +213,7 @@ fi
 # 59 remaining") won't trip them. NOTE: stderr is scanned even when status==0 because
 # agy's exit code on a real quota error is not yet confirmed; revisit once observed.
 if [ "$status" -ne 0 ] || printf '%s' "$ERR" | grep -qiE \
-  'resource[_ ]?exhausted|rate[ _-]?limit(ed| exceeded| reached)|quota exceeded|exceeded your[^.]*quota|too many requests|\b429\b|unauthenticated|authentication failed|invalid api key'; then
+  'resource[_ ]?exhausted|rate[ _-]?limit(ed| exceeded| reached)|quota exceeded|exceeded your[^.]*quota|too many requests|(^|[^0-9])429([^0-9]|$)|unauthenticated|authentication failed|invalid api key'; then
   {
     echo "================ REVIEW FAILED (quota/error) ================"
     echo "agy exit status: $status   model: $MODEL"
