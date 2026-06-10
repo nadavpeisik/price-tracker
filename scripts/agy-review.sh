@@ -179,7 +179,11 @@ $DIFF"
 errfile="$(mktemp)"
 trap 'rm -f "$errfile"' EXIT
 
-before="$(git status --porcelain)"
+# Baseline of TRACKED files only (-uno): a read-only review must not mutate tracked files.
+# Untracked files are excluded so unrelated concurrent churn (e.g. a co-running tool
+# regenerating an untracked file mid-review) can't trip a false "read-only violation"; agy
+# creating a brand-new file is already prevented by --sandbox.
+before="$(git status --porcelain -uno)"
 
 # Build the agy args once; --sandbox is conditionally prepended (read-only by default).
 # The array is never empty, so "${agy_args[@]}" is safe under set -u on bash 3.2.
@@ -194,7 +198,7 @@ status=$?
 set -e
 ERR="$(cat "$errfile")"
 
-after="$(git status --porcelain)"
+after="$(git status --porcelain -uno)"
 
 # --- user abort (Ctrl+C) -----------------------------------------------------
 if [ "$status" -eq 130 ]; then
