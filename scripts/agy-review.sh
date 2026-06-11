@@ -15,6 +15,7 @@ set -euo pipefail
 MODEL="${AGY_REVIEW_MODEL:-Gemini 3.5 Flash (High)}"
 TIMEOUT="${AGY_REVIEW_TIMEOUT:-240s}"
 SANDBOX="${AGY_REVIEW_SANDBOX:-1}" # sandbox ON unless explicitly "0" (fail-safe); 0 = allow agy command/file access
+MAX_UNTRACKED_BYTES="${AGY_REVIEW_MAX_FILE_BYTES:-102400}" # bounds the SANDBOX=0 untracked-file snapshot below
 
 usage() {
   cat <<'EOF'
@@ -48,6 +49,9 @@ Environment:
                       Max size of an untracked file to include in full (default:
                       102400 = 100 KiB). Larger untracked files are listed but their
                       contents are skipped, to avoid bloating the prompt / quota.
+                      Also bounds the SANDBOX=0 safety-net snapshot below: untracked
+                      files over this size are recorded by size instead of content
+                      hash, so one large local artifact can't dominate the run.
 
 Exit codes:
   0    review produced (or nothing to review)
@@ -139,8 +143,10 @@ trap 'rm -f "$errfile"' EXIT
 # is caught too.
 #
 # When AGY_REVIEW_SANDBOX=0 (explicit opt-out), agy CAN create/edit untracked files,
-# which -uno alone would miss — so in that mode also hash every untracked file's
-# path + content.
+# which -uno alone would miss — so in that mode also record each untracked file's
+# path + content hash. Files over MAX_UNTRACKED_BYTES (the same bound
+# get-review-diff.sh uses for prompt content) are recorded by size instead of
+# hashed, so one large local artifact can't make this snapshot dominate the run.
 snapshot_state() {
   git status --porcelain -uno
   git diff
@@ -148,7 +154,14 @@ snapshot_state() {
   if [ "$SANDBOX" = "0" ]; then
     git ls-files -z --others --exclude-standard |
       while IFS= read -r -d '' f; do
-        printf '%s  %s\n' "$(git hash-object -- "$f")" "$f"
+        [ -r "$f" ] || continue # skip files that are gone or unreadable (TOCTOU); also prevents set -e from killing us
+        size="$(wc -c 2>/dev/null <"$f" || echo 0)"
+        size="${size//[[:space:]]/}"
+        if [ "$size" -gt "$MAX_UNTRACKED_BYTES" ]; then
+          printf 'size:%s  %s\n' "$size" "$f"
+        else
+          printf '%s  %s\n' "$(git hash-object -- "$f")" "$f"
+        fi
       done | sort
   fi
 }
