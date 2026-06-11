@@ -15,7 +15,6 @@ set -euo pipefail
 MODEL="${AGY_REVIEW_MODEL:-Gemini 3.5 Flash (High)}"
 TIMEOUT="${AGY_REVIEW_TIMEOUT:-240s}"
 SANDBOX="${AGY_REVIEW_SANDBOX:-1}" # sandbox ON unless explicitly "0" (fail-safe); 0 = allow agy command/file access
-BASE_REF="${AGY_REVIEW_BASE:-origin/main}"
 
 usage() {
   cat <<'EOF'
@@ -78,67 +77,17 @@ git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
 cd -- "$(git rev-parse --show-toplevel)"
 
 # --- compute the diff --------------------------------------------------------
-# Best-effort refresh so the comparison reflects the real remote; never fail or hang.
-# GIT_TERMINAL_PROMPT=0 makes auth fail fast instead of prompting; AGY_REVIEW_FETCH=0
-# skips the fetch entirely (offline / slow remote).
-if [ "${AGY_REVIEW_FETCH:-1}" = "1" ]; then
-  GIT_TERMINAL_PROMPT=0 git fetch --quiet origin 2>/dev/null || true
-fi
+# Delegates to get-review-diff.sh so every reviewer (agy, codex, ...) sees the exact
+# same diff text. The env assignments must live inside the command substitution — a
+# bare prefix has no command name, so bash would treat them as ordinary shell
+# variables and never export them to get-review-diff.sh's process.
+RAW="$(REVIEW_BASE="${AGY_REVIEW_BASE:-origin/main}" \
+  REVIEW_FETCH="${AGY_REVIEW_FETCH:-1}" \
+  REVIEW_MAX_UNTRACKED_BYTES="${AGY_REVIEW_MAX_FILE_BYTES:-102400}" \
+  scripts/get-review-diff.sh "$@")"
 
-if [ "$#" -gt 0 ]; then
-  # Caller supplied explicit git-diff args/range (e.g. --staged, or A..B).
-  RANGE_DESC="git diff $*"
-  DIFF="$(git diff -U15 "$@")"
-else
-  # Default: everything not yet on origin/main — committed AND uncommitted.
-  if ! git rev-parse --verify --quiet HEAD >/dev/null; then
-    # No commits yet: diff against the empty tree so staged/tracked files are still
-    # reviewed. git mktree writes + returns this repo's empty tree (hash-agnostic and
-    # guaranteed to resolve; the well-known hardcoded SHA-1 empty tree does not resolve
-    # in every repo).
-    BASE="$(git mktree </dev/null)"
-    RANGE_DESC="working tree (no commits yet)"
-  elif git rev-parse --verify --quiet "$BASE_REF" >/dev/null &&
-    BASE="$(git merge-base "$BASE_REF" HEAD 2>/dev/null)"; then
-    RANGE_DESC="$BASE_REF → working tree (committed + uncommitted)"
-  else
-    echo "error: cannot determine a review base — '$BASE_REF' is missing locally or" >&2
-    echo "       shares no history with HEAD. Run 'git fetch', set AGY_REVIEW_BASE to" >&2
-    echo "       a valid ref, or pass an explicit range (e.g. HEAD~3..HEAD)." >&2
-    exit 1
-  fi
-
-  if [ -n "$BASE" ]; then
-    DIFF="$(git diff -U15 "$BASE")"
-  else
-    DIFF=""
-  fi
-
-  # git diff ignores untracked files; append new files explicitly so they're reviewed.
-  # -z + read -d '' handles paths with spaces / quotes / non-ASCII safely.
-  # Skip oversized untracked files (datasets, logs, build artifacts): dumping their
-  # full contents would bloat the prompt and burn quota for no review value.
-  max_untracked_bytes="${AGY_REVIEW_MAX_FILE_BYTES:-102400}" # 100 KiB
-  case "$max_untracked_bytes" in
-    '' | *[!0-9]*)
-      echo "error: AGY_REVIEW_MAX_FILE_BYTES must be a plain integer in bytes" >&2
-      echo "       (no suffixes like K/KB); got '$max_untracked_bytes'." >&2
-      exit 1
-      ;;
-  esac
-  while IFS= read -r -d '' f; do
-    [ -n "$f" ] || continue
-    if [ -f "$f" ]; then
-      size="$(wc -c 2>/dev/null <"$f" || echo 0)" # || echo 0 keeps set -e from killing us
-      size="${size//[[:space:]]/}"
-      if [ -n "$size" ] && [ "$size" -gt "$max_untracked_bytes" ]; then
-        DIFF+=$'\n'"--- $f (skipped: large untracked file, ${size} bytes) ---"
-        continue
-      fi
-    fi
-    DIFF+=$'\n'"$(git diff -U15 --no-index -- /dev/null "$f" 2>/dev/null || true)"
-  done < <(git ls-files -z --others --exclude-standard)
-fi
+RANGE_DESC="$(head -n 1 <<<"$RAW" | sed 's/^# RANGE: //')"
+DIFF="$(tail -n +3 <<<"$RAW")"
 
 if ! grep -q '[^[:space:]]' <<<"$DIFF"; then
   echo "Nothing to review (empty diff for: $RANGE_DESC)."
@@ -184,8 +133,9 @@ trap 'rm -f "$errfile"' EXIT
 # regenerating an untracked file mid-review) can't trip a false "read-only violation"; agy
 # creating a brand-new file is already prevented by --sandbox. The `&& git diff` appends the
 # actual tracked content, so re-editing an already-modified file (whose status flag alone
-# wouldn't change) is still caught.
-before="$(git status --porcelain -uno && git diff)"
+# wouldn't change) is still caught. `&& git diff --cached` does the same for staged content,
+# so a sandbox-escape that only touches the index (e.g. a stray `git add`) is caught too.
+before="$(git status --porcelain -uno && git diff && git diff --cached)"
 
 # Build the agy args once; --sandbox is conditionally prepended (read-only by default).
 # The array is never empty, so "${agy_args[@]}" is safe under set -u on bash 3.2.
@@ -200,7 +150,7 @@ status=$?
 set -e
 ERR="$(cat "$errfile")"
 
-after="$(git status --porcelain -uno && git diff)"
+after="$(git status --porcelain -uno && git diff && git diff --cached)"
 
 # --- user abort (Ctrl+C) -----------------------------------------------------
 if [ "$status" -eq 130 ]; then
