@@ -11,7 +11,7 @@ clones need `git config core.symlinks true` (set *before* checkout), or `AGENTS.
 checks out as a one-line text file containing the literal string `CLAUDE.md` instead
 of a working symlink; verify with `cat AGENTS.md` after checkout if in doubt.
 
-```
+```text
 price-tracker/
 ├── compose.yaml      ← orchestrates postgres, scraper, and grafana (Ollama runs natively, not via Compose)
 ├── backend/          ← Spring Boot backend

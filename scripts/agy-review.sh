@@ -128,14 +128,32 @@ $DIFF"
 errfile="$(mktemp)"
 trap 'rm -f "$errfile"' EXIT
 
-# Baseline of TRACKED files only (-uno): a read-only review must not mutate tracked files.
-# Untracked files are excluded so unrelated concurrent churn (e.g. a co-running tool
-# regenerating an untracked file mid-review) can't trip a false "read-only violation"; agy
-# creating a brand-new file is already prevented by --sandbox. The `&& git diff` appends the
-# actual tracked content, so re-editing an already-modified file (whose status flag alone
-# wouldn't change) is still caught. `&& git diff --cached` does the same for staged content,
-# so a sandbox-escape that only touches the index (e.g. a stray `git add`) is caught too.
-before="$(git status --porcelain -uno && git diff && git diff --cached)"
+# Snapshot tracked-file state (status + unstaged + staged diffs) so a read-only
+# review never mutates tracked files. Untracked files are normally excluded (-uno):
+# unrelated concurrent churn (e.g. a co-running tool regenerating an untracked file
+# mid-review) can't trip a false "read-only violation", and the default --sandbox
+# already prevents agy from creating new files. The `&& git diff` appends the actual
+# tracked content, so re-editing an already-modified file (whose status flag alone
+# wouldn't change) is still caught. `&& git diff --cached` does the same for staged
+# content, so a sandbox-escape that only touches the index (e.g. a stray `git add`)
+# is caught too.
+#
+# When AGY_REVIEW_SANDBOX=0 (explicit opt-out), agy CAN create/edit untracked files,
+# which -uno alone would miss — so in that mode also hash every untracked file's
+# path + content.
+snapshot_state() {
+  git status --porcelain -uno
+  git diff
+  git diff --cached
+  if [ "$SANDBOX" = "0" ]; then
+    git ls-files -z --others --exclude-standard |
+      while IFS= read -r -d '' f; do
+        printf '%s  %s\n' "$(git hash-object -- "$f")" "$f"
+      done | sort
+  fi
+}
+
+before="$(snapshot_state)"
 
 # Build the agy args once; --sandbox is conditionally prepended (read-only by default).
 # The array is never empty, so "${agy_args[@]}" is safe under set -u on bash 3.2.
@@ -150,7 +168,7 @@ status=$?
 set -e
 ERR="$(cat "$errfile")"
 
-after="$(git status --porcelain -uno && git diff && git diff --cached)"
+after="$(snapshot_state)"
 
 # --- user abort (Ctrl+C) -----------------------------------------------------
 if [ "$status" -eq 130 ]; then
