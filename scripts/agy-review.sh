@@ -160,7 +160,8 @@ snapshot_state() {
         if [ "$size" -gt "$MAX_UNTRACKED_BYTES" ]; then
           printf 'size:%s  %s\n' "$size" "$f"
         else
-          printf '%s  %s\n' "$(git hash-object -- "$f")" "$f"
+          hash="$(git hash-object -- "$f" 2>/dev/null || true)"
+          [ -n "$hash" ] && printf '%s  %s\n' "$hash" "$f"
         fi
       done | sort
   fi
