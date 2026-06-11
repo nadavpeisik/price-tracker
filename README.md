@@ -127,7 +127,7 @@ Base path: `/api/products`
 - [x] **Phase 1** — Synchronous HTTP pipeline: URL in → price in Postgres.
 - [x] **Phase 1.5** — Extraction waterfall: DOM pruning + structured/selector/regex tiers. Eliminates LLM calls for most major retailers.
 - [x] **CRUD API** — Full product + tracked-item lifecycle, paginated listing, price-history with date filtering.
-- [x] **CI** — Backend + scraper tests on every PR; nightly canary against real sites.
+- [x] **CI** — Backend + scraper tests on every PR; nightly canary against real sites (bot-wall blocks tolerated as warnings, not failures).
 - [ ] **Phase 1.6** — Selector caching: when the LLM fires, store the CSS selector on the tracked item; future checks skip the waterfall and self-heal if the selector stops returning data.
 - [ ] **Phase 1.7** — SSRF hardening: reject private IP ranges and cloud metadata endpoints at the user-input boundary before dispatching scrape requests.
 - [ ] **Phase 2** — Async Kafka pipeline; replace the synchronous scraper call with `ScrapeRequested` / `ScrapeCompleted` events. `POST /track` returns `202 Accepted` immediately.
@@ -146,7 +146,7 @@ playwright install --with-deps chromium
 pytest -v
 ```
 
-CI runs both suites on every pull request and push to `main` (`.github/workflows/ci.yml`). A separate nightly workflow (`.github/workflows/e2e-nightly.yml`) hits live URLs at Thomann and string6 and asserts that extraction still resolves to the structured tier — catching upstream HTML drift before it becomes a production surprise.
+CI runs both suites on every pull request and push to `main` (`.github/workflows/ci.yml`). A separate nightly workflow (`.github/workflows/e2e-nightly.yml`) hits live URLs at Thomann, string6, and Wild Guitars and asserts that extraction still resolves to the structured tier — catching upstream HTML drift before it becomes a production surprise. A Cloudflare/bot-wall `blocked` response is treated as an informational `::warning::` rather than a failure: the runner's datacenter IP gets walled by default, which is environmental, not a regression in our extraction logic (the shared check lives in `scraper/canary_assert.py`, unit-tested in CI).
 
 ## License
 

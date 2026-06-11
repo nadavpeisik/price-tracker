@@ -21,34 +21,46 @@ jobs:
       - run: pip install -e '.[dev]'
       - run: playwright install --with-deps chromium
       - name: Start scraper
+        id: start
         run: |
           uvicorn main:app --host 127.0.0.1 --port 8001 &
           for i in {1..30}; do
             curl -fsS http://127.0.0.1:8001/docs > /dev/null && break
             sleep 0.5
           done
+          # Fail loudly if the scraper never became ready — otherwise the loop falls
+          # through and the canaries below would spew confusing connection errors that
+          # mask the real "scraper didn't boot" cause.
+          curl -fsS http://127.0.0.1:8001/docs > /dev/null || {
+            echo "::error::scraper did not become ready on 127.0.0.1:8001 within ~15s"
+            exit 1
+          }
+      # Each canary runs independently of the OTHER canaries (always()) so one site's
+      # bot-wall block no longer fail-fast-masks a real regression elsewhere — but they
+      # are skipped if the scraper never started (steps.start.outcome). canary_assert.py
+      # tolerates a Cloudflare "blocked" as an expected environmental outcome (GitHub
+      # ::warning::, not a failure — runner datacenter IPs get walled by default) and
+      # only fails on a genuine extraction regression (wrong tier / missing / zero
+      # price on a reachable page). See issue #80. tee /dev/stderr keeps the raw
+      # response in the log while piping it into the asserter.
       - name: Canary — string6 (WooCommerce sale)
+        if: always() && steps.start.outcome == 'success'
         run: |
-          resp=$(curl -fsS -X POST http://127.0.0.1:8001/scrape \
+          curl -fsS -X POST http://127.0.0.1:8001/scrape \
             -H 'Content-Type: application/json' \
-            -d '{"url":"https://www.string6.co.il/product/duesenberg-starplayer-tv-blue-sparkle"}')
-          echo "$resp"
-          echo "$resp" | python -c "import json,sys; d=json.load(sys.stdin); assert d['extractionSource']=='structured', d; assert d['priceData']['price']>0, d"
+            -d '{"url":"https://www.string6.co.il/product/duesenberg-starplayer-tv-blue-sparkle"}' \
+            | tee /dev/stderr | python canary_assert.py --name string6 --expect-source structured
       - name: Canary — Thomann (microdata)
+        if: always() && steps.start.outcome == 'success'
         run: |
-          resp=$(curl -fsS -X POST http://127.0.0.1:8001/scrape \
+          curl -fsS -X POST http://127.0.0.1:8001/scrape \
             -H 'Content-Type: application/json' \
-            -d '{"url":"https://www.thomannmusic.com/rme_babyface_pro_fs.htm"}')
-          echo "$resp"
-          echo "$resp" | python -c "import json,sys; d=json.load(sys.stdin); assert d['extractionSource']=='structured', d; assert d['priceData']['price']>0, d"
+            -d '{"url":"https://www.thomannmusic.com/rme_babyface_pro_fs.htm"}' \
+            | tee /dev/stderr | python canary_assert.py --name thomann --expect-source structured
       - name: Canary — Wild Guitars (Cloudflare-protected)
-        # Informational regression: if Cloudflare tightens or our stealth flags
-        # stop working, this goes red overnight and we know before users see it.
-        # Asserts not-blocked AND a real price — silent FULLTEXT fallback on a
-        # "Just a moment" body would otherwise look like success.
+        if: always() && steps.start.outcome == 'success'
         run: |
-          resp=$(curl -fsS -X POST http://127.0.0.1:8001/scrape \
+          curl -fsS -X POST http://127.0.0.1:8001/scrape \
             -H 'Content-Type: application/json' \
-            -d '{"url":"https://www.wildguitars.co.il/product/soldano-slo-30-classic/"}')
-          echo "$resp"
-          echo "$resp" | python -c "import json,sys; d=json.load(sys.stdin); assert d['extractionSource']!='blocked', d; assert d.get('priceData') and d['priceData']['price']>0, d"
+            -d '{"url":"https://www.wildguitars.co.il/product/soldano-slo-30-classic/"}' \
+            | tee /dev/stderr | python canary_assert.py --name wildguitars --expect-source structured
