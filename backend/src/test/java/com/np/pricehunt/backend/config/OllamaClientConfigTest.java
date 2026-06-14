@@ -79,9 +79,19 @@ class OllamaClientConfigTest {
         return (Duration) readField(factory, "readTimeout");
     }
 
+    // Walk up the class hierarchy: the fields we read are declared on the concrete classes today,
+    // but traversing superclasses keeps this robust if a future Spring/Spring AI release moves one
+    // onto a base class. A genuine rename still fails loudly (NoSuchFieldException at the end).
     private static Object readField(Object target, String name) throws Exception {
-        Field field = target.getClass().getDeclaredField(name);
-        field.setAccessible(true);
-        return field.get(target);
+        for (Class<?> clazz = target.getClass(); clazz != null; clazz = clazz.getSuperclass()) {
+            try {
+                Field field = clazz.getDeclaredField(name);
+                field.setAccessible(true);
+                return field.get(target);
+            } catch (NoSuchFieldException keepWalking) {
+                // try the superclass
+            }
+        }
+        throw new NoSuchFieldException(name + " not found on " + target.getClass() + " or its superclasses");
     }
 }
