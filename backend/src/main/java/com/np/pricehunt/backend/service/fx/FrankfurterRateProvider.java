@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.np.pricehunt.backend.config.CurrencyProperties;
 import com.np.pricehunt.backend.config.RestClientFactories;
 import java.math.BigDecimal;
+import java.net.http.HttpClient;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.util.Map;
@@ -22,11 +23,14 @@ public class FrankfurterRateProvider {
     public FrankfurterRateProvider(RestClient.Builder restClientBuilder, CurrencyProperties properties) {
         // clone() before mutating: RestClient.Builder is a shared Spring bean — calling
         // requestFactory() directly on it would set these timeouts on every other consumer too.
+        // HTTP_2 is fine here (unlike the cleartext scraper): these are HTTPS endpoints, so the version is
+        // negotiated via ALPN with a clean HTTP/1.1 fallback — no cleartext h2c upgrade to break on.
         this.restClient = restClientBuilder
                 .clone()
                 .requestFactory(RestClientFactories.timed(
                         Duration.ofMillis(properties.fx().connectTimeoutMs()),
-                        Duration.ofMillis(properties.fx().readTimeoutMs())))
+                        Duration.ofMillis(properties.fx().readTimeoutMs()),
+                        HttpClient.Version.HTTP_2))
                 .build();
         this.primaryUrl = properties.fx().primaryUrl();
         this.fallbackUrl = properties.fx().fallbackUrl();
