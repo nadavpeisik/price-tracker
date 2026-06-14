@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.np.pricehunt.backend.config.CurrencyProperties;
 import java.math.BigDecimal;
+import java.time.Duration;
 import org.junit.jupiter.api.Test;
 import org.springframework.web.client.RestClient;
 
@@ -16,7 +17,12 @@ class FrankfurterRateProviderTest {
         CurrencyProperties props = new CurrencyProperties(
                 "ILS",
                 BigDecimal.ZERO,
-                new CurrencyProperties.Fx("https://primary", "https://fallback", "0 30 16 * * *", 5000, 10000));
+                new CurrencyProperties.Fx(
+                        "https://primary",
+                        "https://fallback",
+                        "0 30 16 * * *",
+                        Duration.ofSeconds(5),
+                        Duration.ofSeconds(10)));
         assertThat(new FrankfurterRateProvider(RestClient.builder(), props)).isNotNull();
     }
 }

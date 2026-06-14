@@ -1,6 +1,7 @@
 package com.np.pricehunt.backend.config;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 
@@ -13,6 +14,6 @@ public record CurrencyProperties(
             @DefaultValue("https://api.frankfurter.dev/v1/latest?base=EUR") String primaryUrl,
             @DefaultValue("https://api.exchangerate.host/latest?base=EUR") String fallbackUrl,
             @DefaultValue("0 30 16 * * *") String refreshCron,
-            @DefaultValue("5000") long connectTimeoutMs,
-            @DefaultValue("10000") long readTimeoutMs) {}
+            @DefaultValue("5s") Duration connectTimeout,
+            @DefaultValue("10s") Duration readTimeout) {}
 }

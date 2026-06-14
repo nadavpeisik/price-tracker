@@ -5,7 +5,6 @@ import com.np.pricehunt.backend.config.RestClientFactories;
 import com.np.pricehunt.backend.config.ScraperClientProperties;
 import com.np.pricehunt.backend.dto.ScrapeResponse;
 import java.net.http.HttpClient;
-import java.time.Duration;
 import java.util.UUID;
 import org.slf4j.MDC;
 import org.springframework.stereotype.Component;
@@ -26,9 +25,7 @@ public class ScraperClient {
                 .clone()
                 .baseUrl(properties.baseUrl())
                 .requestFactory(RestClientFactories.timed(
-                        Duration.ofMillis(properties.connectTimeoutMs()),
-                        Duration.ofMillis(properties.readTimeoutMs()),
-                        HttpClient.Version.HTTP_1_1))
+                        properties.connectTimeout(), properties.readTimeout(), HttpClient.Version.HTTP_1_1))
                 .build();
     }
 

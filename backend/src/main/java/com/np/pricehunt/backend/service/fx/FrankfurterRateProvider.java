@@ -5,7 +5,6 @@ import com.np.pricehunt.backend.config.CurrencyProperties;
 import com.np.pricehunt.backend.config.RestClientFactories;
 import java.math.BigDecimal;
 import java.net.http.HttpClient;
-import java.time.Duration;
 import java.time.LocalDate;
 import java.util.Map;
 import lombok.extern.slf4j.Slf4j;
@@ -28,9 +27,7 @@ public class FrankfurterRateProvider {
         this.restClient = restClientBuilder
                 .clone()
                 .requestFactory(RestClientFactories.timed(
-                        Duration.ofMillis(properties.fx().connectTimeoutMs()),
-                        Duration.ofMillis(properties.fx().readTimeoutMs()),
-                        HttpClient.Version.HTTP_2))
+                        properties.fx().connectTimeout(), properties.fx().readTimeout(), HttpClient.Version.HTTP_2))
                 .build();
         this.primaryUrl = properties.fx().primaryUrl();
         this.fallbackUrl = properties.fx().fallbackUrl();
