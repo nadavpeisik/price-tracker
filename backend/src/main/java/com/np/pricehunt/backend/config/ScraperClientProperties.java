@@ -1,5 +1,6 @@
 package com.np.pricehunt.backend.config;
 
+import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 
@@ -15,5 +16,5 @@ public record ScraperClientProperties(
         // A missing value in prod would fall back to localhost rather than fail fast — acceptable
         // for now; tighten with @Validated/@NotBlank only if a real misconfig risk appears.
         @DefaultValue("http://localhost:8001") String baseUrl,
-        @DefaultValue("5000") long connectTimeoutMs,
-        @DefaultValue("40000") long readTimeoutMs) {}
+        @DefaultValue("5s") Duration connectTimeout,
+        @DefaultValue("40s") Duration readTimeout) {}

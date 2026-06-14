@@ -1,7 +1,6 @@
 package com.np.pricehunt.backend.config;
 
 import java.net.http.HttpClient;
-import java.time.Duration;
 import org.springframework.ai.model.ollama.autoconfigure.OllamaConnectionDetails;
 import org.springframework.ai.ollama.api.OllamaApi;
 import org.springframework.beans.factory.ObjectProvider;
@@ -64,9 +63,6 @@ public class OllamaClientConfig {
 
     // Package-private so the unit test can assert the factory without going through OllamaApi.
     static JdkClientHttpRequestFactory applyTimeouts(OllamaClientProperties props) {
-        return RestClientFactories.timed(
-                Duration.ofMillis(props.connectTimeoutMs()),
-                Duration.ofMillis(props.readTimeoutMs()),
-                HttpClient.Version.HTTP_1_1);
+        return RestClientFactories.timed(props.connectTimeout(), props.readTimeout(), HttpClient.Version.HTTP_1_1);
     }
 }

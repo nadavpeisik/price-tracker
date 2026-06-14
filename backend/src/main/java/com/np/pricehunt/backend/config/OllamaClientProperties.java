@@ -1,5 +1,6 @@
 package com.np.pricehunt.backend.config;
 
+import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 
@@ -15,4 +16,4 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  */
 @ConfigurationProperties("pricehunt.ollama")
 public record OllamaClientProperties(
-        @DefaultValue("5000") long connectTimeoutMs, @DefaultValue("120000") long readTimeoutMs) {}
+        @DefaultValue("5s") Duration connectTimeout, @DefaultValue("120s") Duration readTimeout) {}

@@ -6,6 +6,7 @@ import static org.mockito.Mockito.when;
 import com.np.pricehunt.backend.config.CurrencyProperties;
 import java.math.BigDecimal;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.Map;
@@ -192,7 +193,9 @@ class PriceConverterTest {
 
     private PriceConverter newConverter(String marginPercent) {
         CurrencyProperties props = new CurrencyProperties(
-                "ILS", new BigDecimal(marginPercent), new CurrencyProperties.Fx("", "", "0 30 16 * * *", 5000, 10000));
+                "ILS",
+                new BigDecimal(marginPercent),
+                new CurrencyProperties.Fx("", "", "0 30 16 * * *", Duration.ofSeconds(5), Duration.ofSeconds(10)));
         return new PriceConverter(rateService, props, FIXED_CLOCK);
     }
 

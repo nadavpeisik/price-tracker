@@ -17,7 +17,8 @@ import org.springframework.web.client.RestClient;
 
 class OllamaClientConfigTest {
 
-    private static final OllamaClientProperties PROPS = new OllamaClientProperties(3_000, 120_000);
+    private static final OllamaClientProperties PROPS =
+            new OllamaClientProperties(Duration.ofSeconds(3), Duration.ofSeconds(120));
 
     // --- Layer 1: the factory the bean applies carries the configured timeouts + HTTP/1.1 pin. ---
 
@@ -27,14 +28,14 @@ class OllamaClientConfigTest {
 
         HttpClient client = extractHttpClient(factory);
         assertThat(client.version()).isEqualTo(HttpClient.Version.HTTP_1_1);
-        assertThat(client.connectTimeout()).hasValue(Duration.ofMillis(PROPS.connectTimeoutMs()));
+        assertThat(client.connectTimeout()).hasValue(PROPS.connectTimeout());
     }
 
     @Test
     void applyTimeouts_setsReadTimeout() throws Exception {
         JdkClientHttpRequestFactory factory = OllamaClientConfig.applyTimeouts(PROPS);
 
-        assertThat(extractReadTimeout(factory)).isEqualTo(Duration.ofMillis(PROPS.readTimeoutMs()));
+        assertThat(extractReadTimeout(factory)).isEqualTo(PROPS.readTimeout());
     }
 
     // --- Layer 2: prove our bean overrides Spring AI's autoconfig and the timeouts reach the
@@ -56,7 +57,7 @@ class OllamaClientConfigTest {
                     JdkClientHttpRequestFactory factory = extractOllamaFactory(context.getBean(OllamaApi.class));
                     // A JDK factory (not Reactor Netty, the autoconfig default) proves ours won.
                     assertThat(extractHttpClient(factory).version()).isEqualTo(HttpClient.Version.HTTP_1_1);
-                    assertThat(extractReadTimeout(factory)).isEqualTo(Duration.ofMillis(PROPS.readTimeoutMs()));
+                    assertThat(extractReadTimeout(factory)).isEqualTo(PROPS.readTimeout());
                 });
     }
 
