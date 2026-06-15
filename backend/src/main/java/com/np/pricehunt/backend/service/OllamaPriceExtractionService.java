@@ -18,10 +18,15 @@ public class OllamaPriceExtractionService {
                         You are a specialized e-commerce data extraction engine.
                         Your output is deterministic and follows the provided schema exactly.
 
-                        Examples:
-                        - "In stock within 1 week. Add to cart. £100" → {"price": 100.00, "currency": "GBP", "available": false}
-                        - "In stock within about 1 week. Add to basket. €299" → {"price": 299.00, "currency": "EUR", "available": false}
+                        Availability examples (note: a time window like "within N weeks" means false even if "in stock" appears):
                         - "In Stock. Buy Now. $50" → {"price": 50.00, "currency": "USD", "available": true}
+                        - "Only 1 left in stock - order soon. $50" → {"price": 50.00, "currency": "USD", "available": true}
+                        - "Only 3 left in stock. ₪200" → {"price": 200.00, "currency": "ILS", "available": true}
+                        - "In stock. Selling fast. $75" → {"price": 75.00, "currency": "USD", "available": true}
+                        - "In stock within 1 week. Add to cart. £100" → {"price": 100.00, "currency": "GBP", "available": false}
+                        - "Usually ships within 2 to 3 weeks. $30" → {"price": 30.00, "currency": "USD", "available": false}
+                        - "Out of stock. $99" → {"price": 99.00, "currency": "USD", "available": false}
+                        - "Pre-order now. Releases next month. $60" → {"price": 60.00, "currency": "USD", "available": false}
                         - "חסר במלאי. ₪200" → {"price": 200.00, "currency": "ILS", "available": false}
                         """)
                 .build();
@@ -46,12 +51,20 @@ public class OllamaPriceExtractionService {
                         # RULES
                         1. Currency symbols and codes: $ → USD, € → EUR, £ → GBP, ₪ → ILS.
                         2. Ignore original/MSRP/crossed-out prices when a sale price is present.
-                        3. Set available = false if ANY of these appears anywhere in the text:
-                           - English: "within X days/weeks", "within about X week(s)", "ships in X days", "expected back in stock", "backordered", "pre-order", "out of stock".
-                           - Hebrew: "חסר במלאי", "אזל מהמלאי", "הזמנה מראש".
-                           - Any waiting/delay phrase before dispatch.
-                           A buy/cart button (e.g. "Add to basket", "Add to cart") does NOT imply available = true if a delay phrase appears anywhere in the same text.
-                           Set available = true only if the item ships immediately with no qualifier.
+                        3. AVAILABILITY — decide in this exact order:
+                           STEP 1. Look for a DISQUALIFIER. Set available = false and STOP if the text contains ANY of:
+                             - Unavailable or not-yet-released: "out of stock", "sold out", "currently unavailable",
+                               "temporarily unavailable", "not available", "no longer available", "discontinued",
+                               "expected back in stock", "back soon", "notify me when available", "backordered",
+                               "pre-order", "preorder", "coming soon", or a future release/availability date
+                               (e.g. "releases next month", "available from <date>"). A pre-order or future
+                               release is NOT available now.
+                             - A future-delivery TIME WINDOW: "within N day(s)/week(s)", "ships in N days/weeks",
+                               "available in N weeks", "usually ships within N weeks". This makes it false EVEN IF "in stock" also appears.
+                             - Hebrew: "חסר במלאי", "אזל מהמלאי", "הזמנה מראש".
+                           STEP 2. Otherwise set available = true. Low quantity and urgency do NOT make it false — phrases like
+                             "only N left in stock", "order soon", "selling fast", "low stock", "limited stock", "while supplies last"
+                             all confirm the item is in stock and purchasable now (available = true).
 
                         # DATA
                         {text}
