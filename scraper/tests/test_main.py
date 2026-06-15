@@ -1,18 +1,23 @@
 import time
 from pathlib import Path
 
+import pytest
 import pytest_asyncio
+from fastapi import HTTPException
 from playwright.async_api import async_playwright
 
+import main
 from main import (
     _HAS_PRICE_SIGNAL_SCRIPT,
     _HIDE_CHROME_SCRIPT,
     _STRIP_DECOY_PRICES_SCRIPT,
     _STRUCTURED_DATA_SCRIPT,
     _VISIBLE_TEXT_LEN_SCRIPT,
+    ScrapeRequest,
     _detect_block,
     _extract_snippet,
     _wait_for_render,
+    scrape,
 )
 
 _FIXTURES = Path(__file__).parent / "fixtures"
@@ -728,3 +733,55 @@ async def test_extract_snippet_keeps_price_excludes_shipping(page):
     assert snippet is not None
     assert "349" in snippet
     assert "courier" not in snippet
+
+
+# --- lifespan + /scrape availability guard (PR #100) ---
+
+
+class _FakeBrowser:
+    """Minimal Browser stand-in for the /scrape guard: only is_connected() matters,
+    and it must be a *method* — `not browser.is_connected` (property) would be a
+    permanent no-op, so we assert the called form behaves correctly."""
+
+    def __init__(self, connected: bool):
+        self._connected = connected
+
+    def is_connected(self) -> bool:
+        return self._connected
+
+
+# lifespan launches a real Chromium on entry and tears it down on exit. Inside the
+# context the global browser is live and connected; after exit the finally has nulled
+# it (so a later request hits the 503 guard, and a reused process sees no stale handle).
+async def test_lifespan_launches_and_closes_browser():
+    assert main.browser is None
+    async with main.lifespan(main.app):
+        assert main.browser is not None
+        assert main.browser.is_connected() is True
+    assert main.browser is None
+
+
+# Pre-startup / post-shutdown window: browser is None → deterministic 503, not an
+# opaque NoneType 500 from new_context().
+async def test_scrape_returns_503_when_browser_none(monkeypatch):
+    monkeypatch.setattr(main, "browser", None)
+    with pytest.raises(HTTPException) as exc:
+        await scrape(ScrapeRequest(url="https://example.com"))
+    assert exc.value.status_code == 503
+
+
+# Crashed/OOM-killed Chromium: global still points at a Browser but is_connected()
+# is False → 503. Guards the `not browser.is_connected()` half of the check.
+async def test_scrape_returns_503_when_browser_disconnected(monkeypatch):
+    monkeypatch.setattr(main, "browser", _FakeBrowser(connected=False))
+    with pytest.raises(HTTPException) as exc:
+        await scrape(ScrapeRequest(url="https://example.com"))
+    assert exc.value.status_code == 503
+
+
+# Bad scheme is rejected (400) before the availability guard is even reached.
+async def test_scrape_rejects_non_http_scheme(monkeypatch):
+    monkeypatch.setattr(main, "browser", _FakeBrowser(connected=True))
+    with pytest.raises(HTTPException) as exc:
+        await scrape(ScrapeRequest(url="ftp://example.com/file"))
+    assert exc.value.status_code == 400

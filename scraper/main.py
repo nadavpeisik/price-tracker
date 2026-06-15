@@ -6,11 +6,10 @@ from contextlib import asynccontextmanager
 from enum import Enum
 
 from fastapi import FastAPI, HTTPException, Request
-from playwright.async_api import Browser, Playwright, async_playwright
+from playwright.async_api import Browser, async_playwright
 from pydantic import BaseModel
 
-playwright_instance: Playwright = None
-browser: Browser = None
+browser: Browser | None = None
 
 _correlation_id: contextvars.ContextVar[str] = contextvars.ContextVar("correlation_id", default="-")
 
@@ -328,24 +327,34 @@ class ScrapeResponse(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global playwright_instance, browser
-    playwright_instance = await async_playwright().start()
-    # --disable-blink-features=AutomationControlled hides the navigator.webdriver=true
-    # signal that Cloudflare and similar walls fingerprint to detect Playwright-driven
-    # Chrome. Native engine flag (not a JS patch) — Cloudflare's anti-bot can detect
-    # prototype-pollution via add_init_script, so we set it at launch instead.
-    # --no-sandbox + --disable-dev-shm-usage stay; they're container hygiene, not stealth.
-    browser = await playwright_instance.chromium.launch(
-        headless=True,
-        args=[
-            "--no-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-blink-features=AutomationControlled",
-        ],
-    )
-    yield
-    await browser.close()
-    await playwright_instance.stop()
+    global browser
+    # async with guarantees the Playwright driver process is stopped even if
+    # chromium.launch() or browser.close() raises — otherwise a failed launch or a
+    # close() against an already-dead Chromium would orphan the Node driver process.
+    async with async_playwright() as p:
+        # --disable-blink-features=AutomationControlled hides the navigator.webdriver=true
+        # signal that Cloudflare and similar walls fingerprint to detect Playwright-driven
+        # Chrome. Native engine flag (not a JS patch) — Cloudflare's anti-bot can detect
+        # prototype-pollution via add_init_script, so we set it at launch instead.
+        # --no-sandbox + --disable-dev-shm-usage stay; they're container hygiene, not stealth.
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-blink-features=AutomationControlled",
+            ],
+        )
+        try:
+            yield
+        finally:
+            # Null the global before awaiting close() so a close() failure can't leave
+            # a stale reference to a dead Browser visible to a later lifespan restart
+            # (test suites / dev auto-reload reuse the same process).
+            to_close = browser
+            browser = None
+            if to_close is not None:
+                await to_close.close()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -568,6 +577,14 @@ def _snippet_has_useful_content(snippet: str) -> bool:
 async def scrape(request: ScrapeRequest):
     if not request.url.startswith(("http://", "https://")):
         raise HTTPException(status_code=400, detail="URL must use http or https scheme")
+
+    # browser is None before startup finishes launching it and again once the lifespan
+    # finally nulls it during shutdown; is_connected() is False if Chromium crashed or was
+    # OOM-killed while the global still points at it. Serve a deterministic 503 in those
+    # windows rather than letting new_context() blow up with an opaque NoneType/500.
+    # (is_connected is a method — `not browser.is_connected` would be a permanent no-op.)
+    if browser is None or not browser.is_connected():
+        raise HTTPException(status_code=503, detail="Browser is not initialized or has been closed")
 
     # Realistic viewport/locale/Accept-Language pair with _BROWSER_USER_AGENT.
     context = await browser.new_context(
