@@ -578,6 +578,12 @@ async def scrape(request: ScrapeRequest):
     if not request.url.startswith(("http://", "https://")):
         raise HTTPException(status_code=400, detail="URL must use http or https scheme")
 
+    # browser is None before startup finishes launching it and again once the lifespan
+    # finally nulls it during shutdown; serve a deterministic 503 in those windows
+    # rather than letting new_context() blow up with an opaque NoneType 500.
+    if browser is None:
+        raise HTTPException(status_code=503, detail="Browser is not initialized or has been closed")
+
     # Realistic viewport/locale/Accept-Language pair with _BROWSER_USER_AGENT.
     context = await browser.new_context(
         user_agent=_BROWSER_USER_AGENT,
