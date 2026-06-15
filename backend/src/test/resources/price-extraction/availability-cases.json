@@ -1,0 +1,20 @@
+[
+  { "name": "lowstock_amazon", "text": "ILS2,977.42\nILS2,977\n.\n42 | ILS | Only 1 left in stock - order soon.", "expectedAvailable": true },
+  { "name": "in_stock_buynow", "text": "In Stock. Buy Now. $50", "expectedAvailable": true },
+  { "name": "only_2_left", "text": "Only 2 left in stock. ₪200", "expectedAvailable": true },
+  { "name": "selling_fast", "text": "In stock. Selling fast. Add to cart. $75", "expectedAvailable": true },
+  { "name": "within_1week", "text": "In stock within 1 week. Add to cart. £100", "expectedAvailable": false },
+  { "name": "within_about_1week", "text": "In stock within about 1 week. Add to basket. €299", "expectedAvailable": false },
+  { "name": "usually_ships_2_3wk", "text": "In stock. Usually ships within 2 to 3 weeks. $30", "expectedAvailable": false },
+  { "name": "out_of_stock", "text": "Out of stock. $99", "expectedAvailable": false },
+  { "name": "currently_unavailable", "text": "Currently unavailable. $50", "expectedAvailable": false },
+  { "name": "preorder", "text": "Pre-order now. Releases next month. $60", "expectedAvailable": false },
+  { "name": "hebrew_oos", "text": "חסר במלאי. ₪200", "expectedAvailable": false },
+  { "name": "hebrew_not_in_stock", "text": "לא במלאי. ₪200", "expectedAvailable": false },
+  { "name": "hebrew_in_stock", "text": "במלאי. ₪200", "expectedAvailable": true },
+  { "name": "ships_24h_characterization", "text": "In stock. Ships in 24 hours. $40", "expectedAvailable": false },
+  { "name": "ships_1_2_days_characterization", "text": "Ships in 1-2 business days. $40", "expectedAvailable": false, "gated": false, "note": "qwen3:1.7b flaky on short dispatch windows; short-vs-long window semantics deferred (issue #102)" },
+  { "name": "discontinued", "text": "This product has been discontinued. $80", "expectedAvailable": false },
+  { "name": "no_longer_available", "text": "No longer available. $80", "expectedAvailable": false },
+  { "name": "notify_me", "text": "Notify me when available. $45", "expectedAvailable": false, "gated": false, "note": "qwen3:1.7b deterministic miss: the token 'available' defeats the rule (issue #102)" }
+]

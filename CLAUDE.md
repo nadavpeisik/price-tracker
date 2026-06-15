@@ -137,6 +137,22 @@ The scraper response carries an `extractionSource` enum (`STRUCTURED | SNIPPET |
 - Uses Spring AI `ChatClient` with structured output to parse LLM responses directly into `PriceInfo`
 - Ollama runs locally, natively (no external API keys required)
 
+**Prompt changes — hard rule:** whenever you edit the extraction prompt in
+`OllamaPriceExtractionService.java` (system or user template), run the prompt-regression
+sanity check **before committing** and confirm it passes:
+
+```bash
+scripts/run-ollama-prompt-regression.sh            # default: qwen3:1.7b (the SNIPPET model)
+scripts/run-ollama-prompt-regression.sh qwen3.5:9b # optional: spot-check the FULLTEXT model
+```
+
+This drives the real service over labeled snippets (`backend/src/test/resources/price-extraction/availability-cases.json`)
+and asserts the extracted `available`/price/currency — a small prompt tweak can silently
+flip availability (issue #102). Needs `ollama serve` running. It is **manual, not CI**
+(`OllamaPromptRegressionIT` is `*IT` + env-gated by `RUN_OLLAMA_PROMPT_REGRESSION=true`),
+so nothing runs it for you. When you add or change a prompt rule, add a covering case to
+the fixtures JSON in the same change.
+
 **Validation layer** (in `ProductTrackingService`, before saving `PriceRecord`):
 - Price must be > 0
 - If a prior price exists for the `TrackedItem` **and the currency matches**, new price must not differ by more than 200% (i.e. no more than 3x the previous price) — configurable via `price.validation.max-delta-percent` in `application.properties`
