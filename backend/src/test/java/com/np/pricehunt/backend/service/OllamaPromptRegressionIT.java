@@ -158,13 +158,17 @@ class OllamaPromptRegressionIT {
                 .as("case '%s' returned a result (model=%s)", c.name(), model)
                 .isNotNull();
 
-        // Quarantined cases sit over the small model's reliability ceiling (issue #102): run them for
-        // visibility but report as skipped (via assumption) so they never block the commit gate. A null
-        // result above still fails even when quarantined — that's an infra failure, not a model limit.
+        // Quarantined cases sit over the small model's reliability ceiling (issue #102). Treat the
+        // availability check as an assumption, not an assertion: the case PASSES if the model gets it
+        // right (so a more capable model — see #103 — auto-un-quarantines it) and is reported as skipped
+        // (not failed) when it misses, so it never blocks the commit gate. A null result above still
+        // fails even when quarantined — that's an infra failure, not a model limit.
         if (!c.isGated()) {
-            Assumptions.abort(String.format(
-                    "non-gating known limitation [%s]: expected available=%s, got %s — %s",
-                    c.name(), c.expectedAvailable(), result.available(), c.note()));
+            Assumptions.assumeTrue(
+                    result.available() == c.expectedAvailable(),
+                    () -> String.format(
+                            "non-gating known limitation [%s]: expected available=%s, got %s — %s",
+                            c.name(), c.expectedAvailable(), result.available(), c.note()));
         }
 
         assertThat(result.available())

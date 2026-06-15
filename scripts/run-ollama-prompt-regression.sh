@@ -57,11 +57,11 @@ if ! tags="$(curl -fsS --connect-timeout 5 --max-time 10 "${OLLAMA_URL}/api/tags
   echo "error: Ollama not reachable at ${OLLAMA_URL} — start it with 'ollama serve'." >&2
   exit 1
 fi
-# Match the model's "name" field specifically (e.g. "name":"qwen3:1.7b") rather than the bare
-# value anywhere in the JSON, so an unrelated field can't produce a false match. grep -F keeps
-# ':' and '.' in the model name literal. The exact tag is required by design — target a specific
-# model+tag, don't fuzzy-match a base name to whatever variant happens to be pulled.
-if ! printf '%s' "$tags" | grep -qF "\"name\":\"$MODEL\""; then
+# Match the model's "name" field specifically (e.g. "name":"qwen3:1.7b") rather than the bare value
+# anywhere in the JSON, so an unrelated field can't produce a false match. ERE with optional
+# whitespace around the colon tolerates pretty-printed JSON ("name": "...") across Ollama versions.
+# The exact tag is required by design — target a specific model+tag, not a fuzzy base-name match.
+if ! printf '%s' "$tags" | grep -qE "\"name\"[[:space:]]*:[[:space:]]*\"$MODEL\""; then
   echo "error: model '$MODEL' is not pulled. Run: ollama pull $MODEL" >&2
   exit 1
 fi
