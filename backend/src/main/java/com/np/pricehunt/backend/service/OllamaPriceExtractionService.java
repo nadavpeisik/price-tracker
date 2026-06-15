@@ -61,7 +61,7 @@ public class OllamaPriceExtractionService {
                                release is NOT available now.
                              - A future-delivery TIME WINDOW: "within N day(s)/week(s)", "ships in N days/weeks",
                                "available in N weeks", "usually ships within N weeks". This makes it false EVEN IF "in stock" also appears.
-                             - Hebrew: "חסר במלאי", "אזל מהמלאי", "הזמנה מראש".
+                             - Hebrew: "חסר במלאי", "אזל מהמלאי", "לא במלאי", "הזמנה מראש".
                            STEP 2. Otherwise set available = true. Low quantity and urgency do NOT make it false — phrases like
                              "only N left in stock", "order soon", "selling fast", "low stock", "limited stock", "while supplies last"
                              all confirm the item is in stock and purchasable now (available = true).

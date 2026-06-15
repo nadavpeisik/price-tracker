@@ -10,6 +10,7 @@
   { "name": "currently_unavailable", "text": "Currently unavailable. $50", "expectedAvailable": false },
   { "name": "preorder", "text": "Pre-order now. Releases next month. $60", "expectedAvailable": false },
   { "name": "hebrew_oos", "text": "חסר במלאי. ₪200", "expectedAvailable": false },
+  { "name": "hebrew_not_in_stock", "text": "לא במלאי. ₪200", "expectedAvailable": false },
   { "name": "hebrew_in_stock", "text": "במלאי. ₪200", "expectedAvailable": true },
   { "name": "ships_24h_characterization", "text": "In stock. Ships in 24 hours. $40", "expectedAvailable": false },
   { "name": "ships_1_2_days_characterization", "text": "Ships in 1-2 business days. $40", "expectedAvailable": false, "gated": false, "note": "qwen3:1.7b flaky on short dispatch windows; short-vs-long window semantics deferred (issue #102)" },
