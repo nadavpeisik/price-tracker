@@ -1,5 +1,6 @@
 package com.np.pricehunt.backend.service;
 
+import com.np.pricehunt.backend.config.PriceExtractionProperties;
 import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.dto.PriceInfo;
 import com.np.pricehunt.backend.dto.PriceLlmResult;
@@ -11,12 +12,13 @@ import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 @Slf4j
 @Service
+@RequiredArgsConstructor
 public class PriceExtractionOrchestrator implements PriceExtractionService {
 
     private static final int MAX_FILTER_LINES = 50;
@@ -37,17 +39,7 @@ public class PriceExtractionOrchestrator implements PriceExtractionService {
             Pattern.CASE_INSENSITIVE);
 
     private final OllamaPriceExtractionService ollamaService;
-    private final String snippetModel;
-    private final String fulltextModel;
-
-    public PriceExtractionOrchestrator(
-            OllamaPriceExtractionService ollamaService,
-            @Value("${price.extraction.snippet-model}") String snippetModel,
-            @Value("${price.extraction.fulltext-model}") String fulltextModel) {
-        this.ollamaService = ollamaService;
-        this.snippetModel = snippetModel;
-        this.fulltextModel = fulltextModel;
-    }
+    private final PriceExtractionProperties extractionProperties;
 
     @Override
     public PriceInfo extractPrice(ScrapeResponse response) {
@@ -59,7 +51,7 @@ public class PriceExtractionOrchestrator implements PriceExtractionService {
                 guardMinLength(text, "SNIPPET");
                 PriceLlmResult raw;
                 try {
-                    raw = ollamaService.extractPriceFromText(text, snippetModel);
+                    raw = ollamaService.extractPriceFromText(text, extractionProperties.snippetModel());
                 } catch (MalformedLlmOutputException e) {
                     // Fast model emitted unparseable output — let the bigger model try. Transport
                     // failures, Ollama 4xx/5xx, and bugs are NOT caught here; they propagate.
@@ -71,14 +63,14 @@ public class PriceExtractionOrchestrator implements PriceExtractionService {
                     if (raw != null) {
                         log.info("SNIPPET fast model returned invalid result {}, retrying with accurate model", raw);
                     }
-                    raw = ollamaService.extractPriceFromText(text, fulltextModel);
+                    raw = ollamaService.extractPriceFromText(text, extractionProperties.fulltextModel());
                 }
                 yield new PriceInfo(raw.price(), raw.currency(), raw.available(), ExtractionSource.SNIPPET);
             }
             case FULLTEXT -> {
                 String text = filterLines(response.innerText());
                 guardMinLength(text, "FULLTEXT");
-                PriceLlmResult raw = ollamaService.extractPriceFromText(text, fulltextModel);
+                PriceLlmResult raw = ollamaService.extractPriceFromText(text, extractionProperties.fulltextModel());
                 yield new PriceInfo(raw.price(), raw.currency(), raw.available(), ExtractionSource.FULLTEXT);
             }
         };

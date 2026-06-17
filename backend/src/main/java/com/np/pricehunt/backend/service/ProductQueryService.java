@@ -1,5 +1,6 @@
 package com.np.pricehunt.backend.service;
 
+import com.np.pricehunt.backend.config.PriceHistoryProperties;
 import com.np.pricehunt.backend.domain.PriceRecord;
 import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.domain.TrackedItem;
@@ -14,8 +15,8 @@ import java.time.temporal.ChronoUnit;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
@@ -26,26 +27,14 @@ import org.springframework.web.server.ResponseStatusException;
 @Slf4j
 @Service
 @Transactional(readOnly = true)
+@RequiredArgsConstructor
 public class ProductQueryService {
 
     private final ProductRepository productRepository;
     private final TrackedItemRepository trackedItemRepository;
     private final PriceRecordRepository priceRecordRepository;
     private final PriceConverter priceConverter;
-    private final int defaultWindowDays;
-
-    public ProductQueryService(
-            ProductRepository productRepository,
-            TrackedItemRepository trackedItemRepository,
-            PriceRecordRepository priceRecordRepository,
-            PriceConverter priceConverter,
-            @Value("${price.history.default-window-days:90}") int defaultWindowDays) {
-        this.productRepository = productRepository;
-        this.trackedItemRepository = trackedItemRepository;
-        this.priceRecordRepository = priceRecordRepository;
-        this.priceConverter = priceConverter;
-        this.defaultWindowDays = defaultWindowDays;
-    }
+    private final PriceHistoryProperties historyProperties;
 
     private record ItemWithLatestPrice(TrackedItem item, PriceRecord latest) {}
 
@@ -83,7 +72,8 @@ public class ProductQueryService {
         }
 
         Instant effectiveTo = (to != null) ? to : Instant.now();
-        Instant effectiveFrom = (from != null) ? from : effectiveTo.minus(defaultWindowDays, ChronoUnit.DAYS);
+        Instant effectiveFrom =
+                (from != null) ? from : effectiveTo.minus(historyProperties.defaultWindowDays(), ChronoUnit.DAYS);
 
         Instant maxFrom = effectiveTo.minus(365L * 2, ChronoUnit.DAYS);
         if (effectiveFrom.isBefore(maxFrom)) {

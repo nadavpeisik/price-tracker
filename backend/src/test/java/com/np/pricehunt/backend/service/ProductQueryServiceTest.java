@@ -8,6 +8,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.np.pricehunt.backend.config.PriceHistoryProperties;
 import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.domain.PriceRecord;
 import com.np.pricehunt.backend.domain.Product;
@@ -66,7 +67,11 @@ class ProductQueryServiceTest {
     @BeforeEach
     void setUp() {
         service = new ProductQueryService(
-                productRepository, trackedItemRepository, priceRecordRepository, priceConverter, 90);
+                productRepository,
+                trackedItemRepository,
+                priceRecordRepository,
+                priceConverter,
+                new PriceHistoryProperties(90));
         product = Product.builder().id(1L).name("Laptop").build();
         itemA = TrackedItem.builder()
                 .id(1L)

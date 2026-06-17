@@ -155,7 +155,7 @@ the fixtures JSON in the same change.
 
 **Validation layer** (in `ProductTrackingService`, before saving `PriceRecord`):
 - Price must be > 0
-- If a prior price exists for the `TrackedItem` **and the currency matches**, new price must not differ by more than 200% (i.e. no more than 3x the previous price) — configurable via `price.validation.max-delta-percent` in `application.properties`
+- If a prior price exists for the `TrackedItem` **and the currency matches**, new price must not differ by more than 200% (i.e. no more than 3x the previous price) — configurable via `price.tracking.max-delta-percent` in `application.properties`
 - Delta check is skipped entirely if the currency changed (cross-currency comparison is meaningless)
 - Currency change is logged as a warning; does not block the save
 
