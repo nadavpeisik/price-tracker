@@ -1,14 +1,21 @@
 package com.np.pricehunt.backend.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.np.pricehunt.backend.dto.PriceLlmResult;
+import com.np.pricehunt.backend.exception.MalformedLlmOutputException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.ollama.api.OllamaChatOptions;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestClientException;
 
 @Slf4j
 @Service
 public class OllamaPriceExtractionService {
+
+    // Upper bound on the exception cause-chain walk in isStructuredOutputParseFailure — guarantees
+    // termination even on a (pathological) cyclic chain. Real chains are only a few links deep.
+    private static final int MAX_CAUSE_DEPTH = 50;
 
     private final ChatClient chatClient;
 
@@ -38,11 +45,13 @@ public class OllamaPriceExtractionService {
 
         // Per-call options only set `model`; Spring AI merges with bean-level defaults
         // (temperature, format=json, num-ctx) from spring.ai.ollama.chat.options.* in application.properties.
-        PriceLlmResult result = chatClient
-                .prompt()
-                .options(OllamaChatOptions.builder().model(model).build())
-                .user(u -> u.text(
-                                """
+        PriceLlmResult result;
+        try {
+            result = chatClient
+                    .prompt()
+                    .options(OllamaChatOptions.builder().model(model).build())
+                    .user(u -> u.text(
+                                    """
                         /no_think
 
                         # TASK
@@ -69,9 +78,19 @@ public class OllamaPriceExtractionService {
                         # DATA
                         {text}
                         """)
-                        .param("text", text))
-                .call()
-                .entity(PriceLlmResult.class);
+                            .param("text", text))
+                    .call()
+                    .entity(PriceLlmResult.class);
+        } catch (RuntimeException e) {
+            // The structured-output converter throws a plain RuntimeException wrapping a Jackson
+            // JsonProcessingException when the model's output can't be parsed — the only signal, as
+            // no dedicated type exists. Translate that; transport/HTTP/bug exceptions propagate.
+            if (isStructuredOutputParseFailure(e)) {
+                log.warn("LLM model={} returned unparseable output: {}", model, e.getMessage());
+                throw new MalformedLlmOutputException(model, e);
+            }
+            throw e;
+        }
 
         long durationMs = System.currentTimeMillis() - start;
         log.info(
@@ -81,5 +100,26 @@ public class OllamaPriceExtractionService {
                 durationMs,
                 result);
         return result;
+    }
+
+    // A genuine structured-output parse failure carries a Jackson JsonProcessingException in its cause
+    // chain AND no RestClientException. The full, order-independent scan matters: Jackson can also fail
+    // while decoding Ollama's HTTP response, surfacing as a RestClientException wrapping a
+    // JsonProcessingException — a transport/protocol failure that must propagate, not escalate to the
+    // heavy model. A RestClientException anywhere therefore vetoes, even after a parse error is seen.
+    // MAX_CAUSE_DEPTH bounds the walk so a cyclic chain can't loop. Package-private for direct testing.
+    static boolean isStructuredOutputParseFailure(Throwable t) {
+        boolean sawParseError = false;
+        Throwable cause = t;
+        for (int depth = 0; cause != null && depth < MAX_CAUSE_DEPTH; depth++) {
+            if (cause instanceof RestClientException) {
+                return false;
+            }
+            if (cause instanceof JsonProcessingException) {
+                sawParseError = true;
+            }
+            cause = cause.getCause();
+        }
+        return sawParseError;
     }
 }
