@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 import com.np.pricehunt.backend.client.ScraperClient;
+import com.np.pricehunt.backend.config.PriceTrackingProperties;
 import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.domain.PriceRecord;
 import com.np.pricehunt.backend.domain.Product;
@@ -17,6 +18,7 @@ import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
 import com.np.pricehunt.backend.validator.UrlValidator;
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
@@ -69,8 +71,7 @@ class ProductTrackingServiceValidationTest {
                 scraperClient,
                 transactionTemplate,
                 urlValidator,
-                200,
-                60);
+                new PriceTrackingProperties(200, Duration.ofMinutes(1)));
 
         product = Product.builder().id(1L).name("Test Product").build();
         item = TrackedItem.builder()

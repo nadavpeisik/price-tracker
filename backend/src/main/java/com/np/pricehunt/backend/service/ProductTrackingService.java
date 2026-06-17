@@ -1,6 +1,7 @@
 package com.np.pricehunt.backend.service;
 
 import com.np.pricehunt.backend.client.ScraperClient;
+import com.np.pricehunt.backend.config.PriceTrackingProperties;
 import com.np.pricehunt.backend.domain.PriceRecord;
 import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.domain.TrackedItem;
@@ -17,8 +18,8 @@ import java.time.Instant;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,6 +29,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 @Slf4j
 @Service
+@RequiredArgsConstructor
 public class ProductTrackingService {
 
     private final ProductRepository productRepository;
@@ -37,33 +39,12 @@ public class ProductTrackingService {
     private final ScraperClient scraperClient;
     private final TransactionTemplate transactionTemplate;
     private final UrlValidator urlValidator;
-    private final int maxDeltaPercent;
-    private final int minRefreshIntervalSeconds;
+    private final PriceTrackingProperties trackingProperties;
 
     // Per-process refresh rate-limiter. Survives failed scrapes (which never bump DB lastChecked).
     // Single-instance only; pre-Phase-2 Kafka. Lost on restart — acceptable: caller gets one free retry.
+    // Inline-initialized, so @RequiredArgsConstructor excludes it from the generated constructor.
     private final Map<Long, Instant> lastRefreshAttempt = new ConcurrentHashMap<>();
-
-    public ProductTrackingService(
-            ProductRepository productRepository,
-            TrackedItemRepository trackedItemRepository,
-            PriceRecordRepository priceRecordRepository,
-            PriceExtractionService extractionService,
-            ScraperClient scraperClient,
-            TransactionTemplate transactionTemplate,
-            UrlValidator urlValidator,
-            @Value("${price.validation.max-delta-percent:200}") int maxDeltaPercent,
-            @Value("${price.refresh.min-interval-seconds:60}") int minRefreshIntervalSeconds) {
-        this.productRepository = productRepository;
-        this.trackedItemRepository = trackedItemRepository;
-        this.priceRecordRepository = priceRecordRepository;
-        this.extractionService = extractionService;
-        this.scraperClient = scraperClient;
-        this.transactionTemplate = transactionTemplate;
-        this.urlValidator = urlValidator;
-        this.maxDeltaPercent = maxDeltaPercent;
-        this.minRefreshIntervalSeconds = minRefreshIntervalSeconds;
-    }
 
     private record ItemSnapshot(Long id, String url) {}
 
@@ -121,7 +102,7 @@ public class ProductTrackingService {
     // scrape, so failed scrapes can't bypass the limit by leaving lastChecked untouched.
     private void checkAndStampRefreshAttempt(Long itemId, Instant persistedLastChecked) {
         Instant now = Instant.now();
-        Instant cutoff = now.minusSeconds(minRefreshIntervalSeconds);
+        Instant cutoff = now.minus(trackingProperties.minRefreshInterval());
 
         if (persistedLastChecked != null && persistedLastChecked.isAfter(cutoff)) {
             throw new ResponseStatusException(
@@ -304,7 +285,7 @@ public class ProductTrackingService {
             return true;
         }
 
-        BigDecimal factor = BigDecimal.valueOf(maxDeltaPercent)
+        BigDecimal factor = BigDecimal.valueOf(trackingProperties.maxDeltaPercent())
                 .divide(BigDecimal.valueOf(100), 4, RoundingMode.HALF_UP)
                 .add(BigDecimal.ONE);
         BigDecimal max = previous.getPrice().multiply(factor).setScale(4, RoundingMode.HALF_UP);
@@ -312,7 +293,7 @@ public class ProductTrackingService {
         if (info.price().compareTo(max) > 0 || info.price().compareTo(min) < 0) {
             log.warn(
                     "Validation failed: price {} is outside {}% delta of previous {} {}",
-                    info.price(), maxDeltaPercent, previous.getPrice(), previous.getCurrency());
+                    info.price(), trackingProperties.maxDeltaPercent(), previous.getPrice(), previous.getCurrency());
             return false;
         }
         return true;

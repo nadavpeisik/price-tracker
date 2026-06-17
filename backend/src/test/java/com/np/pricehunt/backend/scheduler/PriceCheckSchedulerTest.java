@@ -7,11 +7,13 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.*;
 
+import com.np.pricehunt.backend.config.PriceSchedulerProperties;
 import com.np.pricehunt.backend.domain.JobStatus;
 import com.np.pricehunt.backend.dto.TrackedItemRefreshView;
 import com.np.pricehunt.backend.observability.JobRunRecorder;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
 import com.np.pricehunt.backend.service.ProductTrackingService;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
@@ -23,7 +25,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 @ExtendWith(MockitoExtension.class)
 class PriceCheckSchedulerTest {
 
-    private static final long SIX_HOURS_MS = 21_600_000L;
+    private static final Duration FIXED_DELAY = Duration.ofHours(6);
     private static final Long RUN_ID = 99L;
 
     @Mock
@@ -39,7 +41,11 @@ class PriceCheckSchedulerTest {
 
     @BeforeEach
     void setUp() {
-        scheduler = new PriceCheckScheduler(trackingService, trackedItemRepository, jobRunRecorder, SIX_HOURS_MS);
+        scheduler = new PriceCheckScheduler(
+                trackingService,
+                trackedItemRepository,
+                jobRunRecorder,
+                new PriceSchedulerProperties(FIXED_DELAY, Duration.ofMinutes(1)));
         when(jobRunRecorder.start(PriceCheckScheduler.JOB_NAME)).thenReturn(RUN_ID);
     }
 

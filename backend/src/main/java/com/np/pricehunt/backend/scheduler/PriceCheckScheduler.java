@@ -1,5 +1,6 @@
 package com.np.pricehunt.backend.scheduler;
 
+import com.np.pricehunt.backend.config.PriceSchedulerProperties;
 import com.np.pricehunt.backend.domain.JobStatus;
 import com.np.pricehunt.backend.dto.TrackedItemRefreshView;
 import com.np.pricehunt.backend.observability.JobRunRecorder;
@@ -10,40 +11,32 @@ import com.np.pricehunt.backend.util.Timing;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 @Slf4j
 @Component
+@RequiredArgsConstructor
 @ConditionalOnProperty(name = "price.scheduler.enabled", havingValue = "true", matchIfMissing = true)
 public class PriceCheckScheduler {
 
     public static final String JOB_NAME = "PRICE_REFRESH";
-    private static final String DEFAULT_FIXED_DELAY_MS = "21600000";
 
     private final ProductTrackingService trackingService;
     private final TrackedItemRepository trackedItemRepository;
     private final JobRunRecorder jobRunRecorder;
-    private final long fixedDelayMs;
+    private final PriceSchedulerProperties schedulerProperties;
 
-    public PriceCheckScheduler(
-            ProductTrackingService trackingService,
-            TrackedItemRepository trackedItemRepository,
-            JobRunRecorder jobRunRecorder,
-            @Value("${price.scheduler.fixed-delay-ms:" + DEFAULT_FIXED_DELAY_MS + "}") long fixedDelayMs) {
-        this.trackingService = trackingService;
-        this.trackedItemRepository = trackedItemRepository;
-        this.jobRunRecorder = jobRunRecorder;
-        this.fixedDelayMs = fixedDelayMs;
-    }
-
+    // Placeholders share PriceSchedulerProperties' default constants so the @Scheduled cadence and
+    // the bound fixedDelay (reused as the stale cutoff below) can never resolve to different defaults.
     @Scheduled(
-            fixedDelayString = "${price.scheduler.fixed-delay-ms:" + DEFAULT_FIXED_DELAY_MS + "}",
-            initialDelayString = "${price.scheduler.initial-delay-ms:60000}")
+            fixedDelayString = "${price.scheduler.fixed-delay:" + PriceSchedulerProperties.DEFAULT_FIXED_DELAY + "}",
+            initialDelayString =
+                    "${price.scheduler.initial-delay:" + PriceSchedulerProperties.DEFAULT_INITIAL_DELAY + "}")
     public void refreshAll() {
         MDC.put("correlationId", "sched-" + UUID.randomUUID());
         try {
@@ -59,7 +52,7 @@ public class PriceCheckScheduler {
             int failed = 0;
             Exception loopException = null;
             try {
-                Instant cutoff = Instant.now().minusMillis(fixedDelayMs);
+                Instant cutoff = Instant.now().minus(schedulerProperties.fixedDelay());
                 List<TrackedItemRefreshView> items = trackedItemRepository.findStaleItems(cutoff);
                 log.info("Scheduled refresh starting for {} stale items", items.size());
                 for (TrackedItemRefreshView item : items) {

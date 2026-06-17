@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
+import com.np.pricehunt.backend.config.PriceExtractionProperties;
 import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.dto.PriceInfo;
 import com.np.pricehunt.backend.dto.PriceLlmResult;
@@ -42,7 +43,8 @@ class PriceExtractionOrchestratorTest {
 
     @BeforeEach
     void setUp() {
-        orchestrator = new PriceExtractionOrchestrator(ollamaService, SNIPPET_MODEL, FULLTEXT_MODEL);
+        orchestrator = new PriceExtractionOrchestrator(
+                ollamaService, new PriceExtractionProperties(SNIPPET_MODEL, FULLTEXT_MODEL));
     }
 
     // --- filterLines ---
