@@ -5,6 +5,7 @@ import com.np.pricehunt.backend.dto.PriceInfo;
 import com.np.pricehunt.backend.dto.PriceLlmResult;
 import com.np.pricehunt.backend.dto.ScrapeResponse;
 import com.np.pricehunt.backend.exception.EmptyExtractionInputException;
+import com.np.pricehunt.backend.exception.MalformedLlmOutputException;
 import com.np.pricehunt.backend.exception.ScrapeBlockedException;
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -59,17 +60,17 @@ public class PriceExtractionOrchestrator implements PriceExtractionService {
                 PriceLlmResult raw;
                 try {
                     raw = ollamaService.extractPriceFromText(text, snippetModel);
-                    if (!isValidLlmResult(raw)) {
+                } catch (MalformedLlmOutputException e) {
+                    // Fast model emitted unparseable output — let the bigger model try. Transport
+                    // failures, Ollama 4xx/5xx, and bugs are NOT caught here; they propagate.
+                    log.info("SNIPPET fast model returned malformed output — retrying with accurate model");
+                    raw = null;
+                }
+
+                if (!isValidLlmResult(raw)) {
+                    if (raw != null) {
                         log.info("SNIPPET fast model returned invalid result {}, retrying with accurate model", raw);
-                        raw = ollamaService.extractPriceFromText(text, fulltextModel);
                     }
-                } catch (Exception e) {
-                    // Small models occasionally emit malformed JSON, which makes Spring AI's
-                    // structured-output parser throw. Treat that the same as an invalid result.
-                    log.warn(
-                            "SNIPPET fast model threw {}: {} — retrying with accurate model",
-                            e.getClass().getSimpleName(),
-                            e.getMessage());
                     raw = ollamaService.extractPriceFromText(text, fulltextModel);
                 }
                 yield new PriceInfo(raw.price(), raw.currency(), raw.available(), ExtractionSource.SNIPPET);

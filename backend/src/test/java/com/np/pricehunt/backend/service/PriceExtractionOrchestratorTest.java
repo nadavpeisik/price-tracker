@@ -11,14 +11,21 @@ import com.np.pricehunt.backend.dto.PriceInfo;
 import com.np.pricehunt.backend.dto.PriceLlmResult;
 import com.np.pricehunt.backend.dto.ScrapeResponse;
 import com.np.pricehunt.backend.exception.EmptyExtractionInputException;
+import com.np.pricehunt.backend.exception.MalformedLlmOutputException;
 import com.np.pricehunt.backend.exception.ScrapeBlockedException;
 import java.math.BigDecimal;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.ai.retry.NonTransientAiException;
+import org.springframework.ai.retry.TransientAiException;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.client.ResourceAccessException;
 
 @ExtendWith(MockitoExtension.class)
 class PriceExtractionOrchestratorTest {
@@ -152,10 +159,10 @@ class PriceExtractionOrchestratorTest {
     }
 
     @Test
-    void extractPrice_snippet_fastModelThrows_retriesWithAccurateModel() {
+    void extractPrice_snippet_fastModelMalformedOutput_retriesWithAccurateModel() {
         String snippet = "malformed-json-trigger";
         when(ollamaService.extractPriceFromText(snippet, SNIPPET_MODEL))
-                .thenThrow(new RuntimeException("JSON parse error"));
+                .thenThrow(new MalformedLlmOutputException(SNIPPET_MODEL, new RuntimeException("JSON parse error")));
         when(ollamaService.extractPriceFromText(snippet, FULLTEXT_MODEL)).thenReturn(STUB_LLM_RESULT);
         ScrapeResponse response = new ScrapeResponse(ExtractionSource.SNIPPET, null, snippet, null, null);
 
@@ -164,6 +171,52 @@ class PriceExtractionOrchestratorTest {
         assertThat(result.extractionSource()).isEqualTo(ExtractionSource.SNIPPET);
         assertThat(result.price()).isEqualByComparingTo("29.99");
         verify(ollamaService).extractPriceFromText(snippet, SNIPPET_MODEL);
+        verify(ollamaService).extractPriceFromText(snippet, FULLTEXT_MODEL);
+    }
+
+    // A non-parse exception (a bug, or an Ollama transport/HTTP failure) must NOT escalate to the
+    // heavy model — it propagates so the failure surfaces instead of being masked by a slow call.
+    @Test
+    void extractPrice_snippet_fastModelGenericException_propagatesWithoutEscalating() {
+        String snippet = "snippet payload";
+        IllegalStateException bug = new IllegalStateException("a bug, not bad output");
+        when(ollamaService.extractPriceFromText(snippet, SNIPPET_MODEL)).thenThrow(bug);
+        ScrapeResponse response = new ScrapeResponse(ExtractionSource.SNIPPET, null, snippet, null, null);
+
+        assertThatThrownBy(() -> orchestrator.extractPrice(response)).isSameAs(bug);
+        verify(ollamaService).extractPriceFromText(snippet, SNIPPET_MODEL);
+        verify(ollamaService, never()).extractPriceFromText(anyString(), eq(FULLTEXT_MODEL));
+    }
+
+    @ParameterizedTest
+    @MethodSource("infraFailures")
+    void extractPrice_snippet_fastModelInfraFailure_propagatesWithoutEscalating(RuntimeException infraEx) {
+        String snippet = "snippet payload";
+        when(ollamaService.extractPriceFromText(snippet, SNIPPET_MODEL)).thenThrow(infraEx);
+        ScrapeResponse response = new ScrapeResponse(ExtractionSource.SNIPPET, null, snippet, null, null);
+
+        assertThatThrownBy(() -> orchestrator.extractPrice(response)).isSameAs(infraEx);
+        verify(ollamaService).extractPriceFromText(snippet, SNIPPET_MODEL);
+        verify(ollamaService, never()).extractPriceFromText(anyString(), eq(FULLTEXT_MODEL));
+    }
+
+    static Stream<RuntimeException> infraFailures() {
+        return Stream.of(
+                new ResourceAccessException("timeout"),
+                new TransientAiException("ollama 503"),
+                new NonTransientAiException("ollama 400"));
+    }
+
+    @Test
+    void extractPrice_snippet_heavyModelFailurePropagates() {
+        String snippet = "ambiguous payload";
+        PriceLlmResult invalid = new PriceLlmResult(null, null, false);
+        when(ollamaService.extractPriceFromText(snippet, SNIPPET_MODEL)).thenReturn(invalid);
+        ResourceAccessException heavyFailure = new ResourceAccessException("heavy model timeout");
+        when(ollamaService.extractPriceFromText(snippet, FULLTEXT_MODEL)).thenThrow(heavyFailure);
+        ScrapeResponse response = new ScrapeResponse(ExtractionSource.SNIPPET, null, snippet, null, null);
+
+        assertThatThrownBy(() -> orchestrator.extractPrice(response)).isSameAs(heavyFailure);
         verify(ollamaService).extractPriceFromText(snippet, FULLTEXT_MODEL);
     }
 
