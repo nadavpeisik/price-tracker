@@ -177,7 +177,7 @@ New scheduler? Wire the recorder the same way `PriceCheckScheduler.refreshAll()`
 
 - Constructor injection via Lombok `@RequiredArgsConstructor` (all injected fields are `final`)
 - Lombok `@Data` / `@Builder` / `@NoArgsConstructor` / `@AllArgsConstructor` on domain entities
-- Repositories extend `JpaRepository` with custom query methods (no `@Query` annotations — method name conventions)
+- Repositories extend `JpaRepository`. **Prefer derived (method-name) queries** for simple lookups and filters — they're concise, property-aware, and validated against the entity model. **`@Query` is allowed** where a derived name can't express the intent or would be a downgrade: DTO/constructor-expression projections, complex joins, aggregates, bulk ops, locking, or vendor-specific SQL. A domain-meaningful name + explicit JPQL (e.g. `findStaleItems` projecting into `TrackedItemRefreshView`) beats a verbose `findByLastCheckedIsNullOrLastCheckedBefore` that leaks the predicate into the signature and makes the projection implicit. Don't use `@Query` to restate a query a derived name already covers (e.g. `WHERE t.url = :url`).
 - Monetary values use `BigDecimal` (precision 19, scale 4)
 - The single existing test class is `@Disabled` — tests are not yet implemented
 
