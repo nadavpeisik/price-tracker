@@ -223,4 +223,4 @@ Schema is managed by **Flyway**. SQL files live in `backend/src/main/resources/d
 - **Scraper:** Python FastAPI + Playwright at `localhost:8001` (built from `scraper/Dockerfile` by Docker Compose)
 - **Kafka** — in `pom.xml`, wired up in Phase 2
 - **Dashboards:** Grafana 11.4.0 at `localhost:3000` (admin/admin local-only — gate before any cloud deploy). Provisioned datasource + dashboards under `infra/grafana/`. All time-scoped Postgres panels MUST use the Grafana `$__timeFilter(column)` macro — hardcoded `WHERE x > NOW() - INTERVAL ...` makes the dashboard's time picker inert. New dashboards: drop a JSON into `infra/grafana/dashboards/`; the file provider picks it up every 30s.
-- Spring Boot version: **4.0.3** | Spring AI version: **2.0.0-M2** | Java: **21**
+- Spring Boot version: **4.0.3** | Spring AI version: **2.0.0-M2** | Java: **21** | Scraper Python: **3.12** (`scraper/.python-version` pins dev; `pyproject.toml` requires `>=3.12`; `Dockerfile` runs `python:3.12-slim`)
