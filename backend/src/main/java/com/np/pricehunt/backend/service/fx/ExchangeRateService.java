@@ -12,6 +12,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
@@ -19,6 +20,7 @@ import org.springframework.stereotype.Service;
 
 @Slf4j
 @Service
+@RequiredArgsConstructor
 public class ExchangeRateService {
 
     private final ExchangeRateRepository repository;
@@ -27,12 +29,6 @@ public class ExchangeRateService {
 
     // Volatile is sufficient: snapshot is replaced wholesale on refresh; readers see either old or new, never partial.
     private volatile RateSnapshot snapshot;
-
-    public ExchangeRateService(ExchangeRateRepository repository, FrankfurterRateProvider provider, Clock clock) {
-        this.repository = repository;
-        this.provider = provider;
-        this.clock = clock;
-    }
 
     @PostConstruct
     void init() {
