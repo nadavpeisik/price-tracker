@@ -7,6 +7,7 @@ import com.np.pricehunt.backend.service.fx.RateSnapshot;
 import com.np.pricehunt.backend.util.Throwables;
 import java.util.Optional;
 import java.util.UUID;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -14,17 +15,13 @@ import org.springframework.stereotype.Component;
 
 @Slf4j
 @Component
+@RequiredArgsConstructor
 public class RateRefreshScheduler {
 
     public static final String JOB_NAME = "FX_REFRESH";
 
     private final ExchangeRateService service;
     private final JobRunRecorder jobRunRecorder;
-
-    public RateRefreshScheduler(ExchangeRateService service, JobRunRecorder jobRunRecorder) {
-        this.service = service;
-        this.jobRunRecorder = jobRunRecorder;
-    }
 
     @Scheduled(cron = "${pricehunt.currency.fx.refresh-cron}", zone = "UTC")
     public void scheduledRefresh() {
