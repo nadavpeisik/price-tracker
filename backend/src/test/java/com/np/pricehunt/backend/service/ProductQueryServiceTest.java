@@ -361,6 +361,19 @@ class ProductQueryServiceTest {
     }
 
     @Test
+    void getPriceHistory_fromAfterTo_throwsBadRequest() {
+        Instant from = Instant.parse("2026-06-03T00:00:00Z");
+        Instant to = Instant.parse("2026-06-01T00:00:00Z");
+        when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
+
+        assertThatThrownBy(() -> service.getPriceHistory(1L, 1L, from, to))
+                .isInstanceOfSatisfying(ResponseStatusException.class, ex -> {
+                    assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(ex.getReason()).isEqualTo("'from' timestamp cannot be after 'to' timestamp");
+                });
+    }
+
+    @Test
     void getPriceHistory_wrongProduct_throwsNotFound() {
         Product other = Product.builder().id(99L).name("Other").build();
         TrackedItem foreignItem = TrackedItem.builder()

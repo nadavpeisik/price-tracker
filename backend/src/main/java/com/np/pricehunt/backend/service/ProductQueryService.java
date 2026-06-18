@@ -75,6 +75,11 @@ public class ProductQueryService {
         Instant effectiveFrom =
                 (from != null) ? from : effectiveTo.minus(historyProperties.defaultWindowDays(), ChronoUnit.DAYS);
 
+        if (effectiveFrom.isAfter(effectiveTo)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "'from' timestamp cannot be after 'to' timestamp");
+        }
+
         Instant maxFrom = effectiveTo.minus(365L * 2, ChronoUnit.DAYS);
         if (effectiveFrom.isBefore(maxFrom)) {
             log.info("Price history range clamped to 2 years for item={}", itemId);
