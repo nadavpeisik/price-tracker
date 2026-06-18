@@ -361,6 +361,18 @@ class ProductQueryServiceTest {
     }
 
     @Test
+    void getPriceHistory_fromAfterTo_throwsBadRequest() {
+        Instant from = Instant.parse("2026-06-03T00:00:00Z");
+        Instant to = Instant.parse("2026-06-01T00:00:00Z");
+        when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
+
+        assertThatThrownBy(() -> service.getPriceHistory(1L, 1L, from, to))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(e -> ((ResponseStatusException) e).getStatusCode())
+                .isEqualTo(HttpStatus.BAD_REQUEST);
+    }
+
+    @Test
     void getPriceHistory_wrongProduct_throwsNotFound() {
         Product other = Product.builder().id(99L).name("Other").build();
         TrackedItem foreignItem = TrackedItem.builder()
