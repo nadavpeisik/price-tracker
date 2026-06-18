@@ -367,9 +367,10 @@ class ProductQueryServiceTest {
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
 
         assertThatThrownBy(() -> service.getPriceHistory(1L, 1L, from, to))
-                .isInstanceOf(ResponseStatusException.class)
-                .extracting(e -> ((ResponseStatusException) e).getStatusCode())
-                .isEqualTo(HttpStatus.BAD_REQUEST);
+                .isInstanceOfSatisfying(ResponseStatusException.class, ex -> {
+                    assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(ex.getReason()).isEqualTo("'from' timestamp cannot be after 'to' timestamp");
+                });
     }
 
     @Test
