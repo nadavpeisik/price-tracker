@@ -9,15 +9,15 @@ import com.np.pricehunt.backend.dto.*;
 import com.np.pricehunt.backend.repository.PriceRecordRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
+import com.np.pricehunt.backend.service.ratelimit.RefreshCooldownLimiter;
 import com.np.pricehunt.backend.validator.UrlValidator;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.Locale;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -40,11 +40,11 @@ public class ProductTrackingService {
     private final TransactionTemplate transactionTemplate;
     private final UrlValidator urlValidator;
     private final PriceTrackingProperties trackingProperties;
-
-    // Per-process refresh rate-limiter. Survives failed scrapes (which never bump DB lastChecked).
-    // Single-instance only; pre-Phase-2 Kafka. Lost on restart — acceptable: caller gets one free retry.
-    // Inline-initialized, so @RequiredArgsConstructor excludes it from the generated constructor.
-    private final Map<Long, Instant> lastRefreshAttempt = new ConcurrentHashMap<>();
+    // Volatile, per-process half of the refresh cooldown: catches rapid retries (incl. after a
+    // failed scrape, which never bumps DB lastChecked). The durable half is the lastChecked check
+    // below. Single-instance only, pre-Phase-2; a Redis-backed impl swaps in behind this interface.
+    private final RefreshCooldownLimiter cooldownLimiter;
+    private final Clock clock;
 
     private record ItemSnapshot(Long id, String url) {}
 
@@ -70,6 +70,7 @@ public class ProductTrackingService {
     }
 
     public TrackResponse refreshTrackedItem(Long productId, Long itemId) {
+        // Phase 1: load + authorize the item and apply the durable (DB-persisted) cooldown.
         ItemSnapshot snapshot = transactionTemplate.execute(status -> {
             TrackedItem item = trackedItemRepository
                     .findById(itemId)
@@ -77,9 +78,16 @@ public class ProductTrackingService {
             if (!item.getProduct().getId().equals(productId)) {
                 throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found for this product");
             }
-            checkAndStampRefreshAttempt(itemId, item.getLastChecked());
+            ensureNotRecentlyChecked(item.getLastChecked());
             return new ItemSnapshot(item.getId(), item.getUrl());
         });
+
+        // Volatile cooldown: stamped before the scrape so a failed scrape still consumes the
+        // window. Kept outside the transaction above — no DB connection is held across this check.
+        if (!cooldownLimiter.tryAcquire(snapshot.id())) {
+            throw new ResponseStatusException(
+                    HttpStatus.TOO_MANY_REQUESTS, "Item was refreshed recently, try again later");
+        }
 
         PriceInfo info = doScrape(snapshot.url());
         return persistResultInTxn(snapshot.id(), info);
@@ -97,21 +105,12 @@ public class ProductTrackingService {
         return persistResultInTxn(snapshot.id(), info);
     }
 
-    // Atomically reads and stamps the in-memory rate-limit map. Falls back to the DB-stored
-    // lastChecked when the process is fresh and the map is empty. Stamp happens before the
-    // scrape, so failed scrapes can't bypass the limit by leaving lastChecked untouched.
-    private void checkAndStampRefreshAttempt(Long itemId, Instant persistedLastChecked) {
-        Instant now = Instant.now();
-        Instant cutoff = now.minus(trackingProperties.minRefreshInterval());
-
+    // Durable half of the refresh cooldown: a successful refresh persists lastChecked, which
+    // survives a restart. Rejects before any scrape. The volatile half (failed-scrape retries)
+    // is handled by cooldownLimiter in refreshTrackedItem.
+    private void ensureNotRecentlyChecked(Instant persistedLastChecked) {
+        Instant cutoff = Instant.now(clock).minus(trackingProperties.minRefreshInterval());
         if (persistedLastChecked != null && persistedLastChecked.isAfter(cutoff)) {
-            throw new ResponseStatusException(
-                    HttpStatus.TOO_MANY_REQUESTS, "Item was refreshed recently, try again later");
-        }
-
-        Instant kept =
-                lastRefreshAttempt.compute(itemId, (k, prev) -> (prev != null && prev.isAfter(cutoff)) ? prev : now);
-        if (kept != now) {
             throw new ResponseStatusException(
                     HttpStatus.TOO_MANY_REQUESTS, "Item was refreshed recently, try again later");
         }
