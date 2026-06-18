@@ -16,8 +16,10 @@ import com.np.pricehunt.backend.exception.ScrapeBlockedException;
 import com.np.pricehunt.backend.repository.PriceRecordRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
+import com.np.pricehunt.backend.service.ratelimit.RefreshCooldownLimiter;
 import com.np.pricehunt.backend.validator.UrlValidator;
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
@@ -55,6 +57,9 @@ class ProductTrackingServiceValidationTest {
     @Mock
     private UrlValidator urlValidator;
 
+    @Mock
+    private RefreshCooldownLimiter cooldownLimiter;
+
     private ProductTrackingService service;
 
     private Product product;
@@ -71,7 +76,9 @@ class ProductTrackingServiceValidationTest {
                 scraperClient,
                 transactionTemplate,
                 urlValidator,
-                new PriceTrackingProperties(200, Duration.ofMinutes(1)));
+                new PriceTrackingProperties(200, Duration.ofMinutes(1)),
+                cooldownLimiter,
+                Clock.systemUTC());
 
         product = Product.builder().id(1L).name("Test Product").build();
         item = TrackedItem.builder()
@@ -115,6 +122,8 @@ class ProductTrackingServiceValidationTest {
 
         assertThat(response.currentPrice()).isEqualByComparingTo("100.00");
         verify(priceRecordRepository).save(any());
+        // trackUrl is first-time tracking, not a refresh — the cooldown limiter must not apply.
+        verifyNoInteractions(cooldownLimiter);
     }
 
     @Test

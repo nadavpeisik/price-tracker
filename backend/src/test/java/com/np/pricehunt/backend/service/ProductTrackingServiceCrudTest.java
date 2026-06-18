@@ -15,8 +15,10 @@ import com.np.pricehunt.backend.dto.*;
 import com.np.pricehunt.backend.repository.PriceRecordRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
+import com.np.pricehunt.backend.service.ratelimit.RefreshCooldownLimiter;
 import com.np.pricehunt.backend.validator.UrlValidator;
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
@@ -55,6 +57,9 @@ class ProductTrackingServiceCrudTest {
     @Mock
     private UrlValidator urlValidator;
 
+    @Mock
+    private RefreshCooldownLimiter cooldownLimiter;
+
     private ProductTrackingService service;
 
     private Product product;
@@ -70,7 +75,9 @@ class ProductTrackingServiceCrudTest {
                 scraperClient,
                 transactionTemplate,
                 urlValidator,
-                new PriceTrackingProperties(200, Duration.ofMinutes(1)));
+                new PriceTrackingProperties(200, Duration.ofMinutes(1)),
+                cooldownLimiter,
+                Clock.systemUTC());
         // Run transactionTemplate callbacks inline so phase splits are exercised end-to-end.
         lenient().when(transactionTemplate.execute(any())).thenAnswer(inv -> {
             TransactionCallback<?> cb = inv.getArgument(0);
@@ -259,6 +266,23 @@ class ProductTrackingServiceCrudTest {
                 .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
 
         verify(scraperClient, never()).scrape(any());
+        // Durable (DB lastChecked) cooldown rejects before the volatile limiter is consulted.
+        verifyNoInteractions(cooldownLimiter);
+    }
+
+    @Test
+    void refreshTrackedItem_volatileCooldownActive_throwsTooManyRequests() {
+        // DB lastChecked is null (durable check passes), but the in-memory limiter rejects —
+        // e.g. a rapid retry after a failed scrape. Must 429 before scraping.
+        when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
+        when(cooldownLimiter.tryAcquire(1L)).thenReturn(false);
+
+        assertThatThrownBy(() -> service.refreshTrackedItem(1L, 1L))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(e -> ((ResponseStatusException) e).getStatusCode())
+                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+
+        verify(scraperClient, never()).scrape(any());
     }
 
     @Test
@@ -269,6 +293,8 @@ class ProductTrackingServiceCrudTest {
                 .isInstanceOf(ResponseStatusException.class)
                 .extracting(e -> ((ResponseStatusException) e).getStatusCode())
                 .isEqualTo(HttpStatus.NOT_FOUND);
+
+        verifyNoInteractions(cooldownLimiter);
     }
 
     @Test
@@ -286,6 +312,8 @@ class ProductTrackingServiceCrudTest {
                 .isInstanceOf(ResponseStatusException.class)
                 .extracting(e -> ((ResponseStatusException) e).getStatusCode())
                 .isEqualTo(HttpStatus.NOT_FOUND);
+
+        verifyNoInteractions(cooldownLimiter);
     }
 
     @Test
@@ -297,6 +325,7 @@ class ProductTrackingServiceCrudTest {
                 null,
                 null);
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
+        when(cooldownLimiter.tryAcquire(1L)).thenReturn(true);
         when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
                 .thenReturn(Optional.empty());
         when(scraperClient.scrape(item.getUrl())).thenReturn(scraped);
@@ -317,8 +346,9 @@ class ProductTrackingServiceCrudTest {
     @Test
     void refreshTrackedItem_secondAttemptAfterFailedScrape_throwsTooManyRequests() {
         // First attempt: scraper returns null. lastChecked never bumped on the entity, but the
-        // in-memory rate-limiter is stamped during Phase 1. Second attempt must hit the cap.
+        // volatile limiter is stamped before the scrape — so the second attempt is rejected by it.
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
+        when(cooldownLimiter.tryAcquire(1L)).thenReturn(true, false);
         when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
                 .thenReturn(Optional.empty());
         when(scraperClient.scrape(item.getUrl())).thenReturn(null);
@@ -367,6 +397,8 @@ class ProductTrackingServiceCrudTest {
         verify(scraperClient).scrape(recentItem.getUrl());
         verify(priceRecordRepository).save(any());
         assertThat(response.currentPrice()).isEqualByComparingTo("899.99");
+        // scheduledRefresh is system-initiated and bypasses the user cooldown entirely.
+        verifyNoInteractions(cooldownLimiter);
     }
 
     @Test
@@ -378,6 +410,7 @@ class ProductTrackingServiceCrudTest {
                 null,
                 null);
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
+        when(cooldownLimiter.tryAcquire(1L)).thenReturn(true);
         when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
                 .thenReturn(Optional.empty());
         when(scraperClient.scrape(item.getUrl())).thenReturn(scraped);
