@@ -216,6 +216,42 @@ Schema is managed by **Flyway**. SQL files live in `backend/src/main/resources/d
 
 **Phase 3 (future):** Price change detection → `PriceDroppedEvent` → notification (email/push).
 
+**Phase 4 (future — the end goal, #119):** Product discovery. Today the user must hand-pick a
+URL per shop (`POST /api/products/track`). The destination is: the user asks for a *product*
+("Sony WH-1000XM5") and the app returns a list of stores selling it, each with price and
+availability. Everything built before this — the scrape→extract→store pipeline — is the
+**engine**; Phase 4 is the **discovery layer** that drives the engine. Build the engine to
+stability first; only then build discovery on top.
+
+The new flow inserts a discovery + matching stage *in front of* the existing engine:
+```
+product description
+  → 1. Query understanding  (LLM: normalize to brand / model / attributes)
+  → 2. Discovery            (find candidate product URLs across shops — web-search API
+                             and/or per-shop site search, behind one swappable interface)
+  → 3. Product matching     (entity resolution: is THIS listing the product asked for?
+                             store a match-confidence; human-in-the-loop confirm early on)
+  → 4. Scrape + extract     ← the existing engine, unchanged
+  → 5. Aggregate / dedup / rank by price
+```
+
+Design notes (decided in discussion, revisit when the work starts):
+- **The LLM is the *easy* part; matching (step 3) is the make-or-break** — variant
+  disambiguation (color/size/refurb/bundle/accessory) is the real accuracy risk.
+- **Discovery is an infra problem, not an AI one** — needs a web-search API (cost +
+  rate-limit) or per-shop search; wrap it behind an interface so the source can be swapped.
+- **This IS the agentic use case** (unlike the deterministic extraction waterfall): the
+  search→evaluate→refine loop is genuinely cyclic, so we plan to build it as an **agent with
+  LangGraph/LangChain** in the **Python scraper** (the LLM-orchestration libs belong there,
+  not in the Spring AI backend). Start with the deterministic pipeline above and add agentic
+  looping only where it pays off (query refinement when matches are weak) — don't make the
+  whole feature an autonomous agent on day one.
+- **Phase 1.7 SSRF hardening becomes a hard prerequisite** — machine-discovered URLs are a
+  far larger attack surface than user-pasted ones.
+- **At scale, feed-first beats scrape-first** — real comparison sites lean on merchant feeds
+  / official product APIs (Google Shopping Content API, Amazon PA-API, affiliate networks)
+  and scrape only the long tail. Worth knowing so the design isn't naive.
+
 ## Infrastructure
 
 - **Database:** PostgreSQL — credentials in `compose.yaml` (do not commit credentials to git)
