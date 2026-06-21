@@ -80,7 +80,7 @@ scripts/agy-plan-review.sh                                  # Gemini: newest pla
 scripts/codex-plan-review.sh                                # Codex:  newest plan in ~/.claude/plans
 ```
 
-Workflow: **write plan → run BOTH `scripts/agy-plan-review.sh` AND `scripts/codex-plan-review.sh` → surface BOTH raw reviews verbatim → human decides (implement as-is / revise the plan / dismiss) → then `ExitPlanMode`.**
+Workflow: **write plan → print the full plan to the user → run BOTH `scripts/agy-plan-review.sh` AND `scripts/codex-plan-review.sh` → surface BOTH raw reviews verbatim → human decides (implement as-is / revise the plan / dismiss) → then `ExitPlanMode`.** The plan body MUST appear in a message to the user *before* the review scripts run — a one-line summary is not enough, because every reviewer finding references plan sections the user must have already read.
 
 - **`agy-plan-review.sh`** shares `AGY_REVIEW_MODEL` / `AGY_REVIEW_TIMEOUT` / `AGY_REVIEW_SANDBOX` with `agy-review.sh`; plan dir via `AGY_PLAN_DIR`.
 - **`codex-plan-review.sh`** shares `CODEX_REVIEW_MODEL` / `CODEX_REVIEW_REASONING_EFFORT` / `CODEX_REVIEW_TIMEOUT` with `codex-review.sh`; plan dir via `CODEX_PLAN_DIR` (falls back to `AGY_PLAN_DIR`). Always runs `codex exec --sandbox read-only` — unlike agy's all-or-nothing sandbox, this blocks all writes while letting Codex read the codebase (including `AGENTS.md`, auto-loaded as context) for a grounded critique.
