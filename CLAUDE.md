@@ -100,8 +100,8 @@ Guardrails (same model as the diff review and issue #81):
 **Base package:** `com.np.pricehunt.backend`
 
 **Flow for the main use case (track a product URL):**
-1. `POST /api/products/track` hits `ProductController`
-2. `ProductTrackingService.trackNewUrl()` orchestrates the workflow (transactional):
+1. `POST /api/products/{id}/track` hits `ProductController`
+2. `ProductTrackingService.trackUrl()` orchestrates the workflow (transactional):
    - Calls `ScraperClient` → `POST http://localhost:8001/scrape` → Python Playwright scraper returns `ScrapeResponse`
    - Calls `PriceExtractionService` → `PriceExtractionOrchestrator` routes based on `extractionSource` (see waterfall below)
    - Validates the extracted `PriceInfo` before saving (non-zero, delta check, currency consistency)
@@ -204,27 +204,28 @@ Schema is managed by **Flyway**. SQL files live in `backend/src/main/resources/d
 
 **Phase 1.6 (next after waterfall):** Selector caching — when LLM fires, it also returns the CSS selector it found the price in; stored on `TrackedItem`; subsequent checks use the selector directly and skip the waterfall entirely. Self-heals if selector stops returning data.
 
-**Phase 1.7 (before cloud deploy):** SSRF hardening — add URL validation in the backend (`UrlValidator` component) that rejects private IP ranges (RFC-1918: 10.x, 172.16–31.x, 192.168.x) and cloud metadata endpoints (169.254.169.254, 100.100.100.200) before the scrape request is dispatched. The scheme check (`http`/`https` only) is already in the scraper; the IP blocklist belongs in the backend at the user-input boundary.
+**Phase 1.7 (before cloud deploy):** SSRF hardening. The backend `UrlValidator` component already enforces the `http`/`https` scheme check and an unsupported-site host blocklist at the user-input boundary — but it does **not** yet reject private IP ranges (RFC-1918: 10.x, 172.16–31.x, 192.168.x) or cloud metadata endpoints (169.254.169.254, 100.100.100.200). Phase 1.7 extends `UrlValidator` to block those before the scrape request is dispatched. (The scheme check also still lives in the scraper; the private-IP/metadata blocklist belongs in the backend at the user-input boundary.)
 
 **Phase 2 (future):** Kafka async pipeline. Replace synchronous scraper call with:
 - Spring Boot publishes `ScrapeRequestedEvent` to `price-tracker.scrape-requests` topic
 - Python scraper consumes, scrapes, publishes `ScrapeCompletedEvent` to `price-tracker.scrape-results`
 - Spring Boot consumes result, calls Ollama if needed, saves `PriceRecord`
-- `POST /api/products/track` returns `202 Accepted` with a `requestId`
+- `POST /api/products/{id}/track` returns `202 Accepted` with a `requestId`
 - `PriceCheckScheduler` (`@Scheduled`) publishes events for all active `TrackedItem`s hourly
 - Migrate primary keys project-wide from BIGSERIAL/SEQUENCE to UUIDv7 — Kafka producers can mint IDs before the row hits the DB (no `getGeneratedKeys()` round-trip per insert). Until Phase 2 lands, `ExchangeRate` uses SEQUENCE; other entities use IDENTITY.
 
 **Phase 3 (future):** Price change detection → `PriceDroppedEvent` → notification (email/push).
 
 **Phase 4 (future — the end goal, #119):** Product discovery. Today the user must hand-pick a
-URL per shop (`POST /api/products/track`). The destination is: the user asks for a *product*
+URL per shop (`POST /api/products/{id}/track`). The destination is: the user asks for a *product*
 ("Sony WH-1000XM5") and the app returns a list of stores selling it, each with price and
 availability. Everything built before this — the scrape→extract→store pipeline — is the
 **engine**; Phase 4 is the **discovery layer** that drives the engine. Build the engine to
 stability first; only then build discovery on top.
 
 The new flow inserts a discovery + matching stage *in front of* the existing engine:
-```
+
+```text
 product description
   → 1. Query understanding  (LLM: normalize to brand / model / attributes)
   → 2. Discovery            (find candidate product URLs across shops — web-search API
