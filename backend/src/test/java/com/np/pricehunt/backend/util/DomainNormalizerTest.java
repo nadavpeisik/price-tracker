@@ -52,7 +52,9 @@ class DomainNormalizerTest {
         // Unicode host → getHost() is null → the authority fallback strips userinfo and port.
         assertThat(DomainNormalizer.registrableDomain("https://user@סופר-פארם.co.il:8443/x"))
                 .isNotNull()
-                .contains("co.il");
+                .doesNotContain("@")
+                .doesNotContain(":8443")
+                .endsWith(".co.il");
     }
 
     @Test
@@ -70,7 +72,7 @@ class DomainNormalizerTest {
     @Test
     void invalidDomainFallsBackToStrippedHost() {
         // An empty label exercises the IDN/Guava parse-failure fallbacks (drop leading www.).
-        assertThat(DomainNormalizer.registrableDomain("http://www.a..b/x")).isNotNull();
+        assertThat(DomainNormalizer.registrableDomain("http://www.a..b/x")).isEqualTo("a..b");
     }
 
     @Test

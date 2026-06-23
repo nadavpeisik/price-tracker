@@ -80,6 +80,9 @@ public final class DomainNormalizer {
     // the authority with userinfo and port stripped. IPv6 literals are bracketed ([::1]:8080), so
     // the port colon must be located after the closing bracket, not inside the address.
     private static String host(String url) {
+        if (url == null) {
+            return null;
+        }
         try {
             URI uri = new URI(url.trim());
             String host = uri.getHost();
@@ -100,7 +103,7 @@ public final class DomainNormalizer {
             }
             int colon = authority.indexOf(':');
             return colon >= 0 ? authority.substring(0, colon) : authority;
-        } catch (URISyntaxException | NullPointerException e) {
+        } catch (URISyntaxException e) {
             return null;
         }
     }
