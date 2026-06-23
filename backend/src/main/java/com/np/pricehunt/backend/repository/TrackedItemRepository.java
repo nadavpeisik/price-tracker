@@ -47,6 +47,11 @@ public interface TrackedItemRepository extends JpaRepository<TrackedItem, Long> 
      * one). The precedence lives only in {@link ShopNameSource} — passed in as the allowed-prior
      * set — never in SQL.
      *
+     * <p>This is a direct by-id bulk update that bypasses the persistence context, so it must be
+     * called in a transaction that does not hold a managed {@link TrackedItem} (the lifecycle writes
+     * only by id and never loads the entity). That prevents a stale managed copy from flushing over
+     * this write — without resorting to a context-wide {@code clearAutomatically}.
+     *
      * @return true if the row was updated, false if the guard rejected it
      */
     default boolean applyShopName(Long itemId, String name, ShopNameSource newSource) {

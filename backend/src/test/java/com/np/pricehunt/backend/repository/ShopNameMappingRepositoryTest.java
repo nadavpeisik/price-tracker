@@ -105,4 +105,16 @@ class ShopNameMappingRepositoryTest {
             assertThat(m.getOrigin()).isEqualTo(MappingOrigin.CURATED);
         });
     }
+
+    @Test
+    void saveStampsUpdatedAtViaPrePersist() {
+        ShopNameMapping saved = repository.save(ShopNameMapping.builder()
+                .domain("savetest.com")
+                .displayName("Save Test")
+                .origin(MappingOrigin.LEARNED)
+                .build());
+        em.flush();
+
+        assertThat(saved.getUpdatedAt()).isNotNull();
+    }
 }

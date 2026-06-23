@@ -39,6 +39,41 @@ class DomainNormalizerTest {
     }
 
     @Test
+    void rawUnicodeIdnHostStillResolves() {
+        // new URI() yields getHost()=null for a raw Unicode host but exposes it via getAuthority(),
+        // so the registrable domain still resolves (punycoded) rather than breaking.
+        assertThat(DomainNormalizer.registrableDomain("https://סופר-פארם.co.il/p/1"))
+                .isNotNull()
+                .contains("co.il");
+    }
+
+    @Test
+    void stripsUserinfoAndPortFromUnicodeAuthority() {
+        // Unicode host → getHost() is null → the authority fallback strips userinfo and port.
+        assertThat(DomainNormalizer.registrableDomain("https://user@סופר-פארם.co.il:8443/x"))
+                .isNotNull()
+                .contains("co.il");
+    }
+
+    @Test
+    void singleLabelNonRegistrableHostReturnedAsIs() {
+        // Not under any public suffix and not an IP → returned unchanged.
+        assertThat(DomainNormalizer.registrableDomain("http://intranet/x")).isEqualTo("intranet");
+    }
+
+    @Test
+    void trailingDotFqdnIsStripped() {
+        assertThat(DomainNormalizer.registrableDomain("https://www.amazon.com./dp/1"))
+                .isEqualTo("amazon.com");
+    }
+
+    @Test
+    void invalidDomainFallsBackToStrippedHost() {
+        // An empty label exercises the IDN/Guava parse-failure fallbacks (drop leading www.).
+        assertThat(DomainNormalizer.registrableDomain("http://www.a..b/x")).isNotNull();
+    }
+
+    @Test
     void ipAndLocalhostReturnedAsIs() {
         assertThat(DomainNormalizer.registrableDomain("http://127.0.0.1:8080/x"))
                 .isEqualTo("127.0.0.1");
