@@ -97,13 +97,6 @@ public class ProductController {
         return ResponseEntity.ok(trackingService.updateProduct(id, request));
     }
 
-    @PatchMapping("/{id}/tracked-items/{itemId}")
-    public ResponseEntity<TrackResponse> updateTrackedItem(
-            @PathVariable Long id, @PathVariable Long itemId, @RequestBody UpdateTrackedItemRequest request) {
-        TrackResponse response = trackingService.updateTrackedItem(id, itemId, request);
-        return ResponseEntity.ok(response);
-    }
-
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> deleteProduct(@PathVariable Long id) {
         trackingService.deleteProduct(id);

@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.np.pricehunt.backend.config.CurrencyProperties;
 import com.np.pricehunt.backend.config.WebPaginationConfig;
 import com.np.pricehunt.backend.domain.ExtractionSource;
+import com.np.pricehunt.backend.domain.ShopNameSource;
 import com.np.pricehunt.backend.dto.*;
 import com.np.pricehunt.backend.service.ProductQueryService;
 import com.np.pricehunt.backend.service.ProductTrackingService;
@@ -141,7 +142,14 @@ class ProductControllerTest {
     @Test
     void getProduct_found_returnsDetail() throws Exception {
         TrackedItemSummary item = new TrackedItemSummary(
-                1L, "https://amazon.com/dp/123", "amazon.com", new BigDecimal("999.99"), "USD", true, Instant.now());
+                1L,
+                "https://amazon.com/dp/123",
+                "amazon.com",
+                ShopNameSource.MAPPING,
+                new BigDecimal("999.99"),
+                "USD",
+                true,
+                Instant.now());
         ProductDetailResponse detail = new ProductDetailResponse(1L, "Laptop", null, List.of(item));
         when(queryService.getProduct(1L)).thenReturn(detail);
 
@@ -211,6 +219,7 @@ class ProductControllerTest {
                 1L,
                 "https://amazon.com/dp/123",
                 "amazon.com",
+                ShopNameSource.MAPPING,
                 new BigDecimal("949.99"),
                 "USD",
                 true,
