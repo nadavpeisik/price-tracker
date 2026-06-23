@@ -189,6 +189,7 @@ public class ProductQueryService {
                 item.getId(),
                 item.getUrl(),
                 item.getShopName(),
+                item.getShopNameSource(),
                 latest != null ? latest.getPrice() : null,
                 latest != null ? latest.getCurrency() : null,
                 latest != null && latest.isAvailable(),

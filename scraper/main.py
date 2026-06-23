@@ -211,6 +211,113 @@ _STRUCTURED_DATA_SCRIPT = """() => {
     return null;
 }"""
 
+# JavaScript run via page.evaluate() to detect the STORE/site name (issue #33), tiered by
+# confidence. og:site_name and Schema.org Organization/WebSite/Store are site-level signals
+# ("strong" — safe to persist as the domain's name); the <title> heuristic is a "weak" last
+# resort. A marketplace seller (offers.seller.name) is deliberately NOT read here: it names the
+# third-party seller of one listing, not the storefront, and would poison the shared domain
+# mapping — capturing it belongs in a separate per-listing field (follow-up issue). JSON-LD
+# `brand` is never read either — it's the manufacturer ("Sony"), not the shop. Returns
+# {name, strong} or null.
+_SITE_NAME_SCRIPT = """() => {
+    // Strip Unicode bidi/directional control chars (RTL pages wrap titles in them) so a leading
+    // mark can't glue to a segment and defeat the og:title de-dup below; then trim.
+    const clean = (s) => {
+        if (typeof s !== 'string') return '';
+        let out = '';
+        for (const ch of s) {
+            const c = ch.codePointAt(0);
+            if ((c >= 0x200e && c <= 0x200f) || (c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069)) continue;
+            out += ch;
+        }
+        return out.trim();
+    };
+
+    // Tier A: OpenGraph site name — strong.
+    const og = document.querySelector('meta[property="og:site_name"]');
+    const ogName = og ? clean(og.getAttribute('content')) : '';
+    if (ogName) return { name: ogName, strong: true };
+
+    // Collect JSON-LD nodes at the top level only (each block's top-level entries + one level of
+    // @graph) — deliberately NOT recursing into nested objects, so a nested offers.seller
+    // Organization can't be mistaken for the storefront. Each block parsed in its own try/catch.
+    const nodes = [];
+    const addTop = (data) => {
+        const arr = Array.isArray(data) ? data : [data];
+        for (const n of arr) {
+            if (!n || typeof n !== 'object') continue;
+            nodes.push(n);
+            if (Array.isArray(n['@graph'])) {
+                for (const g of n['@graph']) if (g && typeof g === 'object') nodes.push(g);
+            }
+        }
+    };
+    for (const s of document.querySelectorAll('script[type="application/ld+json"]')) {
+        try { addTop(JSON.parse(s.textContent)); } catch (e) {}
+    }
+    const typesOf = (n) => {
+        const t = n && n['@type'];
+        if (!t) return [];
+        return (Array.isArray(t) ? t : [t]).map(x => String(x).toLowerCase());
+    };
+    const ORG_TYPES = ['organization', 'website', 'store', 'onlinestore', 'corporation', 'localbusiness'];
+    const stripWww = (h) => (h.startsWith('www.') ? h.slice(4) : h);
+    const pageHost = stripWww((location.hostname || '').toLowerCase());
+    const hostOf = (v) => {
+        if (typeof v !== 'string') return '';
+        const t = v.trim();
+        const s = t.startsWith('//') ? 'https:' + t : t; // resolve protocol-relative urls
+        if (!(s.startsWith('http://') || s.startsWith('https://'))) return ''; // ignore relative / #frag @id
+        try { return stripWww(new URL(s).hostname.toLowerCase()); } catch (e) { return ''; }
+    };
+    const sameSite = (h) => h === pageHost || h.endsWith('.' + pageHost) || pageHost.endsWith('.' + h);
+
+    // Tier B: Schema.org Organization/WebSite/Store name. An org whose url/@id host MATCHES the page
+    // is the site publisher → strong (safe to learn into the shared domain mapping). An org on a
+    // DIFFERENT host is a brand/manufacturer (e.g. url=sony.com on a shop page) → skipped, so it can
+    // never poison the domain mapping. An org with no resolvable host is shown but NOT learned (weak).
+    let weakOrgName = null;
+    for (const n of nodes) {
+        if (!(typesOf(n).some(t => ORG_TYPES.includes(t)) && clean(n.name))) continue;
+        const orgHost = hostOf(n.url) || hostOf(n['@id']);
+        if (orgHost && sameSite(orgHost)) {
+            return { name: clean(n.name), strong: true };
+        }
+        if (!orgHost && weakOrgName === null) {
+            weakOrgName = clean(n.name);
+        }
+    }
+    if (weakOrgName !== null) {
+        return { name: weakOrgName, strong: false };
+    }
+
+    // Tier C: <title> heuristic — weak. A title with no separator is just the product name (no
+    // shop segment), so it is rejected outright (return null) rather than used verbatim — the
+    // product name must never be mistaken for the shop name. Only a title with a real separator is
+    // mined for a shop segment: split on pipe / en- / em-dash / spaced ascii hyphen (so "SLO-30" /
+    // "Wi-Fi" don't split), else fall back to colon. Drop the product segment (anything contained
+    // in og:title) and the bare-host segment; accept only if exactly one segment survives.
+    const title = clean(document.title);
+    if (title) {
+        let parts = title.split(/\\s+[|\\u2013\\u2014-]\\s+/).map(clean).filter(Boolean);
+        if (parts.length < 2) parts = title.split(/\\s*:\\s*/).map(clean).filter(Boolean);
+        if (parts.length >= 2) {
+            const ot = document.querySelector('meta[property="og:title"]');
+            const ogTitle = (ot ? clean(ot.getAttribute('content')) : '').toLowerCase();
+            const host = (location.hostname || '').replace(/^www\\./, '').toLowerCase();
+            const survivors = parts.filter(p => {
+                const pl = p.toLowerCase();
+                if (ogTitle && ogTitle.includes(pl)) return false;
+                if (host && pl === host) return false;
+                return true;
+            });
+            if (survivors.length === 1) return { name: survivors[0], strong: false };
+        }
+    }
+
+    return null;
+}"""
+
 # JavaScript run via page.evaluate() to remove decoy prices (strikethrough MSRP
 # and paired .regular-price) from the rendered DOM. Runs before Tier 1 so
 # microdata's innerText-based reads see clean values; runs before Tier 2 so the
@@ -317,12 +424,22 @@ class PriceData(BaseModel):
     available: bool
 
 
+class ShopNameProposal(BaseModel):
+    # The scraper's proposed shop name and how confident the signal is: strong = a site-level
+    # signal (og:site_name / JSON-LD Organization), weak = a <title> guess. A proposal, not the
+    # final name — the backend resolver decides the stored name (a curated/learned mapping can
+    # override even a strong proposal). See _SITE_NAME_SCRIPT.
+    name: str
+    strong: bool
+
+
 class ScrapeResponse(BaseModel):
     extractionSource: ExtractionSource
     priceData: PriceData | None = None
     snippet: str | None = None
     innerText: str | None = None
     blockedReason: str | None = None
+    shopNameProposal: ShopNameProposal | None = None
 
 
 @asynccontextmanager
@@ -455,6 +572,18 @@ async def _extract_snippet(page) -> str | None:
 
     deduped = list(dict.fromkeys(parts))
     return " | ".join(deduped) if deduped else None
+
+
+async def _extract_site_name(page) -> ShopNameProposal | None:
+    # Best-effort store-name detection: any browser-eval failure yields None so it can never block
+    # a scrape. Returns a ShopNameProposal (name + strong) or None — see _SITE_NAME_SCRIPT.
+    try:
+        result = await page.evaluate(_SITE_NAME_SCRIPT)
+    except Exception:
+        return None
+    if not result or not result.get("name"):
+        return None
+    return ShopNameProposal(name=result["name"], strong=bool(result.get("strong")))
 
 
 _CF_CHALLENGE_TITLES = (
@@ -660,6 +789,12 @@ async def scrape(request: ScrapeRequest):
         except Exception:
             pass
 
+        # Store-name detection — metadata only, computed once here so it rides on every
+        # non-blocked response (STRUCTURED/SNIPPET/FULLTEXT). Must run before the Tier-1 early
+        # return below and before _DOM_PRUNE_SCRIPT (which strips the <script> tags JSON-LD
+        # lives in).
+        shop_name_proposal = await _extract_site_name(page)
+
         # Tier 1: Schema.org structured data (JSON-LD then Microdata) — must run
         # before DOM pruning, which removes <script> tags used by JSON-LD.
         try:
@@ -668,6 +803,7 @@ async def scrape(request: ScrapeRequest):
                 return ScrapeResponse(
                     extractionSource=ExtractionSource.STRUCTURED,
                     priceData=PriceData(**result),
+                    shopNameProposal=shop_name_proposal,
                 )
         except Exception:
             pass
@@ -686,6 +822,7 @@ async def scrape(request: ScrapeRequest):
                 return ScrapeResponse(
                     extractionSource=ExtractionSource.SNIPPET,
                     snippet=snippet,
+                    shopNameProposal=shop_name_proposal,
                 )
         except Exception:
             pass
@@ -695,6 +832,7 @@ async def scrape(request: ScrapeRequest):
         return ScrapeResponse(
             extractionSource=ExtractionSource.FULLTEXT,
             innerText=inner_text,
+            shopNameProposal=shop_name_proposal,
         )
 
     except Exception as e:

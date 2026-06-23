@@ -21,6 +21,12 @@ public class TrackedItem {
     private String url;
     private String shopName;
 
+    // Which tier produced shopName (MAPPING > DETECTED > HOST_FALLBACK). Nullable: legacy rows
+    // predate detection and resolve on their next refresh. Maps tracked_item.shop_name_source (V7).
+    @Enumerated(EnumType.STRING)
+    @Column(length = 32)
+    private ShopNameSource shopNameSource;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "product_id")
     private Product product;

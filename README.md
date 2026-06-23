@@ -92,8 +92,8 @@ curl -X POST http://localhost:8080/api/products \
 # Attach a URL to track
 curl -X POST http://localhost:8080/api/products/1/track \
   -H 'Content-Type: application/json' \
-  -d '{"url":"https://www.thomannmusic.com/duesenberg_starplayer_tv_blue_sparkle.htm","shopName":"Thomann"}'
-# → 200 with extracted price and current PriceRecord
+  -d '{"url":"https://www.thomannmusic.com/duesenberg_starplayer_tv_blue_sparkle.htm"}'
+# → 200 with extracted price, current PriceRecord, and the auto-detected shop name
 ```
 
 ## API
@@ -109,7 +109,6 @@ Base path: `/api/products`
 | `DELETE` | `/{id}` | Delete a product and all its tracked items |
 | `POST` | `/{id}/track` | Attach a URL to a product and run an initial scrape |
 | `POST` | `/{id}/tracked-items/{itemId}/refresh` | Re-scrape a tracked URL and append a new PriceRecord |
-| `PATCH` | `/{id}/tracked-items/{itemId}` | Update a tracked item (e.g. shop name) |
 | `DELETE` | `/{id}/tracked-items/{itemId}` | Remove a tracked URL |
 | `GET` | `/{id}/tracked-items/{itemId}/price-history` | Price history with optional `?from`/`?to` ISO timestamps |
 

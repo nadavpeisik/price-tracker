@@ -13,8 +13,6 @@ import com.np.pricehunt.backend.service.ratelimit.RefreshCooldownLimiter;
 import com.np.pricehunt.backend.validator.UrlValidator;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.net.URI;
-import java.net.URISyntaxException;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Locale;
@@ -40,6 +38,7 @@ public class ProductTrackingService {
     private final TransactionTemplate transactionTemplate;
     private final UrlValidator urlValidator;
     private final PriceTrackingProperties trackingProperties;
+    private final ShopNameResolver shopNameResolver;
     // Volatile, per-process half of the refresh cooldown: catches rapid retries (incl. after a
     // failed scrape, which never bumps DB lastChecked). The durable half is the lastChecked check
     // below. Single-instance only, pre-Phase-2; a Redis-backed impl swaps in behind this interface.
@@ -65,8 +64,7 @@ public class ProductTrackingService {
             return new ItemSnapshot(item.getId(), item.getUrl());
         });
 
-        PriceInfo info = doScrape(snapshot.url());
-        return persistResultInTxn(snapshot.id(), info);
+        return trackAndPersist(snapshot.id(), snapshot.url());
     }
 
     public TrackResponse refreshTrackedItem(Long productId, Long itemId) {
@@ -89,8 +87,7 @@ public class ProductTrackingService {
                     HttpStatus.TOO_MANY_REQUESTS, "Item was refreshed recently, try again later");
         }
 
-        PriceInfo info = doScrape(snapshot.url());
-        return persistResultInTxn(snapshot.id(), info);
+        return trackAndPersist(snapshot.id(), snapshot.url());
     }
 
     // System-initiated refresh: bypasses the rate-limit (the scheduler is the system, not a user).
@@ -101,8 +98,7 @@ public class ProductTrackingService {
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found"));
             return new ItemSnapshot(item.getId(), item.getUrl());
         });
-        PriceInfo info = doScrape(snapshot.url());
-        return persistResultInTxn(snapshot.id(), info);
+        return trackAndPersist(snapshot.id(), snapshot.url());
     }
 
     // Durable half of the refresh cooldown: a successful refresh persists lastChecked, which
@@ -160,18 +156,60 @@ public class ProductTrackingService {
         return new ProductResponse(product.getId(), product.getName(), product.getDescription());
     }
 
-    // Phase 2: external HTTP call. Deliberately runs outside any DB transaction so we don't
-    // pin a Hikari connection while waiting on the scraper.
-    private PriceInfo doScrape(String url) {
+    // Shared pipeline for all three entry points after their own auth/cooldown gating. Three short
+    // DB transactions bracket the two network calls (scrape, then LLM extract) — a transaction is
+    // never held across that I/O. Shop-name resolution is committed before price extraction, so a
+    // price failure never loses the name.
+    private TrackResponse trackAndPersist(Long itemId, String url) {
+        // Step 1 — pre-scrape tx: ensure a name floor (host only fills a blank) and detect whether
+        // the domain resolves to a curated row (authoritative → skip post-scrape name work).
+        // Best-effort like step 3: a name-resolution failure here must never block price tracking,
+        // so it is logged and we proceed (curatedLocked = false).
+        boolean curatedLocked = false;
+        try {
+            curatedLocked = Boolean.TRUE.equals(transactionTemplate.execute(status -> {
+                ShopNameResolver.Resolved resolved = shopNameResolver.resolve(url, null);
+                trackedItemRepository.applyShopName(itemId, resolved.name(), resolved.source());
+                return resolved.curated();
+            }));
+        } catch (RuntimeException e) {
+            log.warn("Pre-scrape shop-name resolution failed for url={} — proceeding without it", url, e);
+        }
+
+        // Step 2 — scrape (network, no tx).
         ScrapeResponse scraped = scraperClient.scrape(url);
         if (scraped == null) {
             log.warn("Scraper returned null response for url={}", url);
-            return null;
         }
-        return extractionService.extractPrice(scraped);
+
+        // Step 3 — name tx (DB only): skipped when curated-locked, the scrape failed, or no name was
+        // proposed (the step-1 floor already stands). A strong (site-level) proposal is learned into
+        // the shared mapping first, so the re-resolve promotes it to MAPPING; a weak <title> proposal
+        // stays DETECTED and is never learned. Best-effort: a name-DB failure is logged here, never
+        // aborting the price update that follows.
+        var proposal = scraped == null ? null : scraped.shopNameProposal();
+        if (!curatedLocked && proposal != null && StringUtils.hasText(proposal.name())) {
+            try {
+                if (proposal.strong()) {
+                    shopNameResolver.learn(url, proposal.name());
+                }
+                transactionTemplate.executeWithoutResult(status -> {
+                    ShopNameResolver.Resolved resolved = shopNameResolver.resolve(url, proposal.name());
+                    trackedItemRepository.applyShopName(itemId, resolved.name(), resolved.source());
+                });
+            } catch (RuntimeException e) {
+                log.warn("Shop-name learn/resolve failed for url={} — keeping the pre-scrape name", url, e);
+            }
+        }
+
+        // Step 4 — price extraction (network, may call the LLM). Failures propagate as before; the
+        // name is already committed.
+        PriceInfo info = scraped == null ? null : extractionService.extractPrice(scraped);
+
+        // Step 5 — validate + persist the price in a fresh, short-lived transaction.
+        return persistResultInTxn(itemId, info);
     }
 
-    // Phase 3: validate + persist in a fresh, short-lived transaction.
     private TrackResponse persistResultInTxn(Long itemId, PriceInfo info) {
         return transactionTemplate.execute(status -> {
             TrackedItem item = trackedItemRepository
@@ -218,27 +256,6 @@ public class ProductTrackingService {
         });
     }
 
-    @Transactional
-    public TrackResponse updateTrackedItem(Long productId, Long itemId, UpdateTrackedItemRequest request) {
-        TrackedItem item = trackedItemRepository
-                .findById(itemId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found"));
-
-        if (!item.getProduct().getId().equals(productId)) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found for this product");
-        }
-
-        if (StringUtils.hasText(request.shopName())) {
-            item.setShopName(request.shopName());
-            trackedItemRepository.save(item);
-        }
-
-        PriceRecord latest = priceRecordRepository
-                .findFirstByTrackedItemOrderByTimestampDesc(item)
-                .orElse(null);
-        return buildTrackResponse(item.getProduct(), item, latest);
-    }
-
     private TrackedItem resolveTrackedItem(Product product, TrackRequest request) {
         return trackedItemRepository
                 .findByUrl(request.url())
@@ -253,20 +270,8 @@ public class ProductTrackingService {
                 })
                 .orElseGet(() -> trackedItemRepository.save(TrackedItem.builder()
                         .url(request.url())
-                        .shopName(resolveShopName(request.url(), request.shopName()))
                         .product(product)
                         .build()));
-    }
-
-    private String resolveShopName(String url, String providedShopName) {
-        if (StringUtils.hasText(providedShopName)) return providedShopName;
-        try {
-            String host = new URI(url).getHost();
-            if (host == null) return url;
-            return host.replaceFirst("^www\\.", "");
-        } catch (URISyntaxException e) {
-            return url;
-        }
     }
 
     private boolean isValidPrice(PriceInfo info, PriceRecord previous) {
@@ -305,6 +310,7 @@ public class ProductTrackingService {
                 item.getId(),
                 item.getUrl(),
                 item.getShopName(),
+                item.getShopNameSource(),
                 record != null ? record.getPrice() : null,
                 record != null ? record.getCurrency() : null,
                 record != null && record.isAvailable(),

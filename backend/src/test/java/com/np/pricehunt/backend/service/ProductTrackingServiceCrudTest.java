@@ -10,6 +10,7 @@ import com.np.pricehunt.backend.config.PriceTrackingProperties;
 import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.domain.PriceRecord;
 import com.np.pricehunt.backend.domain.Product;
+import com.np.pricehunt.backend.domain.ShopNameSource;
 import com.np.pricehunt.backend.domain.TrackedItem;
 import com.np.pricehunt.backend.dto.*;
 import com.np.pricehunt.backend.repository.PriceRecordRepository;
@@ -58,6 +59,9 @@ class ProductTrackingServiceCrudTest {
     private UrlValidator urlValidator;
 
     @Mock
+    private ShopNameResolver shopNameResolver;
+
+    @Mock
     private RefreshCooldownLimiter cooldownLimiter;
 
     private ProductTrackingService service;
@@ -76,6 +80,7 @@ class ProductTrackingServiceCrudTest {
                 transactionTemplate,
                 urlValidator,
                 new PriceTrackingProperties(200, Duration.ofMinutes(1)),
+                shopNameResolver,
                 cooldownLimiter,
                 Clock.systemUTC());
         // Run transactionTemplate callbacks inline so phase splits are exercised end-to-end.
@@ -329,6 +334,8 @@ class ProductTrackingServiceCrudTest {
         when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
                 .thenReturn(Optional.empty());
         when(scraperClient.scrape(item.getUrl())).thenReturn(scraped);
+        when(shopNameResolver.resolve(any(), any()))
+                .thenReturn(new ShopNameResolver.Resolved("amazon.com", ShopNameSource.HOST_FALLBACK, null));
         when(extractionService.extractPrice(scraped))
                 .thenReturn(new PriceInfo(new BigDecimal("899.99"), "USD", true, ExtractionSource.STRUCTURED));
         when(priceRecordRepository.save(any())).thenAnswer(inv -> {
@@ -352,6 +359,8 @@ class ProductTrackingServiceCrudTest {
         when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
                 .thenReturn(Optional.empty());
         when(scraperClient.scrape(item.getUrl())).thenReturn(null);
+        when(shopNameResolver.resolve(any(), any()))
+                .thenReturn(new ShopNameResolver.Resolved("amazon.com", ShopNameSource.HOST_FALLBACK, null));
 
         TrackResponse first = service.refreshTrackedItem(1L, 1L);
         assertThat(first.currentPrice()).isNull();
@@ -384,6 +393,8 @@ class ProductTrackingServiceCrudTest {
         when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(recentItem))
                 .thenReturn(Optional.empty());
         when(scraperClient.scrape(recentItem.getUrl())).thenReturn(scraped);
+        when(shopNameResolver.resolve(any(), any()))
+                .thenReturn(new ShopNameResolver.Resolved("amazon.com", ShopNameSource.HOST_FALLBACK, null));
         when(extractionService.extractPrice(scraped))
                 .thenReturn(new PriceInfo(new BigDecimal("899.99"), "USD", true, ExtractionSource.STRUCTURED));
         when(priceRecordRepository.save(any())).thenAnswer(inv -> {
@@ -414,6 +425,8 @@ class ProductTrackingServiceCrudTest {
         when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
                 .thenReturn(Optional.empty());
         when(scraperClient.scrape(item.getUrl())).thenReturn(scraped);
+        when(shopNameResolver.resolve(any(), any()))
+                .thenReturn(new ShopNameResolver.Resolved("amazon.com", ShopNameSource.HOST_FALLBACK, null));
         when(extractionService.extractPrice(scraped))
                 .thenReturn(new PriceInfo(new BigDecimal("100.00"), "usd", true, ExtractionSource.STRUCTURED));
         when(priceRecordRepository.save(any())).thenAnswer(inv -> {

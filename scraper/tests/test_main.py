@@ -10,11 +10,14 @@ import main
 from main import (
     _HAS_PRICE_SIGNAL_SCRIPT,
     _HIDE_CHROME_SCRIPT,
+    _SITE_NAME_SCRIPT,
     _STRIP_DECOY_PRICES_SCRIPT,
     _STRUCTURED_DATA_SCRIPT,
     _VISIBLE_TEXT_LEN_SCRIPT,
     ScrapeRequest,
+    ShopNameProposal,
     _detect_block,
+    _extract_site_name,
     _extract_snippet,
     _wait_for_render,
     scrape,
@@ -785,3 +788,254 @@ async def test_scrape_rejects_non_http_scheme(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         await scrape(ScrapeRequest(url="ftp://example.com/file"))
     assert exc.value.status_code == 400
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Store-name detection (_SITE_NAME_SCRIPT / _extract_site_name) — issue #33.
+# Returns {name, strong} or None. strong=True for site-level signals (og:site_name,
+# JSON-LD Organization); the <title> heuristic is weak. See _SITE_NAME_SCRIPT.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+async def _load_on_host(page, html, url):
+    """Serve static HTML as if it came from `url`, so location.hostname is populated —
+    set_content alone leaves the page on about:blank with an empty host. The request is
+    fulfilled locally; no real network round-trip happens."""
+
+    async def _handler(route):
+        await route.fulfill(status=200, content_type="text/html", body=html)
+
+    await page.route("**/*", _handler)
+    await page.goto(url, wait_until="domcontentloaded")
+
+
+# Tier A: og:site_name is the highest-confidence signal — strong, used verbatim.
+async def test_sitename_og_site_name_is_strong(page):
+    html = """
+    <html><head>
+    <meta property="og:site_name" content="Musikhaus Thomann">
+    <title>RME Babyface Pro FS</title>
+    </head><body><p>x</p></body></html>
+    """
+    await page.set_content(html)
+    assert await page.evaluate(_SITE_NAME_SCRIPT) == {"name": "Musikhaus Thomann", "strong": True}
+
+
+# Tier B: a JSON-LD Organization whose url matches the page host (no og:site_name) — strong.
+async def test_sitename_jsonld_organization_is_strong(page):
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@context":"https://schema.org","@type":"Organization","name":"Wild Guitars","url":"https://wildguitars.co.il"}
+    </script>
+    <title>Soldano SLO-30</title>
+    </head><body><p>x</p></body></html>
+    """
+    await _load_on_host(page, html, "https://www.wildguitars.co.il/product/x")
+    assert await page.evaluate(_SITE_NAME_SCRIPT) == {"name": "Wild Guitars", "strong": True}
+
+
+# Tier B: a list @type and an Organization in @graph are reachable; matching url host → strong.
+async def test_sitename_jsonld_type_array_and_graph(page):
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@graph":[
+       {"@type":"WebPage","name":"ignored"},
+       {"@type":["Organization","Store"],"name":"6th String","url":"https://string6.co.il"}
+    ]}
+    </script></head><body><p>x</p></body></html>
+    """
+    await _load_on_host(page, html, "https://www.string6.co.il/product/x")
+    assert await page.evaluate(_SITE_NAME_SCRIPT) == {"name": "6th String", "strong": True}
+
+
+# Tier B guard: a top-level brand/manufacturer Organization on a DIFFERENT host is skipped; the org
+# whose url matches the page (the publisher) is used — so a brand can't poison the domain mapping.
+async def test_sitename_foreign_brand_org_skipped_publisher_used(page):
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@graph":[
+       {"@type":"Organization","name":"Sony","url":"https://www.sony.com"},
+       {"@type":"WebSite","name":"GadgetWorld","url":"https://gadgetworld.com"}
+    ]}
+    </script></head><body><p>x</p></body></html>
+    """
+    await _load_on_host(page, html, "https://www.gadgetworld.com/dp/1")
+    assert await page.evaluate(_SITE_NAME_SCRIPT) == {"name": "GadgetWorld", "strong": True}
+
+
+# Tier B guard: a lone foreign brand Organization (no matching publisher) is ignored entirely — it
+# falls through to the <title> tier (here separator-less → None), never learned as the shop.
+async def test_sitename_lone_foreign_brand_org_falls_through(page):
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@type":"Organization","name":"Sony","url":"https://www.sony.com"}
+    </script>
+    <title>Sony WH-1000XM5</title>
+    </head><body><p>x</p></body></html>
+    """
+    await _load_on_host(page, html, "https://www.gadgetworld.com/dp/1")
+    assert await page.evaluate(_SITE_NAME_SCRIPT) is None
+
+
+# Tier B guard: a protocol-relative brand url (//host) resolves to a foreign host and is skipped —
+# without the // handling it would wrongly become a hostless (weak) "Sony".
+async def test_sitename_protocol_relative_brand_org_skipped(page):
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@type":"Organization","name":"Sony","url":"//www.sony.com/about"}
+    </script>
+    <title>Sony WH-1000XM5</title>
+    </head><body><p>x</p></body></html>
+    """
+    await _load_on_host(page, html, "https://www.gadgetworld.com/dp/1")
+    assert await page.evaluate(_SITE_NAME_SCRIPT) is None
+
+
+# Tier B: an Organization with no resolvable host is shown but NOT learnable → weak (strong=false).
+async def test_sitename_hostless_org_is_weak(page):
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@context":"https://schema.org","@type":"Organization","name":"GadgetWorld"}
+    </script>
+    <title>Some Product</title>
+    </head><body><p>x</p></body></html>
+    """
+    await _load_on_host(page, html, "https://www.gadgetworld.com/dp/1")
+    assert await page.evaluate(_SITE_NAME_SCRIPT) == {"name": "GadgetWorld", "strong": False}
+
+
+# Brand-trap: JSON-LD `brand` is never read as the shop (it's the manufacturer). With no other
+# signal and a separator-less title, the result is None — never "CERAVE".
+async def test_sitename_brand_is_never_picked(page):
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@context":"https://schema.org","@type":"Product","name":"Retinol Serum",
+     "brand":{"@type":"Brand","name":"CERAVE"}}
+    </script>
+    <title>Retinol Serum</title>
+    </head><body><p>x</p></body></html>
+    """
+    await page.set_content(html)
+    assert await page.evaluate(_SITE_NAME_SCRIPT) is None
+
+
+# Marketplace guard: a nested offers.seller Organization must NOT be mistaken for the storefront.
+# The script collects top-level/@graph nodes only and never recurses into offers, so the seller
+# is invisible to the Organization tier.
+async def test_sitename_nested_seller_org_not_picked(page):
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@context":"https://schema.org","@type":"Product","name":"Widget",
+     "offers":{"@type":"Offer","price":"9.99",
+               "seller":{"@type":"Organization","name":"ACME Third-Party Seller"}}}
+    </script>
+    <title>Widget</title>
+    </head><body><p>x</p></body></html>
+    """
+    await page.set_content(html)
+    assert await page.evaluate(_SITE_NAME_SCRIPT) is None
+
+
+# Tier C: a title with a separator drops the product segment (matched in og:title); the shop
+# segment survives. Weak.
+async def test_sitename_title_suffix_with_separator(page):
+    html = """
+    <html><head>
+    <meta property="og:title" content="Cool Product">
+    <title>Cool Product | MyShop</title>
+    </head><body><p>x</p></body></html>
+    """
+    await page.set_content(html)
+    assert await page.evaluate(_SITE_NAME_SCRIPT) == {"name": "MyShop", "strong": False}
+
+
+# Tier C: a separator-less title is just the product name and is rejected outright (None).
+async def test_sitename_title_without_separator_is_none(page):
+    html = "<html><head><title>Just A Product Name</title></head><body><p>x</p></body></html>"
+    await page.set_content(html)
+    assert await page.evaluate(_SITE_NAME_SCRIPT) is None
+
+
+# Tier C: a spaced ascii hyphen splits, but a hyphen inside a model number ("SLO-30") does not.
+async def test_sitename_title_model_number_hyphen_not_split(page):
+    html = """
+    <html><head>
+    <meta property="og:title" content="Soldano SLO-30 Classic">
+    <title>Soldano SLO-30 Classic | Wild Guitars</title>
+    </head><body><p>x</p></body></html>
+    """
+    await page.set_content(html)
+    assert await page.evaluate(_SITE_NAME_SCRIPT) == {"name": "Wild Guitars", "strong": False}
+
+
+# Tier C + bidi: an RTL title wrapped in directional control marks (U+202B … U+202C) still drops
+# the brand (matched against og:title) and returns the localized shop name. Regression for
+# super-pharm — without the strip, "CERAVE" stays glued to a control char, never matches og:title,
+# survives as a second segment, and the heuristic falls through to the host instead.
+async def test_sitename_title_strips_bidi_and_drops_brand(page):
+    title = chr(0x202B) + "CERAVE - סרום רטינול | סופר-פארם" + chr(0x202C)
+    html = f"""
+    <html><head>
+    <meta property="og:title" content="CERAVE סרום רטינול">
+    <title>{title}</title>
+    </head><body><p>x</p></body></html>
+    """
+    await page.set_content(html)
+    assert await page.evaluate(_SITE_NAME_SCRIPT) == {"name": "סופר-פארם", "strong": False}
+
+
+# Tier C: the bare-host segment is dropped, so an "Amazon.com: <product>" title yields no shop
+# name (Amazon is resolved via the curated mapping, not detection).
+async def test_sitename_host_segment_dropped_returns_none(page):
+    html = """
+    <html><head>
+    <meta property="og:title" content="Cool Product">
+    <title>Amazon.com: Cool Product</title>
+    </head><body><p>x</p></body></html>
+    """
+    await _load_on_host(page, html, "https://www.amazon.com/dp/B000")
+    assert await page.evaluate(_SITE_NAME_SCRIPT) is None
+
+
+# One malformed JSON-LD block must not abort the rest (per-script try/catch).
+async def test_sitename_malformed_jsonld_block_skipped(page):
+    html = """
+    <html><head>
+    <script type="application/ld+json">{ this is not valid json </script>
+    <script type="application/ld+json">
+    {"@context":"https://schema.org","@type":"Organization","name":"Recovered Shop","url":"https://recovered.example"}
+    </script>
+    <title>Product</title>
+    </head><body><p>x</p></body></html>
+    """
+    await _load_on_host(page, html, "https://recovered.example/x")
+    assert await page.evaluate(_SITE_NAME_SCRIPT) == {"name": "Recovered Shop", "strong": True}
+
+
+# No usable signal at all → None.
+async def test_sitename_no_signals_returns_none(page):
+    await page.set_content("<html><head></head><body><p>x</p></body></html>")
+    assert await page.evaluate(_SITE_NAME_SCRIPT) is None
+
+
+# The Python wrapper returns a ShopNameProposal (name + strong) or None.
+async def test_extract_site_name_wrapper(page):
+    await page.set_content(
+        '<html><head><meta property="og:site_name" content="MyShop">'
+        "<title>x</title></head><body><p>x</p></body></html>"
+    )
+    assert await _extract_site_name(page) == ShopNameProposal(name="MyShop", strong=True)
+
+
+# The wrapper yields None when nothing is detected.
+async def test_extract_site_name_wrapper_none(page):
+    await page.set_content("<html><head></head><body><p>x</p></body></html>")
+    assert await _extract_site_name(page) is None
