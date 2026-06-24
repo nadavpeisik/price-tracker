@@ -72,6 +72,7 @@ class ProductControllerTest {
                 .andExpect(jsonPath("$.content[0].conversionAsOf").value("2026-05-24"))
                 .andExpect(jsonPath("$.content[0].conversionStale").value(false))
                 .andExpect(jsonPath("$.content[0].priceBasis").value("AS_LISTED"))
+                .andExpect(jsonPath("$.content[0].availability").value("AVAILABLE"))
                 .andExpect(jsonPath("$.content[0].mixedCurrencies").value(true))
                 .andExpect(jsonPath("$.page.totalElements").value(1));
 
@@ -159,7 +160,8 @@ class ProductControllerTest {
                 .andExpect(jsonPath("$.id").value(1))
                 .andExpect(jsonPath("$.name").value("Laptop"))
                 .andExpect(jsonPath("$.trackedItems[0].shopName").value("amazon.com"))
-                .andExpect(jsonPath("$.trackedItems[0].currentPrice").value(999.99));
+                .andExpect(jsonPath("$.trackedItems[0].currentPrice").value(999.99))
+                .andExpect(jsonPath("$.trackedItems[0].availability").value("AVAILABLE"));
     }
 
     @Test
@@ -231,6 +233,7 @@ class ProductControllerTest {
         mvc.perform(post("/api/products/1/tracked-items/1/refresh"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.currentPrice").value(949.99))
+                .andExpect(jsonPath("$.availability").value("AVAILABLE"))
                 .andExpect(jsonPath("$.extractionSource").value("FULLTEXT"));
     }
 
@@ -253,6 +256,7 @@ class ProductControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.trackedItemId").value(1))
                 .andExpect(jsonPath("$.history[0].currency").value("USD"))
+                .andExpect(jsonPath("$.history[0].availability").value("AVAILABLE"))
                 .andExpect(jsonPath("$.history[0].extractionSource").value("STRUCTURED"));
     }
 

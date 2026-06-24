@@ -101,6 +101,8 @@ class PriceRecordAvailabilityMigrationTest {
                             .executeUpdate();
                     entityManager.flush();
                 })
-                .isInstanceOf(Exception.class);
+                // Tie the failure to the CHECK constraint specifically, so an unrelated SQL error can't
+                // false-positive this test (the constraint name surfaces in the Postgres error message).
+                .hasStackTraceContaining("price_record_availability_status_check");
     }
 }

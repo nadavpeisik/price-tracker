@@ -94,7 +94,7 @@ public class OllamaPriceExtractionService {
                              - low quantity / urgency: "only N left in stock", "order soon", "selling fast",
                                "low stock", "limited stock", "while supplies last";
                              - orderable but not yet shipped: "pre-order", "preorder", "backordered",
-                               "available for pre-order" — you CAN place an order now → AVAILABLE.
+                               "available for pre-order" (Hebrew: "הזמנה מראש") — you CAN place an order now → AVAILABLE.
                              A positive orderability signal WINS over a generic out-of-stock phrase
                              ("Out of stock — pre-orders accepted" → AVAILABLE). A present-tense "In stock." is
                              AVAILABLE even when a separate SHIPPING window follows ("In stock. Ships in 2-3 weeks")

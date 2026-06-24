@@ -234,10 +234,14 @@ public class ProductTrackingService {
                 return buildTrackResponse(item.getProduct(), item, latest);
             }
 
+            // Defense at the persistence boundary: availability is optional metadata, so coalesce a
+            // null to UNKNOWN before the NOT NULL write rather than relying on an upstream guarantee.
+            AvailabilityStatus availability =
+                    info.availability() != null ? info.availability() : AvailabilityStatus.UNKNOWN;
             PriceRecord record = priceRecordRepository.save(PriceRecord.builder()
                     .price(info.price())
                     .currency(info.currency().toUpperCase(Locale.ROOT))
-                    .availability(info.availability())
+                    .availability(availability)
                     .extractionSource(info.extractionSource())
                     .trackedItem(item)
                     .build());

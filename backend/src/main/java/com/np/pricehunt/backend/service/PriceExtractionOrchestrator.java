@@ -44,7 +44,7 @@ public class PriceExtractionOrchestrator implements PriceExtractionService {
                     + "while supplies last|pre-?orders?|back-?order(ed)?|notify me|email me|coming soon|"
                     + "add to cart|buy now)\\b"
                     + "|חסר במלאי|אזל מהמלאי|לא במלאי|הזמנה מראש",
-            Pattern.CASE_INSENSITIVE);
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     private final OllamaPriceExtractionService ollamaService;
     private final PriceExtractionProperties extractionProperties;

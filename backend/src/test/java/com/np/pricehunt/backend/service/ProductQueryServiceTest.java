@@ -195,7 +195,7 @@ class ProductQueryServiceTest {
     }
 
     @Test
-    void getAllProducts_anyAvailable_trueWhenAtLeastOneItemInStock() {
+    void getAllProducts_rollup_oneAvailable_isAvailable() {
         PriceRecord unavailable = PriceRecord.builder()
                 .price(new BigDecimal("50"))
                 .currency("USD")

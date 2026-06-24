@@ -146,6 +146,22 @@ class PriceExtractionOrchestratorTest {
     }
 
     @Test
+    void extractPrice_structured_nullAvailability_defaultsToUnknown() {
+        // A structured payload with no availability must coalesce to UNKNOWN (availabilityOrUnknown),
+        // never null — which would violate PriceRecord.availability's NOT NULL contract.
+        ScrapeResponse response = new ScrapeResponse(
+                ExtractionSource.STRUCTURED,
+                new ScrapeResponse.PriceData(new BigDecimal("49.99"), "EUR", null),
+                null,
+                null,
+                null);
+
+        PriceInfo result = orchestrator.extractPrice(response);
+
+        assertThat(result.availability()).isEqualTo(AvailabilityStatus.UNKNOWN);
+    }
+
+    @Test
     void extractPrice_structured_nullPriceData_throwsIllegalState() {
         ScrapeResponse response = new ScrapeResponse(ExtractionSource.STRUCTURED, null, null, null, null);
 
