@@ -7,6 +7,7 @@ import static org.mockito.Mockito.*;
 
 import com.np.pricehunt.backend.client.ScraperClient;
 import com.np.pricehunt.backend.config.PriceTrackingProperties;
+import com.np.pricehunt.backend.domain.AvailabilityStatus;
 import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.domain.PriceRecord;
 import com.np.pricehunt.backend.domain.Product;
@@ -94,7 +95,7 @@ class ProductTrackingServiceValidationTest {
                 .build();
         scrapeResponse = new ScrapeResponse(
                 ExtractionSource.STRUCTURED,
-                new ScrapeResponse.PriceData(new BigDecimal("100.00"), "USD", true),
+                new ScrapeResponse.PriceData(new BigDecimal("100.00"), "USD", AvailabilityStatus.AVAILABLE),
                 null,
                 null,
                 null);
@@ -118,7 +119,8 @@ class ProductTrackingServiceValidationTest {
         when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
                 .thenReturn(Optional.empty());
         when(extractionService.extractPrice(scrapeResponse))
-                .thenReturn(new PriceInfo(new BigDecimal("100.00"), "USD", true, ExtractionSource.STRUCTURED));
+                .thenReturn(new PriceInfo(
+                        new BigDecimal("100.00"), "USD", AvailabilityStatus.AVAILABLE, ExtractionSource.STRUCTURED));
         when(priceRecordRepository.save(any())).thenAnswer(inv -> {
             PriceRecord r = inv.getArgument(0);
             ReflectionTestUtils.setField(r, "timestamp", Instant.now());
@@ -138,7 +140,8 @@ class ProductTrackingServiceValidationTest {
         when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
                 .thenReturn(Optional.empty());
         when(extractionService.extractPrice(scrapeResponse))
-                .thenReturn(new PriceInfo(new BigDecimal("100.00"), "USD", true, ExtractionSource.STRUCTURED));
+                .thenReturn(new PriceInfo(
+                        new BigDecimal("100.00"), "USD", AvailabilityStatus.AVAILABLE, ExtractionSource.STRUCTURED));
         when(priceRecordRepository.save(any())).thenAnswer(inv -> {
             PriceRecord r = inv.getArgument(0);
             ReflectionTestUtils.setField(r, "timestamp", Instant.now());
@@ -157,7 +160,8 @@ class ProductTrackingServiceValidationTest {
         when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
                 .thenReturn(Optional.empty());
         when(extractionService.extractPrice(scrapeResponse))
-                .thenReturn(new PriceInfo(BigDecimal.ZERO, "USD", true, ExtractionSource.FULLTEXT));
+                .thenReturn(
+                        new PriceInfo(BigDecimal.ZERO, "USD", AvailabilityStatus.AVAILABLE, ExtractionSource.FULLTEXT));
 
         service.trackUrl(1L, new TrackRequest("https://example.com/item"));
 
@@ -169,7 +173,8 @@ class ProductTrackingServiceValidationTest {
         when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
                 .thenReturn(Optional.empty());
         when(extractionService.extractPrice(scrapeResponse))
-                .thenReturn(new PriceInfo(new BigDecimal("-5.00"), "USD", true, ExtractionSource.FULLTEXT));
+                .thenReturn(new PriceInfo(
+                        new BigDecimal("-5.00"), "USD", AvailabilityStatus.AVAILABLE, ExtractionSource.FULLTEXT));
 
         service.trackUrl(1L, new TrackRequest("https://example.com/item"));
 
@@ -181,7 +186,8 @@ class ProductTrackingServiceValidationTest {
         when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
                 .thenReturn(Optional.empty());
         when(extractionService.extractPrice(scrapeResponse))
-                .thenReturn(new PriceInfo(new BigDecimal("100.00"), null, true, ExtractionSource.FULLTEXT));
+                .thenReturn(new PriceInfo(
+                        new BigDecimal("100.00"), null, AvailabilityStatus.AVAILABLE, ExtractionSource.FULLTEXT));
 
         service.trackUrl(1L, new TrackRequest("https://example.com/item"));
 
@@ -194,7 +200,8 @@ class ProductTrackingServiceValidationTest {
         when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
                 .thenReturn(Optional.of(previous));
         when(extractionService.extractPrice(scrapeResponse))
-                .thenReturn(new PriceInfo(new BigDecimal("105.00"), null, true, ExtractionSource.FULLTEXT));
+                .thenReturn(new PriceInfo(
+                        new BigDecimal("105.00"), null, AvailabilityStatus.AVAILABLE, ExtractionSource.FULLTEXT));
 
         service.trackUrl(1L, new TrackRequest("https://example.com/item"));
 
@@ -207,7 +214,8 @@ class ProductTrackingServiceValidationTest {
         when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
                 .thenReturn(Optional.of(previous));
         when(extractionService.extractPrice(scrapeResponse))
-                .thenReturn(new PriceInfo(new BigDecimal("90.00"), "EUR", true, ExtractionSource.STRUCTURED));
+                .thenReturn(new PriceInfo(
+                        new BigDecimal("90.00"), "EUR", AvailabilityStatus.AVAILABLE, ExtractionSource.STRUCTURED));
         when(priceRecordRepository.save(any())).thenAnswer(inv -> {
             PriceRecord r = inv.getArgument(0);
             ReflectionTestUtils.setField(r, "timestamp", Instant.now());
@@ -226,7 +234,8 @@ class ProductTrackingServiceValidationTest {
         when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
                 .thenReturn(Optional.of(previous));
         when(extractionService.extractPrice(scrapeResponse))
-                .thenReturn(new PriceInfo(new BigDecimal("250.00"), "USD", true, ExtractionSource.STRUCTURED));
+                .thenReturn(new PriceInfo(
+                        new BigDecimal("250.00"), "USD", AvailabilityStatus.AVAILABLE, ExtractionSource.STRUCTURED));
         when(priceRecordRepository.save(any())).thenAnswer(inv -> {
             PriceRecord r = inv.getArgument(0);
             ReflectionTestUtils.setField(r, "timestamp", Instant.now());
@@ -245,7 +254,8 @@ class ProductTrackingServiceValidationTest {
                 .thenReturn(Optional.of(previous));
         // 400 is 4x previous, exceeds 200% delta (max is 3x)
         when(extractionService.extractPrice(scrapeResponse))
-                .thenReturn(new PriceInfo(new BigDecimal("400.00"), "USD", true, ExtractionSource.FULLTEXT));
+                .thenReturn(new PriceInfo(
+                        new BigDecimal("400.00"), "USD", AvailabilityStatus.AVAILABLE, ExtractionSource.FULLTEXT));
 
         service.trackUrl(1L, new TrackRequest("https://example.com/item"));
 
@@ -259,7 +269,8 @@ class ProductTrackingServiceValidationTest {
                 .thenReturn(Optional.of(previous));
         // 10 is 1/10 of previous; lower bound is 100/3 ≈ 33.33, so 10 is below it
         when(extractionService.extractPrice(scrapeResponse))
-                .thenReturn(new PriceInfo(new BigDecimal("10.00"), "USD", true, ExtractionSource.FULLTEXT));
+                .thenReturn(new PriceInfo(
+                        new BigDecimal("10.00"), "USD", AvailabilityStatus.AVAILABLE, ExtractionSource.FULLTEXT));
 
         service.trackUrl(1L, new TrackRequest("https://example.com/item"));
 
@@ -303,7 +314,7 @@ class ProductTrackingServiceValidationTest {
         return PriceRecord.builder()
                 .price(new BigDecimal(price))
                 .currency(currency)
-                .available(true)
+                .availability(AvailabilityStatus.AVAILABLE)
                 .extractionSource(ExtractionSource.STRUCTURED)
                 .trackedItem(item)
                 .build();

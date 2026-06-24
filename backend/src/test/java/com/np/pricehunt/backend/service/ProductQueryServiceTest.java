@@ -9,6 +9,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.np.pricehunt.backend.config.PriceHistoryProperties;
+import com.np.pricehunt.backend.domain.AvailabilityStatus;
 import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.domain.PriceRecord;
 import com.np.pricehunt.backend.domain.Product;
@@ -189,7 +190,7 @@ class ProductQueryServiceTest {
 
         assertThat(summary.bestPriceConverted()).isNull();
         assertThat(summary.mixedCurrencies()).isTrue();
-        assertThat(summary.anyAvailable()).isTrue();
+        assertThat(summary.availability()).isEqualTo(AvailabilityStatus.AVAILABLE);
         assertThat(summary.trackedStoreCount()).isEqualTo(2);
     }
 
@@ -198,14 +199,14 @@ class ProductQueryServiceTest {
         PriceRecord unavailable = PriceRecord.builder()
                 .price(new BigDecimal("50"))
                 .currency("USD")
-                .available(false)
+                .availability(AvailabilityStatus.UNAVAILABLE)
                 .extractionSource(ExtractionSource.STRUCTURED)
                 .trackedItem(itemA)
                 .build();
         PriceRecord available = PriceRecord.builder()
                 .price(new BigDecimal("55"))
                 .currency("USD")
-                .available(true)
+                .availability(AvailabilityStatus.AVAILABLE)
                 .extractionSource(ExtractionSource.STRUCTURED)
                 .trackedItem(itemB)
                 .build();
@@ -220,7 +221,62 @@ class ProductQueryServiceTest {
                 .getContent()
                 .get(0);
 
-        assertThat(summary.anyAvailable()).isTrue();
+        assertThat(summary.availability()).isEqualTo(AvailabilityStatus.AVAILABLE);
+    }
+
+    @Test
+    void getAllProducts_rollup_unavailablePlusNeverChecked_isUnknown() {
+        // The rollup spans ALL trackers: itemA is priced+UNAVAILABLE, itemB has never been scraped
+        // (no latest price → UNKNOWN). It must roll up to UNKNOWN, not UNAVAILABLE — we never claim
+        // "unavailable" while a tracked store is still unknown. (Regression guard for the bug where
+        // the rollup only considered priced items.)
+        PriceRecord unavailable = PriceRecord.builder()
+                .price(new BigDecimal("50"))
+                .currency("USD")
+                .availability(AvailabilityStatus.UNAVAILABLE)
+                .extractionSource(ExtractionSource.STRUCTURED)
+                .trackedItem(itemA)
+                .build();
+        stubProductWithItems(List.of(itemA, itemB));
+        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(itemA))
+                .thenReturn(Optional.of(unavailable));
+        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(itemB))
+                .thenReturn(Optional.empty());
+        stubIdentityConversion("50", "USD");
+
+        ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "USD")
+                .getContent()
+                .get(0);
+
+        assertThat(summary.availability()).isEqualTo(AvailabilityStatus.UNKNOWN);
+    }
+
+    @Test
+    void getAllProducts_rollup_allUnavailable_isUnavailable() {
+        PriceRecord a = PriceRecord.builder()
+                .price(new BigDecimal("50"))
+                .currency("USD")
+                .availability(AvailabilityStatus.UNAVAILABLE)
+                .extractionSource(ExtractionSource.STRUCTURED)
+                .trackedItem(itemA)
+                .build();
+        PriceRecord b = PriceRecord.builder()
+                .price(new BigDecimal("55"))
+                .currency("USD")
+                .availability(AvailabilityStatus.UNAVAILABLE)
+                .extractionSource(ExtractionSource.STRUCTURED)
+                .trackedItem(itemB)
+                .build();
+        stubProductWithItems(List.of(itemA, itemB));
+        stubLatestPrices(Map.of(itemA, a, itemB, b));
+        stubIdentityConversion("50", "USD");
+        stubIdentityConversion("55", "USD");
+
+        ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "USD")
+                .getContent()
+                .get(0);
+
+        assertThat(summary.availability()).isEqualTo(AvailabilityStatus.UNAVAILABLE);
     }
 
     @Test
@@ -424,7 +480,7 @@ class ProductQueryServiceTest {
         return PriceRecord.builder()
                 .price(new BigDecimal(price))
                 .currency(currency)
-                .available(true)
+                .availability(AvailabilityStatus.AVAILABLE)
                 .extractionSource(ExtractionSource.STRUCTURED)
                 .trackedItem(item)
                 .build();

@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 import com.np.pricehunt.backend.config.PriceExtractionProperties;
+import com.np.pricehunt.backend.domain.AvailabilityStatus;
 import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.dto.PriceInfo;
 import com.np.pricehunt.backend.dto.PriceLlmResult;
@@ -36,7 +37,8 @@ class PriceExtractionOrchestratorTest {
 
     private PriceExtractionOrchestrator orchestrator;
 
-    private static final PriceLlmResult STUB_LLM_RESULT = new PriceLlmResult(new BigDecimal("29.99"), "USD", true);
+    private static final PriceLlmResult STUB_LLM_RESULT =
+            new PriceLlmResult(new BigDecimal("29.99"), "USD", AvailabilityStatus.AVAILABLE);
 
     private static final String SNIPPET_MODEL = "qwen3:1.7b";
     private static final String FULLTEXT_MODEL = "qwen3.5:9b";
@@ -100,13 +102,36 @@ class PriceExtractionOrchestratorTest {
         assertThat(orchestrator.filterLines(input)).isEqualTo("prev line\n$29.99");
     }
 
+    @Test
+    void filterLines_keepsAvailabilityLine_farFromPrice() {
+        // The availability phrase is several lines from the price, so it survives ONLY by matching
+        // PRICE_LINE_PATTERN itself (not by price-adjacency). The FULLTEXT prompt classifies on these
+        // signals, so the filter must keep them or the model never sees the decisive evidence.
+        String input = "Product name\n$29.99\nspecs\nreviews\nNo longer available\nfooter";
+        String result = orchestrator.filterLines(input);
+        assertThat(result).contains("No longer available");
+    }
+
+    @Test
+    void filterLines_keepsOutOfStockLine_farFromPrice() {
+        String input = "Product name\n$29.99\nspecs\nreviews\nOut of stock\nfooter";
+        assertThat(orchestrator.filterLines(input)).contains("Out of stock");
+    }
+
+    @Test
+    void filterLines_keepsLowStockUrgencyLine_farFromPrice() {
+        // AVAILABLE-side signals the prompt classifies on must survive too, not just OOS phrases.
+        String input = "Product name\n$29.99\nspecs\nreviews\nOnly 2 left in stock\nfooter";
+        assertThat(orchestrator.filterLines(input)).contains("Only 2 left in stock");
+    }
+
     // --- extractPrice waterfall routing ---
 
     @Test
     void extractPrice_structured_returnsMappedPriceNoLlmCall() {
         ScrapeResponse response = new ScrapeResponse(
                 ExtractionSource.STRUCTURED,
-                new ScrapeResponse.PriceData(new BigDecimal("49.99"), "EUR", true),
+                new ScrapeResponse.PriceData(new BigDecimal("49.99"), "EUR", AvailabilityStatus.AVAILABLE),
                 null,
                 null,
                 null);
@@ -115,7 +140,7 @@ class PriceExtractionOrchestratorTest {
 
         assertThat(result.price()).isEqualByComparingTo("49.99");
         assertThat(result.currency()).isEqualTo("EUR");
-        assertThat(result.available()).isTrue();
+        assertThat(result.availability()).isEqualTo(AvailabilityStatus.AVAILABLE);
         assertThat(result.extractionSource()).isEqualTo(ExtractionSource.STRUCTURED);
         verifyNoInteractions(ollamaService);
     }
@@ -147,7 +172,7 @@ class PriceExtractionOrchestratorTest {
     @Test
     void extractPrice_snippet_invalidFastResult_retriesWithAccurateModel() {
         String snippet = "ambiguous text payload";
-        PriceLlmResult invalid = new PriceLlmResult(null, null, false);
+        PriceLlmResult invalid = new PriceLlmResult(null, null, AvailabilityStatus.UNKNOWN);
         when(ollamaService.extractPriceFromText(snippet, SNIPPET_MODEL)).thenReturn(invalid);
         when(ollamaService.extractPriceFromText(snippet, FULLTEXT_MODEL)).thenReturn(STUB_LLM_RESULT);
         ScrapeResponse response = new ScrapeResponse(ExtractionSource.SNIPPET, null, snippet, null, null);
@@ -212,7 +237,7 @@ class PriceExtractionOrchestratorTest {
     @Test
     void extractPrice_snippet_heavyModelFailurePropagates() {
         String snippet = "ambiguous payload";
-        PriceLlmResult invalid = new PriceLlmResult(null, null, false);
+        PriceLlmResult invalid = new PriceLlmResult(null, null, AvailabilityStatus.UNKNOWN);
         when(ollamaService.extractPriceFromText(snippet, SNIPPET_MODEL)).thenReturn(invalid);
         ResourceAccessException heavyFailure = new ResourceAccessException("heavy model timeout");
         when(ollamaService.extractPriceFromText(snippet, FULLTEXT_MODEL)).thenThrow(heavyFailure);
@@ -225,7 +250,7 @@ class PriceExtractionOrchestratorTest {
     @Test
     void extractPrice_snippet_bothModelsInvalid_returnsResultWithNulls() {
         String snippet = "ambiguous payload";
-        PriceLlmResult invalid = new PriceLlmResult(null, null, false);
+        PriceLlmResult invalid = new PriceLlmResult(null, null, AvailabilityStatus.UNKNOWN);
         when(ollamaService.extractPriceFromText(snippet, SNIPPET_MODEL)).thenReturn(invalid);
         when(ollamaService.extractPriceFromText(snippet, FULLTEXT_MODEL)).thenReturn(invalid);
         ScrapeResponse response = new ScrapeResponse(ExtractionSource.SNIPPET, null, snippet, null, null);
@@ -235,7 +260,7 @@ class PriceExtractionOrchestratorTest {
         assertThat(result.extractionSource()).isEqualTo(ExtractionSource.SNIPPET);
         assertThat(result.price()).isNull();
         assertThat(result.currency()).isNull();
-        assertThat(result.available()).isFalse();
+        assertThat(result.availability()).isEqualTo(AvailabilityStatus.UNKNOWN);
         verify(ollamaService).extractPriceFromText(snippet, SNIPPET_MODEL);
         verify(ollamaService).extractPriceFromText(snippet, FULLTEXT_MODEL);
     }

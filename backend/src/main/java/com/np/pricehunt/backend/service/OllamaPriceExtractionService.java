@@ -1,10 +1,13 @@
 package com.np.pricehunt.backend.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.np.pricehunt.backend.dto.PriceLlmResult;
 import com.np.pricehunt.backend.exception.MalformedLlmOutputException;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.client.AdvisorParams;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.converter.BeanOutputConverter;
 import org.springframework.ai.ollama.api.OllamaChatOptions;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClientException;
@@ -19,22 +22,35 @@ public class OllamaPriceExtractionService {
 
     private final ChatClient chatClient;
 
+    // Built with a dedicated Jackson 2 ObjectMapper configured specifically for LLM output parsing:
+    // unrecognized availability tokens default to UNKNOWN, and matching is case-insensitive.
+    // Replaces injecting the global ObjectMapper to avoid ambiguity in the hybrid Jackson 2 + Jackson 3 environment.
+    private final BeanOutputConverter<PriceLlmResult> outputConverter;
+
     public OllamaPriceExtractionService(ChatClient.Builder builder) {
+        ObjectMapper mapper = com.fasterxml.jackson.databind.json.JsonMapper.builder()
+                .enable(com.fasterxml.jackson.databind.MapperFeature.ACCEPT_CASE_INSENSITIVE_ENUMS)
+                .enable(
+                        com.fasterxml.jackson.databind.DeserializationFeature
+                                .READ_UNKNOWN_ENUM_VALUES_USING_DEFAULT_VALUE)
+                .build();
+        this.outputConverter = new BeanOutputConverter<>(PriceLlmResult.class, mapper);
         this.chatClient = builder.defaultSystem(
                         """
                         You are a specialized e-commerce data extraction engine.
                         Your output is deterministic and follows the provided schema exactly.
+                        availability is exactly one of: AVAILABLE, UNAVAILABLE, UNKNOWN.
 
-                        Availability examples (note: a time window like "within N weeks" means false even if "in stock" appears):
-                        - "In Stock. Buy Now. $50" → {"price": 50.00, "currency": "USD", "available": true}
-                        - "Only 1 left in stock - order soon. $50" → {"price": 50.00, "currency": "USD", "available": true}
-                        - "Only 3 left in stock. ₪200" → {"price": 200.00, "currency": "ILS", "available": true}
-                        - "In stock. Selling fast. $75" → {"price": 75.00, "currency": "USD", "available": true}
-                        - "In stock within 1 week. Add to cart. £100" → {"price": 100.00, "currency": "GBP", "available": false}
-                        - "Usually ships within 2 to 3 weeks. $30" → {"price": 30.00, "currency": "USD", "available": false}
-                        - "Out of stock. $99" → {"price": 99.00, "currency": "USD", "available": false}
-                        - "Pre-order now. Releases next month. $60" → {"price": 60.00, "currency": "USD", "available": false}
-                        - "חסר במלאי. ₪200" → {"price": 200.00, "currency": "ILS", "available": false}
+                        Availability examples:
+                        - "In Stock. Buy Now. $50" → {"price": 50.00, "currency": "USD", "availability": "AVAILABLE"}
+                        - "Only 1 left in stock - order soon. $50" → {"price": 50.00, "currency": "USD", "availability": "AVAILABLE"}
+                        - "Pre-order now. Releases next month. $60" → {"price": 60.00, "currency": "USD", "availability": "AVAILABLE"}
+                        - "Out of stock. $99" → {"price": 99.00, "currency": "USD", "availability": "UNAVAILABLE"}
+                        - "This product has been discontinued. $80" → {"price": 80.00, "currency": "USD", "availability": "UNAVAILABLE"}
+                        - "In stock within 1 week. £100" → {"price": 100.00, "currency": "GBP", "availability": "UNAVAILABLE"}
+                        - "חסר במלאי. ₪200" → {"price": 200.00, "currency": "ILS", "availability": "UNAVAILABLE"}
+                        - "$50" (price only, no stock wording) → {"price": 50.00, "currency": "USD", "availability": "UNKNOWN"}
+                        - "Usually ships within 2 to 3 weeks. $30" → {"price": 30.00, "currency": "USD", "availability": "UNKNOWN"}
                         """)
                 .build();
     }
@@ -49,6 +65,10 @@ public class OllamaPriceExtractionService {
         try {
             result = chatClient
                     .prompt()
+                    // Send the generated JSON schema to Ollama as a native grammar constraint (format=json_schema)
+                    // rather than only the prompt's format=json — the enum is constrained to its 3 members at decode
+                    // time.
+                    .advisors(AdvisorParams.ENABLE_NATIVE_STRUCTURED_OUTPUT)
                     .options(OllamaChatOptions.builder().model(model).build())
                     .user(u -> u.text(
                                     """
@@ -60,27 +80,36 @@ public class OllamaPriceExtractionService {
                         # RULES
                         1. Currency symbols and codes: $ → USD, € → EUR, £ → GBP, ₪ → ILS.
                         2. Ignore original/MSRP/crossed-out prices when a sale price is present.
-                        3. AVAILABILITY — decide in this exact order:
-                           STEP 1. Look for a DISQUALIFIER. Set available = false and STOP if the text contains ANY of:
-                             - Unavailable or not-yet-released: "out of stock", "sold out", "currently unavailable",
-                               "temporarily unavailable", "not available", "no longer available", "discontinued",
-                               "expected back in stock", "back soon", "notify me when available", "backordered",
-                               "pre-order", "preorder", "coming soon", or a future release/availability date
-                               (e.g. "releases next month", "available from <date>"). A pre-order or future
-                               release is NOT available now.
-                             - A future-delivery TIME WINDOW: "within N day(s)/week(s)", "ships in N days/weeks",
-                               "available in N weeks", "usually ships within N weeks". This makes it false EVEN IF "in stock" also appears.
-                             - Hebrew: "חסר במלאי", "אזל מהמלאי", "לא במלאי", "הזמנה מראש".
-                           STEP 2. Otherwise set available = true. Low quantity and urgency do NOT make it false — phrases like
-                             "only N left in stock", "order soon", "selling fast", "low stock", "limited stock", "while supplies last"
-                             all confirm the item is in stock and purchasable now (available = true).
+                        3. AVAILABILITY — output exactly one of AVAILABLE, UNAVAILABLE, UNKNOWN. Decide in this order:
+                           STEP 1 (UNAVAILABLE). Set UNAVAILABLE if the item cannot be obtained NOW:
+                             - explicit out-of-stock wording: "out of stock", "sold out", "currently unavailable",
+                               "temporarily unavailable", "not available", "no longer available", "discontinued";
+                             - an out-of-stock waitlist CTA: "notify me when available", "email me when available"
+                               (UNLESS paired with a pre-order/back-order signal — see STEP 2);
+                             - a FUTURE-stock / restock ETA — the in-stock state is in the future, so it is NOT in
+                               stock now: "in stock within N days/weeks", "back in stock in N", "available in N weeks".
+                             Hebrew: "חסר במלאי", "אזל מהמלאי", "לא במלאי".
+                           STEP 2 (AVAILABLE). Otherwise set AVAILABLE on a CLEAR purchasable-now or orderable signal:
+                             - in stock now: "in stock", "add to cart", "buy now";
+                             - low quantity / urgency: "only N left in stock", "order soon", "selling fast",
+                               "low stock", "limited stock", "while supplies last";
+                             - orderable but not yet shipped: "pre-order", "preorder", "backordered",
+                               "available for pre-order" — you CAN place an order now → AVAILABLE.
+                             A positive orderability signal WINS over a generic out-of-stock phrase
+                             ("Out of stock — pre-orders accepted" → AVAILABLE). A present-tense "In stock." is
+                             AVAILABLE even when a separate SHIPPING window follows ("In stock. Ships in 2-3 weeks")
+                             — that differs from "in stock WITHIN N" (STEP 1), where the stock itself is in the future.
+                           STEP 3 (UNKNOWN). Set UNKNOWN when stock status is absent or only a fulfillment time is given:
+                             - a price but NO availability wording at all;
+                             - only a shipping/dispatch window with NO stock statement: "ships in 1-2 business days",
+                               "usually ships within 2-3 weeks" — fulfillment timing is not a stock claim; do not guess.
 
                         # DATA
                         {text}
                         """)
                             .param("text", text))
                     .call()
-                    .entity(PriceLlmResult.class);
+                    .entity(outputConverter);
         } catch (RuntimeException e) {
             // The structured-output converter throws a plain RuntimeException wrapping a Jackson
             // JsonProcessingException when the model's output can't be parsed — the only signal, as

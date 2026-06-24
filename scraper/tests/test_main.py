@@ -63,7 +63,7 @@ async def test_jsonld_priceSpecification_picks_sale_price(page):
     """
     await page.set_content(html)
     result = await page.evaluate(_STRUCTURED_DATA_SCRIPT)
-    assert result == {"price": 9990, "currency": "ILS", "available": True}
+    assert result == {"price": 9990, "currency": "ILS", "availability": "available"}
 
 
 # Tier 1 — JSON-LD priceSpecification with every entry tagged ListPrice (broken
@@ -98,7 +98,7 @@ async def test_microdata_offer(page):
     """
     await page.set_content(html)
     result = await page.evaluate(_STRUCTURED_DATA_SCRIPT)
-    assert result == {"price": 719, "currency": "USD", "available": True}
+    assert result == {"price": 719, "currency": "USD", "availability": "available"}
 
 
 # Tier 1 — JSON-LD wins over Microdata when both are present.
@@ -438,16 +438,69 @@ async def test_jsonld_preorder_marked_available(page):
     """
     await page.set_content(html)
     result = await page.evaluate(_STRUCTURED_DATA_SCRIPT)
-    assert result["available"] is True
+    assert result["availability"] == "available"
+
+
+# Tri-state availability (issue #124): the structured tier maps the schema.org URI to one of
+# available / unavailable / unknown — absent availability is UNKNOWN, never a fabricated boolean.
+async def test_jsonld_outofstock_marked_unavailable(page):
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@type":"Offer","price":"42","priceCurrency":"USD","availability":"https://schema.org/OutOfStock"}
+    </script></head><body></body></html>
+    """
+    await page.set_content(html)
+    result = await page.evaluate(_STRUCTURED_DATA_SCRIPT)
+    assert result["availability"] == "unavailable"
+
+
+async def test_jsonld_absent_availability_is_unknown(page):
+    # No availability field at all → UNKNOWN (the bug fix: it used to default to "available=false").
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@type":"Offer","price":"42","priceCurrency":"USD"}
+    </script></head><body></body></html>
+    """
+    await page.set_content(html)
+    result = await page.evaluate(_STRUCTURED_DATA_SCRIPT)
+    assert result["availability"] == "unknown"
+
+
+async def test_jsonld_instoreonly_marked_available(page):
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@type":"Offer","price":"42","priceCurrency":"USD","availability":"https://schema.org/InStoreOnly"}
+    </script></head><body></body></html>
+    """
+    await page.set_content(html)
+    result = await page.evaluate(_STRUCTURED_DATA_SCRIPT)
+    assert result["availability"] == "available"
+
+
+async def test_jsonld_availability_object_shape_normalized(page):
+    # Some publishers emit availability as an object ({"@id": ".../InStock"}) rather than a string;
+    # the normalizer must read @id (guarded) and still resolve it, not crash or fall to unknown.
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@type":"Offer","price":"42","priceCurrency":"USD","availability":{"@id":"https://schema.org/InStock"}}
+    </script></head><body></body></html>
+    """
+    await page.set_content(html)
+    result = await page.evaluate(_STRUCTURED_DATA_SCRIPT)
+    assert result["availability"] == "available"
 
 
 # Gemini PR #20 follow-up — `availability` is supposed to be a URI string,
 # but some publishers emit a nested ItemAvailability object. Without the
 # String() wrap, .toLowerCase() throws TypeError, the outer try/except in
 # the JSON-LD loop swallows it, and the whole script block aborts —
-# silently demoting the page to Tier 2. The fix keeps extraction alive
-# (price still returns); the available flag falls back to false, which is
-# a much smaller harm than losing the structured tier entirely.
+# silently demoting the page to Tier 2. The fix keeps extraction alive AND —
+# now that the normalizer reads @id/url off the object — resolves availability
+# correctly rather than losing the structured tier or defaulting to unknown.
 async def test_jsonld_availability_as_object_does_not_crash(page):
     html = """
     <html><head>
@@ -461,6 +514,7 @@ async def test_jsonld_availability_as_object_does_not_crash(page):
     assert result is not None
     assert result["price"] == 42
     assert result["currency"] == "EUR"
+    assert result["availability"] == "available"
 
 
 # Gemini PR #20 follow-up — global strikethrough strip must preserve

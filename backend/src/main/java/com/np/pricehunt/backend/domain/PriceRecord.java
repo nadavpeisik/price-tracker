@@ -30,7 +30,9 @@ public class PriceRecord {
     @Column(nullable = false)
     private Instant timestamp;
 
-    private boolean available;
+    @Enumerated(EnumType.STRING)
+    @Column(name = "availability_status", length = 32, nullable = false)
+    private AvailabilityStatus availability;
 
     @Enumerated(EnumType.STRING)
     private ExtractionSource extractionSource;

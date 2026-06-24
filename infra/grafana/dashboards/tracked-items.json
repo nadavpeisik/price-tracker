@@ -25,7 +25,7 @@
         {
           "datasource": {"type": "postgres", "uid": "pricehunt-postgres"},
           "format": "table",
-          "rawSql": "SELECT p.name AS \"Product\", ti.shop_name AS \"Shop\", ti.url AS \"URL\", pr.price AS \"Latest price\", pr.currency AS \"Currency\", pr.available AS \"Available\", pr.timestamp AS \"Last checked\" FROM tracked_item ti JOIN product p ON ti.product_id = p.id LEFT JOIN LATERAL (SELECT price, currency, available, timestamp FROM price_record WHERE tracked_item_id = ti.id ORDER BY timestamp DESC LIMIT 1) pr ON TRUE ORDER BY p.name, ti.shop_name",
+          "rawSql": "SELECT p.name AS \"Product\", ti.shop_name AS \"Shop\", ti.url AS \"URL\", pr.price AS \"Latest price\", pr.currency AS \"Currency\", pr.availability_status AS \"Availability\", pr.timestamp AS \"Last checked\" FROM tracked_item ti JOIN product p ON ti.product_id = p.id LEFT JOIN LATERAL (SELECT price, currency, availability_status, timestamp FROM price_record WHERE tracked_item_id = ti.id ORDER BY timestamp DESC LIMIT 1) pr ON TRUE ORDER BY p.name, ti.shop_name",
           "refId": "A"
         }
       ],
@@ -50,7 +50,7 @@
         {
           "datasource": {"type": "postgres", "uid": "pricehunt-postgres"},
           "format": "table",
-          "rawSql": "SELECT ti.shop_name AS \"Shop\", ti.url AS \"URL\", pr.price AS \"Latest price\", pr.currency AS \"Currency\", pr.available AS \"Available\", pr.timestamp AS \"Last checked\" FROM tracked_item ti LEFT JOIN LATERAL (SELECT price, currency, available, timestamp FROM price_record WHERE tracked_item_id = ti.id ORDER BY timestamp DESC LIMIT 1) pr ON TRUE WHERE ti.product_id = $product_id ORDER BY ti.shop_name",
+          "rawSql": "SELECT ti.shop_name AS \"Shop\", ti.url AS \"URL\", pr.price AS \"Latest price\", pr.currency AS \"Currency\", pr.availability_status AS \"Availability\", pr.timestamp AS \"Last checked\" FROM tracked_item ti LEFT JOIN LATERAL (SELECT price, currency, availability_status, timestamp FROM price_record WHERE tracked_item_id = ti.id ORDER BY timestamp DESC LIMIT 1) pr ON TRUE WHERE ti.product_id = $product_id ORDER BY ti.shop_name",
           "refId": "A"
         }
       ],

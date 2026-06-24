@@ -1,6 +1,7 @@
 package com.np.pricehunt.backend.service;
 
 import com.np.pricehunt.backend.config.PriceHistoryProperties;
+import com.np.pricehunt.backend.domain.AvailabilityStatus;
 import com.np.pricehunt.backend.domain.PriceRecord;
 import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.domain.TrackedItem;
@@ -93,7 +94,7 @@ public class ProductQueryService {
                 .map(r -> new PricePointResponse(
                         r.getPrice(),
                         r.getCurrency(),
-                        r.isAvailable(),
+                        r.getAvailability(),
                         r.getTimestamp(),
                         r.getExtractionSource().name()))
                 .toList();
@@ -118,7 +119,9 @@ public class ProductQueryService {
         List<ItemWithLatestPrice> withPrices =
                 pairs.stream().filter(p -> p.latest() != null).toList();
 
-        boolean anyAvailable = withPrices.stream().anyMatch(p -> p.latest().isAvailable());
+        // Rollup over ALL trackers (not just priced ones): a never-checked tracker (latest == null)
+        // is UNKNOWN, so "one UNAVAILABLE priced + one never-checked" rolls up to UNKNOWN, not UNAVAILABLE.
+        AvailabilityStatus availability = rollUpAvailability(pairs);
         boolean mixedCurrencies = withPrices.stream()
                         .map(p -> p.latest().getCurrency())
                         .distinct()
@@ -126,7 +129,7 @@ public class ProductQueryService {
                 > 1;
 
         if (withPrices.isEmpty()) {
-            return emptyBestPriceResponse(product, storeCount, false, false);
+            return emptyBestPriceResponse(product, storeCount, availability, mixedCurrencies);
         }
 
         List<ConvertedItem> convertible = withPrices.stream()
@@ -140,7 +143,7 @@ public class ProductQueryService {
 
         if (convertible.isEmpty()) {
             log.debug("No tracked items convertible to {} for product {}", displayCurrency, product.getId());
-            return emptyBestPriceResponse(product, storeCount, anyAvailable, mixedCurrencies);
+            return emptyBestPriceResponse(product, storeCount, availability, mixedCurrencies);
         }
 
         ConvertedItem best = convertible.stream()
@@ -161,12 +164,31 @@ public class ProductQueryService {
                 best.converted().asOf(),
                 best.converted().stale(),
                 PriceBasis.AS_LISTED,
-                anyAvailable,
+                availability,
                 mixedCurrencies);
     }
 
+    // Product-level availability over all trackers: any AVAILABLE wins; else any UNKNOWN (incl. a
+    // never-checked tracker) beats UNAVAILABLE — we never claim "unavailable" while some store is
+    // unknown; no trackers at all → UNKNOWN.
+    private static AvailabilityStatus rollUpAvailability(List<ItemWithLatestPrice> pairs) {
+        boolean anyTracker = false;
+        boolean anyUnknown = false;
+        for (ItemWithLatestPrice p : pairs) {
+            anyTracker = true;
+            AvailabilityStatus status = p.latest() != null ? p.latest().getAvailability() : AvailabilityStatus.UNKNOWN;
+            if (status == AvailabilityStatus.AVAILABLE) {
+                return AvailabilityStatus.AVAILABLE;
+            }
+            if (status == AvailabilityStatus.UNKNOWN) {
+                anyUnknown = true;
+            }
+        }
+        return (!anyTracker || anyUnknown) ? AvailabilityStatus.UNKNOWN : AvailabilityStatus.UNAVAILABLE;
+    }
+
     private ProductSummaryResponse emptyBestPriceResponse(
-            Product product, int storeCount, boolean anyAvailable, boolean mixedCurrencies) {
+            Product product, int storeCount, AvailabilityStatus availability, boolean mixedCurrencies) {
         return new ProductSummaryResponse(
                 product.getId(),
                 product.getName(),
@@ -180,7 +202,7 @@ public class ProductQueryService {
                 null,
                 false,
                 PriceBasis.AS_LISTED,
-                anyAvailable,
+                availability,
                 mixedCurrencies);
     }
 
@@ -192,7 +214,7 @@ public class ProductQueryService {
                 item.getShopNameSource(),
                 latest != null ? latest.getPrice() : null,
                 latest != null ? latest.getCurrency() : null,
-                latest != null && latest.isAvailable(),
+                latest != null ? latest.getAvailability() : AvailabilityStatus.UNKNOWN,
                 item.getLastChecked());
     }
 }

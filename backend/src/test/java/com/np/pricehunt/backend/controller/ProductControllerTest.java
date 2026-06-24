@@ -8,6 +8,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.np.pricehunt.backend.config.CurrencyProperties;
 import com.np.pricehunt.backend.config.WebPaginationConfig;
+import com.np.pricehunt.backend.domain.AvailabilityStatus;
 import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.domain.ShopNameSource;
 import com.np.pricehunt.backend.dto.*;
@@ -148,7 +149,7 @@ class ProductControllerTest {
                 ShopNameSource.MAPPING,
                 new BigDecimal("999.99"),
                 "USD",
-                true,
+                AvailabilityStatus.AVAILABLE,
                 Instant.now());
         ProductDetailResponse detail = new ProductDetailResponse(1L, "Laptop", null, List.of(item));
         when(queryService.getProduct(1L)).thenReturn(detail);
@@ -222,7 +223,7 @@ class ProductControllerTest {
                 ShopNameSource.MAPPING,
                 new BigDecimal("949.99"),
                 "USD",
-                true,
+                AvailabilityStatus.AVAILABLE,
                 Instant.now(),
                 ExtractionSource.FULLTEXT);
         when(trackingService.refreshTrackedItem(1L, 1L)).thenReturn(response);
@@ -242,8 +243,8 @@ class ProductControllerTest {
 
     @Test
     void getPriceHistory_noParams_returnsFullHistory() throws Exception {
-        PricePointResponse point =
-                new PricePointResponse(new BigDecimal("999.99"), "USD", true, Instant.now(), "STRUCTURED");
+        PricePointResponse point = new PricePointResponse(
+                new BigDecimal("999.99"), "USD", AvailabilityStatus.AVAILABLE, Instant.now(), "STRUCTURED");
         PriceHistoryResponse history =
                 new PriceHistoryResponse(1L, "amazon.com", "https://amazon.com/dp/123", List.of(point));
         when(queryService.getPriceHistory(eq(1L), eq(1L), isNull(), isNull())).thenReturn(history);
@@ -302,7 +303,7 @@ class ProductControllerTest {
                 LocalDate.of(2026, 5, 24),
                 false,
                 PriceBasis.AS_LISTED,
-                true,
+                AvailabilityStatus.AVAILABLE,
                 true);
     }
 }

@@ -7,6 +7,7 @@ import static org.mockito.Mockito.*;
 
 import com.np.pricehunt.backend.client.ScraperClient;
 import com.np.pricehunt.backend.config.PriceTrackingProperties;
+import com.np.pricehunt.backend.domain.AvailabilityStatus;
 import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.domain.PriceRecord;
 import com.np.pricehunt.backend.domain.Product;
@@ -325,7 +326,7 @@ class ProductTrackingServiceCrudTest {
     void refreshTrackedItem_found_callsScraper() {
         ScrapeResponse scraped = new ScrapeResponse(
                 ExtractionSource.STRUCTURED,
-                new ScrapeResponse.PriceData(new BigDecimal("899.99"), "USD", true),
+                new ScrapeResponse.PriceData(new BigDecimal("899.99"), "USD", AvailabilityStatus.AVAILABLE),
                 null,
                 null,
                 null);
@@ -337,7 +338,8 @@ class ProductTrackingServiceCrudTest {
         when(shopNameResolver.resolve(any(), any()))
                 .thenReturn(new ShopNameResolver.Resolved("amazon.com", ShopNameSource.HOST_FALLBACK, null));
         when(extractionService.extractPrice(scraped))
-                .thenReturn(new PriceInfo(new BigDecimal("899.99"), "USD", true, ExtractionSource.STRUCTURED));
+                .thenReturn(new PriceInfo(
+                        new BigDecimal("899.99"), "USD", AvailabilityStatus.AVAILABLE, ExtractionSource.STRUCTURED));
         when(priceRecordRepository.save(any())).thenAnswer(inv -> {
             PriceRecord r = inv.getArgument(0);
             ReflectionTestUtils.setField(r, "timestamp", Instant.now());
@@ -385,7 +387,7 @@ class ProductTrackingServiceCrudTest {
                 .build();
         ScrapeResponse scraped = new ScrapeResponse(
                 ExtractionSource.STRUCTURED,
-                new ScrapeResponse.PriceData(new BigDecimal("899.99"), "USD", true),
+                new ScrapeResponse.PriceData(new BigDecimal("899.99"), "USD", AvailabilityStatus.AVAILABLE),
                 null,
                 null,
                 null);
@@ -396,7 +398,8 @@ class ProductTrackingServiceCrudTest {
         when(shopNameResolver.resolve(any(), any()))
                 .thenReturn(new ShopNameResolver.Resolved("amazon.com", ShopNameSource.HOST_FALLBACK, null));
         when(extractionService.extractPrice(scraped))
-                .thenReturn(new PriceInfo(new BigDecimal("899.99"), "USD", true, ExtractionSource.STRUCTURED));
+                .thenReturn(new PriceInfo(
+                        new BigDecimal("899.99"), "USD", AvailabilityStatus.AVAILABLE, ExtractionSource.STRUCTURED));
         when(priceRecordRepository.save(any())).thenAnswer(inv -> {
             PriceRecord r = inv.getArgument(0);
             ReflectionTestUtils.setField(r, "timestamp", Instant.now());
@@ -416,7 +419,7 @@ class ProductTrackingServiceCrudTest {
     void scrapeAndPersist_normalizesCurrencyToUppercase() {
         ScrapeResponse scraped = new ScrapeResponse(
                 ExtractionSource.STRUCTURED,
-                new ScrapeResponse.PriceData(new BigDecimal("100.00"), "usd", true),
+                new ScrapeResponse.PriceData(new BigDecimal("100.00"), "usd", AvailabilityStatus.AVAILABLE),
                 null,
                 null,
                 null);
@@ -428,7 +431,8 @@ class ProductTrackingServiceCrudTest {
         when(shopNameResolver.resolve(any(), any()))
                 .thenReturn(new ShopNameResolver.Resolved("amazon.com", ShopNameSource.HOST_FALLBACK, null));
         when(extractionService.extractPrice(scraped))
-                .thenReturn(new PriceInfo(new BigDecimal("100.00"), "usd", true, ExtractionSource.STRUCTURED));
+                .thenReturn(new PriceInfo(
+                        new BigDecimal("100.00"), "usd", AvailabilityStatus.AVAILABLE, ExtractionSource.STRUCTURED));
         when(priceRecordRepository.save(any())).thenAnswer(inv -> {
             PriceRecord r = inv.getArgument(0);
             ReflectionTestUtils.setField(r, "timestamp", Instant.now());

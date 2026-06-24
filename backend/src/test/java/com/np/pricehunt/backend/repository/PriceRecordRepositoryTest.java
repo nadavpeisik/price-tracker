@@ -2,6 +2,7 @@ package com.np.pricehunt.backend.repository;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.np.pricehunt.backend.domain.AvailabilityStatus;
 import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.domain.PriceRecord;
 import com.np.pricehunt.backend.domain.Product;
@@ -124,7 +125,7 @@ class PriceRecordRepositoryTest {
         return PriceRecord.builder()
                 .price(new BigDecimal(price))
                 .currency("USD")
-                .available(true)
+                .availability(AvailabilityStatus.AVAILABLE)
                 .extractionSource(ExtractionSource.STRUCTURED)
                 .trackedItem(trackedItem)
                 .timestamp(timestamp)
