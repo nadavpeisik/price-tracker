@@ -125,6 +125,13 @@ class PriceExtractionOrchestratorTest {
         assertThat(orchestrator.filterLines(input)).contains("Only 2 left in stock");
     }
 
+    @Test
+    void filterLines_keepsHebrewOutOfStockLine_farFromPrice() {
+        // Hebrew availability signals must survive too — exercises the UNICODE_CASE matching path.
+        String input = "מוצר\n$29.99\nמפרט\nביקורות\nחסר במלאי\nכותרת";
+        assertThat(orchestrator.filterLines(input)).contains("חסר במלאי");
+    }
+
     // --- extractPrice waterfall routing ---
 
     @Test

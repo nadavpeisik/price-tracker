@@ -252,6 +252,23 @@ class ProductQueryServiceTest {
     }
 
     @Test
+    void getAllProducts_rollup_noHistory_isUnknown() {
+        // A product whose tracked stores have never been scraped (no PriceRecord at all) rolls up to
+        // UNKNOWN — never UNAVAILABLE.
+        stubProductWithItems(List.of(itemA, itemB));
+        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(itemA))
+                .thenReturn(Optional.empty());
+        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(itemB))
+                .thenReturn(Optional.empty());
+
+        ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "USD")
+                .getContent()
+                .get(0);
+
+        assertThat(summary.availability()).isEqualTo(AvailabilityStatus.UNKNOWN);
+    }
+
+    @Test
     void getAllProducts_rollup_allUnavailable_isUnavailable() {
         PriceRecord a = PriceRecord.builder()
                 .price(new BigDecimal("50"))

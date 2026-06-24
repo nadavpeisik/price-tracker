@@ -255,7 +255,7 @@ public class ProductTrackingService {
                     info.extractionSource(),
                     info.price(),
                     info.currency(),
-                    info.availability());
+                    availability);
 
             return buildTrackResponse(item.getProduct(), item, record);
         });
