@@ -1,5 +1,6 @@
 package com.np.pricehunt.backend.dto;
 
+import com.np.pricehunt.backend.domain.AvailabilityStatus;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 
@@ -16,5 +17,5 @@ public record ProductSummaryResponse(
         LocalDate conversionAsOf,
         boolean conversionStale,
         PriceBasis priceBasis,
-        boolean anyAvailable,
+        AvailabilityStatus availability,
         boolean mixedCurrencies) {}

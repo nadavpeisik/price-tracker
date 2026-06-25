@@ -2,6 +2,7 @@ package com.np.pricehunt.backend.service;
 
 import com.np.pricehunt.backend.client.ScraperClient;
 import com.np.pricehunt.backend.config.PriceTrackingProperties;
+import com.np.pricehunt.backend.domain.AvailabilityStatus;
 import com.np.pricehunt.backend.domain.PriceRecord;
 import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.domain.TrackedItem;
@@ -233,10 +234,14 @@ public class ProductTrackingService {
                 return buildTrackResponse(item.getProduct(), item, latest);
             }
 
+            // Defense at the persistence boundary: availability is optional metadata, so coalesce a
+            // null to UNKNOWN before the NOT NULL write rather than relying on an upstream guarantee.
+            AvailabilityStatus availability =
+                    info.availability() != null ? info.availability() : AvailabilityStatus.UNKNOWN;
             PriceRecord record = priceRecordRepository.save(PriceRecord.builder()
                     .price(info.price())
                     .currency(info.currency().toUpperCase(Locale.ROOT))
-                    .available(info.available())
+                    .availability(availability)
                     .extractionSource(info.extractionSource())
                     .trackedItem(item)
                     .build());
@@ -244,13 +249,13 @@ public class ProductTrackingService {
             item.setLastChecked(record.getTimestamp());
 
             log.info(
-                    "Tracked itemId={} url={} source={} price={} {} available={}",
+                    "Tracked itemId={} url={} source={} price={} {} availability={}",
                     item.getId(),
                     item.getUrl(),
                     info.extractionSource(),
                     info.price(),
                     info.currency(),
-                    info.available());
+                    availability);
 
             return buildTrackResponse(item.getProduct(), item, record);
         });
@@ -313,7 +318,7 @@ public class ProductTrackingService {
                 item.getShopNameSource(),
                 record != null ? record.getPrice() : null,
                 record != null ? record.getCurrency() : null,
-                record != null && record.isAvailable(),
+                record != null ? record.getAvailability() : AvailabilityStatus.UNKNOWN,
                 record != null ? record.getTimestamp() : null,
                 record != null ? record.getExtractionSource() : null);
     }

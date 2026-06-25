@@ -8,6 +8,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.np.pricehunt.backend.config.CurrencyProperties;
 import com.np.pricehunt.backend.config.WebPaginationConfig;
+import com.np.pricehunt.backend.domain.AvailabilityStatus;
 import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.domain.ShopNameSource;
 import com.np.pricehunt.backend.dto.*;
@@ -71,6 +72,7 @@ class ProductControllerTest {
                 .andExpect(jsonPath("$.content[0].conversionAsOf").value("2026-05-24"))
                 .andExpect(jsonPath("$.content[0].conversionStale").value(false))
                 .andExpect(jsonPath("$.content[0].priceBasis").value("AS_LISTED"))
+                .andExpect(jsonPath("$.content[0].availability").value("AVAILABLE"))
                 .andExpect(jsonPath("$.content[0].mixedCurrencies").value(true))
                 .andExpect(jsonPath("$.page.totalElements").value(1));
 
@@ -148,7 +150,7 @@ class ProductControllerTest {
                 ShopNameSource.MAPPING,
                 new BigDecimal("999.99"),
                 "USD",
-                true,
+                AvailabilityStatus.AVAILABLE,
                 Instant.now());
         ProductDetailResponse detail = new ProductDetailResponse(1L, "Laptop", null, List.of(item));
         when(queryService.getProduct(1L)).thenReturn(detail);
@@ -158,7 +160,8 @@ class ProductControllerTest {
                 .andExpect(jsonPath("$.id").value(1))
                 .andExpect(jsonPath("$.name").value("Laptop"))
                 .andExpect(jsonPath("$.trackedItems[0].shopName").value("amazon.com"))
-                .andExpect(jsonPath("$.trackedItems[0].currentPrice").value(999.99));
+                .andExpect(jsonPath("$.trackedItems[0].currentPrice").value(999.99))
+                .andExpect(jsonPath("$.trackedItems[0].availability").value("AVAILABLE"));
     }
 
     @Test
@@ -222,7 +225,7 @@ class ProductControllerTest {
                 ShopNameSource.MAPPING,
                 new BigDecimal("949.99"),
                 "USD",
-                true,
+                AvailabilityStatus.AVAILABLE,
                 Instant.now(),
                 ExtractionSource.FULLTEXT);
         when(trackingService.refreshTrackedItem(1L, 1L)).thenReturn(response);
@@ -230,6 +233,7 @@ class ProductControllerTest {
         mvc.perform(post("/api/products/1/tracked-items/1/refresh"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.currentPrice").value(949.99))
+                .andExpect(jsonPath("$.availability").value("AVAILABLE"))
                 .andExpect(jsonPath("$.extractionSource").value("FULLTEXT"));
     }
 
@@ -242,8 +246,8 @@ class ProductControllerTest {
 
     @Test
     void getPriceHistory_noParams_returnsFullHistory() throws Exception {
-        PricePointResponse point =
-                new PricePointResponse(new BigDecimal("999.99"), "USD", true, Instant.now(), "STRUCTURED");
+        PricePointResponse point = new PricePointResponse(
+                new BigDecimal("999.99"), "USD", AvailabilityStatus.AVAILABLE, Instant.now(), "STRUCTURED");
         PriceHistoryResponse history =
                 new PriceHistoryResponse(1L, "amazon.com", "https://amazon.com/dp/123", List.of(point));
         when(queryService.getPriceHistory(eq(1L), eq(1L), isNull(), isNull())).thenReturn(history);
@@ -252,6 +256,7 @@ class ProductControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.trackedItemId").value(1))
                 .andExpect(jsonPath("$.history[0].currency").value("USD"))
+                .andExpect(jsonPath("$.history[0].availability").value("AVAILABLE"))
                 .andExpect(jsonPath("$.history[0].extractionSource").value("STRUCTURED"));
     }
 
@@ -302,7 +307,7 @@ class ProductControllerTest {
                 LocalDate.of(2026, 5, 24),
                 false,
                 PriceBasis.AS_LISTED,
-                true,
+                AvailabilityStatus.AVAILABLE,
                 true);
     }
 }

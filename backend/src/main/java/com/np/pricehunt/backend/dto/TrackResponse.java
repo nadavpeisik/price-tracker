@@ -1,5 +1,6 @@
 package com.np.pricehunt.backend.dto;
 
+import com.np.pricehunt.backend.domain.AvailabilityStatus;
 import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.domain.ShopNameSource;
 import java.math.BigDecimal;
@@ -14,6 +15,6 @@ public record TrackResponse(
         ShopNameSource shopNameSource,
         BigDecimal currentPrice,
         String currency,
-        boolean available,
+        AvailabilityStatus availability,
         Instant lastChecked,
         ExtractionSource extractionSource) {}

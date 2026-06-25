@@ -7,7 +7,7 @@ from enum import Enum
 
 from fastapi import FastAPI, HTTPException, Request
 from playwright.async_api import Browser, async_playwright
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 browser: Browser | None = None
 
@@ -124,13 +124,31 @@ _STRUCTURED_DATA_SCRIPT = """() => {
         );
     };
 
-    const IN_STOCK_URIS = ['instock', 'limitedavailability', 'onlineonly', 'presale', 'preorder'];
+    // "can you get it" — orderable states (presale/preorder/backorder/onlineonly) count as available.
+    const AVAILABLE_TOKENS = ['instock', 'instoreonly', 'onlineonly', 'limitedavailability', 'presale', 'preorder', 'backorder'];
+    const UNAVAILABLE_TOKENS = ['outofstock', 'soldout', 'discontinued'];
+    // Normalize a schema.org availability value (full URI, bare token, or {@id}/{url} object) to a
+    // bare lowercase alphanumeric token: take the leaf segment (drops the schema.org/ prefix), strip
+    // any ?query/#fragment/trailing-slash, then non-alphanumerics ('In Stock'/'in-stock' -> 'instock').
+    const normalizeAvailability = (availability) => {
+        let raw = availability;
+        if (raw && typeof raw === 'object') raw = raw['@id'] || raw.url || '';
+        let s = String(raw || '').trim();
+        if (!s) return '';
+        s = s.split('?')[0].split('#')[0].replace(/\\/+$/, '');
+        const leaf = s.substring(s.lastIndexOf('/') + 1);
+        return leaf.toLowerCase().replace(/[^a-z0-9]/g, '');
+    };
     const buildResult = (price, currency, availability) => {
         if (isNaN(price) || price <= 0 || !currency) return null;
+        const token = normalizeAvailability(availability);
+        let status = 'unknown';
+        if (AVAILABLE_TOKENS.includes(token)) status = 'available';
+        else if (UNAVAILABLE_TOKENS.includes(token)) status = 'unavailable';
         return {
             price: price,
             currency: currency,
-            available: IN_STOCK_URIS.some(s => String(availability || '').toLowerCase().includes(s))
+            availability: status
         };
     };
 
@@ -414,6 +432,16 @@ class ExtractionSource(str, Enum):
     BLOCKED = "blocked"
 
 
+# Tri-state: "can you get it" (pre-order/back-order/online-only count as available), not "on a
+# shelf". UNKNOWN is a real third state — a page with no availability signal is unknown, not
+# out of stock. Lowercase wire values like ExtractionSource; the backend's
+# accept-case-insensitive-enums maps them to the Java AvailabilityStatus.
+class AvailabilityStatus(str, Enum):
+    AVAILABLE = "available"
+    UNAVAILABLE = "unavailable"
+    UNKNOWN = "unknown"
+
+
 class ScrapeRequest(BaseModel):
     url: str
 
@@ -421,7 +449,21 @@ class ScrapeRequest(BaseModel):
 class PriceData(BaseModel):
     price: float
     currency: str
-    available: bool
+    availability: AvailabilityStatus = AvailabilityStatus.UNKNOWN
+
+    @field_validator("availability", mode="before")
+    @classmethod
+    def _coerce_availability(cls, v):
+        # The JS normalizer emits a canonical token, but be defensive: an unrecognized / blank /
+        # None value becomes UNKNOWN rather than raising a ValidationError that would 500 the scrape.
+        if isinstance(v, AvailabilityStatus):
+            return v
+        if v is None:
+            return AvailabilityStatus.UNKNOWN
+        try:
+            return AvailabilityStatus(str(v).strip().lower())
+        except ValueError:
+            return AvailabilityStatus.UNKNOWN
 
 
 class ShopNameProposal(BaseModel):

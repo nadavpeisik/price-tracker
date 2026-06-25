@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.fasterxml.jackson.databind.MapperFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.json.JsonMapper;
+import com.np.pricehunt.backend.domain.AvailabilityStatus;
 import com.np.pricehunt.backend.domain.ExtractionSource;
 import org.junit.jupiter.api.Test;
 
@@ -24,7 +25,7 @@ class ScrapeResponseTest {
         String json =
                 """
                 {"extractionSource":"structured",
-                 "priceData":{"price":9.99,"currency":"USD","available":true},
+                 "priceData":{"price":9.99,"currency":"USD","availability":"available"},
                  "shopNameProposal":{"name":"Musikhaus Thomann","strong":true}}
                 """;
 
@@ -35,6 +36,8 @@ class ScrapeResponseTest {
         assertThat(resp.shopNameProposal().name()).isEqualTo("Musikhaus Thomann");
         assertThat(resp.shopNameProposal().strong()).isTrue();
         assertThat(resp.priceData().price()).isEqualByComparingTo("9.99");
+        // lowercase wire token maps to the enum via accept-case-insensitive-enums
+        assertThat(resp.priceData().availability()).isEqualTo(AvailabilityStatus.AVAILABLE);
     }
 
     @Test

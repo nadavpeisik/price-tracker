@@ -1,6 +1,7 @@
 package com.np.pricehunt.backend.service;
 
 import com.np.pricehunt.backend.config.PriceExtractionProperties;
+import com.np.pricehunt.backend.domain.AvailabilityStatus;
 import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.dto.PriceInfo;
 import com.np.pricehunt.backend.dto.PriceLlmResult;
@@ -31,12 +32,19 @@ public class PriceExtractionOrchestrator implements PriceExtractionService {
     // calls and bogus prices being persisted.
     private static final int MIN_LLM_INPUT_CHARS = 15;
 
-    // Matches currency symbols/codes and price-related keywords (US and EU number formats)
+    // Matches currency symbols/codes, price keywords, and availability signals (US and EU number
+    // formats). The availability vocabulary must cover every signal the LLM prompt classifies on —
+    // otherwise filterLines() strips the evidence (e.g. "sold out", "pre-order") before the model
+    // sees it, and the model defaults to UNKNOWN. Hebrew OOS phrases are appended without \b (Hebrew
+    // letters aren't ASCII word chars, so \b wouldn't anchor them).
     private static final Pattern PRICE_LINE_PATTERN = Pattern.compile(
             "[$£€¥₩]\\s*[\\d.,]+" + "|[\\d.,]+\\s*[$£€¥₩]"
                     + "|\\b(USD|GBP|EUR|JPY|CAD|AUD|CHF|CNY|ILS|price|cost|sale|discount|"
-                    + "in stock|out of stock|add to cart|buy now|availability)\\b",
-            Pattern.CASE_INSENSITIVE);
+                    + "stock|sold out|unavailable|availab\\w*|discontinued|selling fast|order soon|"
+                    + "while supplies last|pre-?orders?|back-?order(ed)?|notify me|email me|coming soon|"
+                    + "add to cart|buy now)\\b"
+                    + "|חסר במלאי|אזל מהמלאי|לא במלאי|הזמנה מראש",
+            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     private final OllamaPriceExtractionService ollamaService;
     private final PriceExtractionProperties extractionProperties;
@@ -65,13 +73,21 @@ public class PriceExtractionOrchestrator implements PriceExtractionService {
                     }
                     raw = ollamaService.extractPriceFromText(text, extractionProperties.fulltextModel());
                 }
-                yield new PriceInfo(raw.price(), raw.currency(), raw.available(), ExtractionSource.SNIPPET);
+                yield new PriceInfo(
+                        raw.price(),
+                        raw.currency(),
+                        availabilityOrUnknown(raw.availability()),
+                        ExtractionSource.SNIPPET);
             }
             case FULLTEXT -> {
                 String text = filterLines(response.innerText());
                 guardMinLength(text, "FULLTEXT");
                 PriceLlmResult raw = ollamaService.extractPriceFromText(text, extractionProperties.fulltextModel());
-                yield new PriceInfo(raw.price(), raw.currency(), raw.available(), ExtractionSource.FULLTEXT);
+                yield new PriceInfo(
+                        raw.price(),
+                        raw.currency(),
+                        availabilityOrUnknown(raw.availability()),
+                        ExtractionSource.FULLTEXT);
             }
         };
     }
@@ -83,9 +99,9 @@ public class PriceExtractionOrchestrator implements PriceExtractionService {
         }
     }
 
-    // Shape check, not a semantic check. We deliberately do not validate `available`:
-    // it's a primitive boolean (no "unknown" state), and availability accuracy is the
-    // prompt's job — a confidently-wrong value here can't be detected by a predicate.
+    // Shape check, not a semantic check. We deliberately do not validate `availability`:
+    // UNKNOWN is a legitimate value, and availability accuracy is the prompt's job — a
+    // confidently-wrong AVAILABLE/UNAVAILABLE here can't be detected by a predicate.
     private boolean isValidLlmResult(PriceLlmResult r) {
         return r != null
                 && r.price() != null
@@ -96,7 +112,14 @@ public class PriceExtractionOrchestrator implements PriceExtractionService {
 
     private PriceInfo mapStructured(ScrapeResponse.PriceData d) {
         if (d == null) throw new IllegalStateException("extractionSource=STRUCTURED but priceData is null");
-        return new PriceInfo(d.price(), d.currency(), d.available(), ExtractionSource.STRUCTURED);
+        return new PriceInfo(
+                d.price(), d.currency(), availabilityOrUnknown(d.availability()), ExtractionSource.STRUCTURED);
+    }
+
+    // Defensive coalesce: a null availability (LLM omitted the field, or a structured payload without
+    // one) becomes UNKNOWN — never null, which would violate PriceRecord.availability's NOT NULL.
+    private static AvailabilityStatus availabilityOrUnknown(AvailabilityStatus availability) {
+        return availability != null ? availability : AvailabilityStatus.UNKNOWN;
     }
 
     String filterLines(String innerText) {

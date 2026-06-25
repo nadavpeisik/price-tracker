@@ -7,6 +7,8 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.np.pricehunt.backend.domain.AvailabilityStatus;
+import com.np.pricehunt.backend.dto.PriceLlmResult;
 import com.np.pricehunt.backend.exception.MalformedLlmOutputException;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -114,5 +116,37 @@ class OllamaPriceExtractionServiceTest {
 
         assertThatThrownBy(() -> service.extractPriceFromText("$10 in stock", MODEL))
                 .isInstanceOf(ResourceAccessException.class);
+    }
+
+    // --- availability deserialization defense (the LLM path's dedicated Jackson-2 mapper) ---
+
+    @Test
+    void extractPriceFromText_unknownAvailabilityToken_defaultsToUnknown() {
+        // An availability value outside the enum must degrade to UNKNOWN (via @JsonEnumDefaultValue +
+        // the mapper's READ_UNKNOWN_ENUM_VALUES_USING_DEFAULT_VALUE), not throw — defense for when
+        // native structured output doesn't fully constrain a model.
+        ChatModel chatModel = mock(ChatModel.class);
+        ChatResponse response = new ChatResponse(List.of(new Generation(
+                new AssistantMessage("{\"price\": 10.00, \"currency\": \"USD\", \"availability\": \"BOGUS\"}"))));
+        when(chatModel.call(any(Prompt.class))).thenReturn(response);
+        OllamaPriceExtractionService service = new OllamaPriceExtractionService(ChatClient.builder(chatModel));
+
+        PriceLlmResult result = service.extractPriceFromText("$10 widget", MODEL);
+
+        assertThat(result.availability()).isEqualTo(AvailabilityStatus.UNKNOWN);
+    }
+
+    @Test
+    void extractPriceFromText_synonymAvailabilityToken_mappedViaAlias() {
+        // A common synonym ("IN_STOCK") resolves to AVAILABLE via @JsonAlias rather than UNKNOWN.
+        ChatModel chatModel = mock(ChatModel.class);
+        ChatResponse response = new ChatResponse(List.of(new Generation(
+                new AssistantMessage("{\"price\": 10.00, \"currency\": \"USD\", \"availability\": \"IN_STOCK\"}"))));
+        when(chatModel.call(any(Prompt.class))).thenReturn(response);
+        OllamaPriceExtractionService service = new OllamaPriceExtractionService(ChatClient.builder(chatModel));
+
+        PriceLlmResult result = service.extractPriceFromText("$10 widget", MODEL);
+
+        assertThat(result.availability()).isEqualTo(AvailabilityStatus.AVAILABLE);
     }
 }

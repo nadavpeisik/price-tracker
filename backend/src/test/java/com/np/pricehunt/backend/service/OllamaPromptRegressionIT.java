@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.np.pricehunt.backend.config.RestClientFactories;
+import com.np.pricehunt.backend.domain.AvailabilityStatus;
 import com.np.pricehunt.backend.dto.PriceLlmResult;
 import java.io.FileNotFoundException;
 import java.io.InputStream;
@@ -36,7 +37,7 @@ import org.springframework.web.client.RestClient;
  *
  * <p>This drives the <em>real</em> service against a <em>live local Ollama</em> over a set of
  * labeled snippets ({@code price-extraction/availability-cases.json}), asserting the extracted
- * {@code available} flag. Its purpose is to catch availability regressions when the extraction
+ * {@code availability} status. Its purpose is to catch availability regressions when the extraction
  * prompt is edited — the prompt lives only in {@link OllamaPriceExtractionService}, so calling the
  * real service keeps it the single source of truth (no prompt duplication).
  *
@@ -81,7 +82,13 @@ class OllamaPromptRegressionIT {
      * model's reliability ceiling (a deterministic miss or a flaky case): it still runs for visibility
      * but is reported as skipped instead of failing the commit gate (issue #102). {@code note} records why.
      */
-    record Case(String name, String text, boolean expectedAvailable, String model, Boolean gated, String note) {
+    record Case(
+            String name,
+            String text,
+            AvailabilityStatus expectedAvailability,
+            String model,
+            Boolean gated,
+            String note) {
 
         boolean isGated() {
             return gated == null || gated;
@@ -152,7 +159,7 @@ class OllamaPromptRegressionIT {
     void availabilityMatchesExpectation(Case c) {
         String model = c.model() != null ? c.model() : defaultModel;
         PriceLlmResult result = service.extractPriceFromText(c.text(), model);
-        log.info("case={} model={} expectedAvailable={} got={}", c.name(), model, c.expectedAvailable(), result);
+        log.info("case={} model={} expectedAvailability={} got={}", c.name(), model, c.expectedAvailability(), result);
 
         assertThat(result)
                 .as("case '%s' returned a result (model=%s)", c.name(), model)
@@ -165,15 +172,15 @@ class OllamaPromptRegressionIT {
         // fails even when quarantined — that's an infra failure, not a model limit.
         if (!c.isGated()) {
             Assumptions.assumeTrue(
-                    result.available() == c.expectedAvailable(),
+                    result.availability() == c.expectedAvailability(),
                     () -> String.format(
-                            "non-gating known limitation [%s]: expected available=%s, got %s — %s",
-                            c.name(), c.expectedAvailable(), result.available(), c.note()));
+                            "non-gating known limitation [%s]: expected availability=%s, got %s — %s",
+                            c.name(), c.expectedAvailability(), result.availability(), c.note()));
         }
 
-        assertThat(result.available())
+        assertThat(result.availability())
                 .as("case '%s' availability (model=%s)", c.name(), model)
-                .isEqualTo(c.expectedAvailable());
+                .isEqualTo(c.expectedAvailability());
         // Availability is the focus, but a prompt edit must not silently break price/currency either.
         assertThat(result.price())
                 .as("case '%s' price (model=%s)", c.name(), model)

@@ -1,5 +1,6 @@
 package com.np.pricehunt.backend.dto;
 
+import com.np.pricehunt.backend.domain.AvailabilityStatus;
 import com.np.pricehunt.backend.domain.ExtractionSource;
 import java.math.BigDecimal;
 
@@ -11,7 +12,7 @@ public record ScrapeResponse(
         String blockedReason,
         ShopNameProposal shopNameProposal) {
 
-    public record PriceData(BigDecimal price, String currency, boolean available) {}
+    public record PriceData(BigDecimal price, String currency, AvailabilityStatus availability) {}
 
     /**
      * The scraper's proposed shop name plus how confident the signal is: {@code strong} = a
