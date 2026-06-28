@@ -247,7 +247,7 @@ Design notes (decided in discussion, revisit when the work starts):
   from the Playwright scraper (the LLM-orchestration libs belong in Python, not in the Spring
   AI backend). *Decided so far:* discovery is its own container, not folded into the scraper;
   **how** it drives the rest of the engine (call the scraper directly, route through the Spring
-  Boot track endpoint, or ride the Phase-2 Kafka pipeline) is still open — settle it when the
+  Boot track endpoint, or ride the Phase 2 Kafka pipeline) is still open — settle it when the
   work starts. Start with the deterministic pipeline above and add agentic looping only where
   it pays off (query refinement when matches are weak) — don't make the whole feature an
   autonomous agent on day one.
