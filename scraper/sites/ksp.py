@@ -231,6 +231,8 @@ async def _fetch_stock(page) -> AvailabilityStatus:
                 if attempt == 1:
                     raise
         response = await asyncio.wait_for(request.response(), timeout=_STOCK_TIMEOUT_MS / 1000)
+        if response is None:  # request failed/aborted (no response) — degrade honestly, don't crash
+            return AvailabilityStatus.UNKNOWN
         return stock_status(await response.json())
     except Exception:
         logger.debug("ksp stock fetch failed", exc_info=True)

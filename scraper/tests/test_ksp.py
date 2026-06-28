@@ -321,6 +321,13 @@ async def test_extract_stock_unknown_when_button_missing(page):
     assert result.priceData.availability is AvailabilityStatus.UNKNOWN
 
 
+async def test_extract_stock_unknown_when_mlay_aborted(page):
+    # The mlay request fires but is aborted -> request.response() is None -> UNKNOWN (not a crash).
+    result = await _run_extract(page, mlay_body=None)
+    assert result.priceData.price == 349.0
+    assert result.priceData.availability is AvailabilityStatus.UNKNOWN
+
+
 async def test_extract_handles_delayed_sse(page):
     # SSE arrives after a delay still within the price deadline -> still captured.
     result = await _run_extract(page, sse_delay=0.3)
