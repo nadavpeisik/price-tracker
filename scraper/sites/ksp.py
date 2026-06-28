@@ -18,6 +18,7 @@ the orchestration (attach_sse_capture / extract / _fetch_stock) drives Playwrigh
 import asyncio
 import json
 import logging
+import math
 import re
 import time
 from urllib.parse import urlparse
@@ -42,9 +43,11 @@ _PRICE_DEADLINE_S = 3.0
 _STOCK_TIMEOUT_MS = 2000
 _CLICK_RETRY_WAIT_MS = 500
 
-# Matches /web/item/<digits> and the legacy /item/<digits>; trailing slash / query are ignored
-# because we search the URL path only.
-_ITEM_PATH_RE = re.compile(r"/(?:web/)?item/(\d+)")
+# Matches /web/item/<digits> and the legacy /item/<digits>. The id must be a COMPLETE path segment
+# (followed by `/` or end) so `/web/item/123abc` doesn't parse as 123 — but a trailing slug segment
+# (`/web/item/415448/<name>`, which real KSP links carry) is still allowed. Query is in url.query,
+# not url.path, so it's already excluded.
+_ITEM_PATH_RE = re.compile(r"/(?:web/)?item/(\d+)(?:/|$)")
 
 
 def matches(url: str) -> bool:
@@ -72,7 +75,7 @@ def _coerce_price(raw) -> float | None:
             return None
     else:
         return None
-    return value if value > 0 else None
+    return value if math.isfinite(value) and value > 0 else None
 
 
 def _sse_data_blocks(sse_text: str):
@@ -86,31 +89,35 @@ def _sse_data_blocks(sse_text: str):
             yield "\n".join(data_lines)
 
 
-def parse_price_from_sse(sse_text: str, uin: str) -> float | None:
-    """Return the product's price from a captured SSE body, or None.
+def _price_from_event(payload, uin: str) -> float | None:
+    """Our item's positive price from one parsed SSE event payload, or None.
 
-    KSP wraps each payload in an envelope ``{requestId, key, route, ok, data}``. The single-item
-    ("item.item") payload holds the product at ``data.result.data`` — with the item id as a ``uin``
-    field and the price at ``data.result.data.price`` (verified across 3 live items 2026-06-28).
-    We match our uin and return a positive price. Every level is isinstance-guarded so a
-    malformed/non-JSON event or any shape change is skipped (→ None → generic fallback), not raised.
+    Only the authoritative single-item ("item.item") payload carries the product's own price —
+    pin to it so another event with the same uin can't win. KSP wraps it in an envelope
+    ``{requestId, key, route, ok, data}`` with the product at ``data.result.data`` (item id as a
+    ``uin`` field, price at ``data.result.data.price`` — verified across 3 live items 2026-06-28).
+    Every level is isinstance-guarded so a shape change is skipped, not raised.
     """
+    if not isinstance(payload, dict) or payload.get("key") != "item.item":
+        return None
+    data = payload.get("data")
+    result = data.get("result") if isinstance(data, dict) else None
+    product = result.get("data") if isinstance(result, dict) else None
+    if not isinstance(product, dict) or str(product.get("uin")) != uin:
+        return None
+    return _coerce_price(product.get("price"))
+
+
+def parse_price_from_sse(sse_text: str, uin: str) -> float | None:
+    """Return the product's price from a captured SSE body, or None (skips malformed events)."""
     for block in _sse_data_blocks(sse_text):
         try:
             payload = json.loads(block)
         except (ValueError, TypeError):
             continue
-        # Only the authoritative single-item payload carries the product's own price (Codex
-        # diff-review) — pin to key="item.item" so another event with the same uin can't win.
-        if not isinstance(payload, dict) or payload.get("key") != "item.item":
-            continue
-        data = payload.get("data")
-        result = data.get("result") if isinstance(data, dict) else None
-        product = result.get("data") if isinstance(result, dict) else None
-        if isinstance(product, dict) and str(product.get("uin")) == uin:
-            price = _coerce_price(product.get("price"))
-            if price is not None:
-                return price
+        price = _price_from_event(payload, uin)
+        if price is not None:
+            return price
     return None
 
 
@@ -197,26 +204,28 @@ async def _drain_price(sse_queue: asyncio.Queue[str], uin: str) -> float | None:
 async def _fetch_stock(page) -> AvailabilityStatus:
     """Best-effort branch-stock lookup. Any failure → UNKNOWN (price still returns).
 
-    Click the (visible) "check stock in branches" button so the page fires GET .../mlay/{catalog},
-    which we intercept. `expect_response` arms the capture before any click; `expect_request` arms
-    BEFORE each click (on context-manager enter) so a request the click fires is caught — keyed on
-    the *request*, not the response, so a slow server can't trigger a duplicate click. A click that
-    fires no request (button present but React hasn't bound its handler yet) retries once. The
-    `expect_*` context managers remove their own listeners on exit, so there's nothing to clean up.
+    Click the (visible) "check stock in branches" button so the page fires GET .../mlay/{catalog}.
+    `expect_request` arms BEFORE each click (on context-manager enter) so the request the click
+    fires is caught — keyed on the *request*, not the response, so a slow server can't trigger a
+    duplicate click; a click that fires no request (button present but React hasn't bound its
+    handler) retries once. We then read **that specific request's** response via
+    `request.response()` — not "any matching mlay response in a window" — so a concurrent/background
+    mlay can't be misbound (CodeRabbit). The `expect_*` CMs remove their own listeners on exit.
     """
     try:
         button = page.get_by_text(_STOCK_BUTTON_TEXT).filter(visible=True).first
         await button.wait_for(state="visible", timeout=_STOCK_TIMEOUT_MS)
-        async with page.expect_response(_MLAY_URL_GLOB, timeout=_STOCK_TIMEOUT_MS) as resp_info:
-            for attempt in range(2):
-                try:
-                    async with page.expect_request(_MLAY_URL_GLOB, timeout=_CLICK_RETRY_WAIT_MS):
-                        await button.evaluate("el => el.click()")
-                    break
-                except PlaywrightTimeoutError:
-                    if attempt == 1:
-                        raise
-        response = await resp_info.value
+        request = None
+        for attempt in range(2):
+            try:
+                async with page.expect_request(_MLAY_URL_GLOB, timeout=_CLICK_RETRY_WAIT_MS) as req:
+                    await button.evaluate("el => el.click()")
+                request = await req.value
+                break
+            except PlaywrightTimeoutError:
+                if attempt == 1:
+                    raise
+        response = await asyncio.wait_for(request.response(), timeout=_STOCK_TIMEOUT_MS / 1000)
         return stock_status(await response.json())
     except Exception:
         logger.debug("ksp stock fetch failed", exc_info=True)

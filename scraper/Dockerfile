@@ -2,10 +2,10 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Stage 1: install deps from pyproject.toml. Placeholders for every only-include
-# path (main.py, models.py, sites/) are needed because hatchling requires them to
-# exist at wheel-build time. The real code is copied + re-installed in stage 2, so
-# this heavy chromium-download layer stays cached across code changes.
+# Stage 1: install third-party deps from pyproject.toml. Placeholders for every only-include
+# path (main.py, models.py, sites/) are needed because hatchling requires them at wheel-build
+# time; this wheel exists only to pull in deps. The heavy chromium-download layer stays cached
+# across code changes (the real code is copied in stage 2).
 COPY pyproject.toml ./
 RUN mkdir -p sites && \
     touch main.py models.py sites/__init__.py && \
@@ -16,11 +16,8 @@ RUN mkdir -p sites && \
 # Stage 2: real source — only these layers invalidate on code change.
 COPY main.py models.py ./
 COPY sites ./sites
-# Re-install the real code over the stage-1 placeholders in site-packages so imports resolve
-# however the process is launched (uvicorn app-dir, pytest, a console entrypoint), not just from
-# the /app cwd. --force-reinstall is required: the version is unchanged from stage 1, so a plain
-# `pip install` would no-op ("already satisfied") and leave the empty placeholders in place.
-RUN pip install --no-cache-dir --no-deps --force-reinstall .
+# No reinstall: uvicorn runs with app-dir "." so /app is first on sys.path and the real files
+# shadow the empty site-packages placeholders (the long-standing single-file Dockerfile pattern).
 
 EXPOSE 8001
 

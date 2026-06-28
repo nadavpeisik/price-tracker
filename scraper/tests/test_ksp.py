@@ -39,7 +39,9 @@ def test_matches(url, expected):
     [
         ("https://ksp.co.il/web/item/415448", "415448"),
         ("https://ksp.co.il/web/item/415448?ref=home", "415448"),  # query ignored
+        ("https://ksp.co.il/web/item/415448/some-product-slug", "415448"),  # trailing slug ok
         ("https://ksp.co.il/item/99/", "99"),  # legacy path + trailing slash
+        ("https://ksp.co.il/web/item/123abc", None),  # id must be a COMPLETE segment
         ("https://ksp.co.il/web/cat/573", None),  # category, not an item
         ("https://ksp.co.il/", None),
     ],
@@ -380,3 +382,36 @@ async def test_scrape_dispatches_to_ksp_end_to_end(monkeypatch):
     assert result.priceData.price == 349.0
     assert result.priceData.availability is AvailabilityStatus.AVAILABLE
     assert result.shopNameProposal.name == "KSP"
+
+
+async def _scrape_with_ksp_extract(monkeypatch, fake_extract):
+    import main
+
+    monkeypatch.setattr(ksp, "extract", fake_extract)
+    handler = _make_handler(_html(), _SSE_OK, _MLAY_INSTOCK, 0.0, None)
+    async with async_playwright() as p:
+        real = await p.chromium.launch(headless=True, args=["--no-sandbox"])
+        monkeypatch.setattr(main, "browser", _RoutedBrowser(real, handler))
+        try:
+            return await main.scrape(main.ScrapeRequest(url=_ITEM_URL))
+        finally:
+            await real.close()
+
+
+async def test_scrape_falls_back_to_generic_when_ksp_returns_none(monkeypatch):
+    # KSP item page but the handler yields no price -> scrape() falls through to the generic
+    # waterfall (not STRUCTURED) rather than returning nothing.
+    async def _none(page, queue):
+        return None
+
+    result = await _scrape_with_ksp_extract(monkeypatch, _none)
+    assert result.extractionSource is not ExtractionSource.STRUCTURED
+
+
+async def test_scrape_falls_back_to_generic_when_ksp_raises(monkeypatch):
+    # An exception in the KSP handler must not crash the scrape — it falls through to generic.
+    async def _raise(page, queue):
+        raise RuntimeError("boom")
+
+    result = await _scrape_with_ksp_extract(monkeypatch, _raise)
+    assert result.extractionSource is not ExtractionSource.STRUCTURED
