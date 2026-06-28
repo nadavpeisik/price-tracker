@@ -3,11 +3,21 @@ import logging
 import time
 import uuid
 from contextlib import asynccontextmanager
-from enum import Enum
 
 from fastapi import FastAPI, HTTPException, Request
 from playwright.async_api import Browser, async_playwright
-from pydantic import BaseModel, field_validator
+
+# Re-exported for `from main import ...` consumers (tests). DTOs live in models.py so site
+# handlers (sites/ksp.py) can import them without a circular import back to main.
+from models import (
+    AvailabilityStatus,  # noqa: F401 — re-export only (reaches the wire via PriceData)
+    ExtractionSource,
+    PriceData,
+    ScrapeRequest,
+    ScrapeResponse,
+    ShopNameProposal,
+)
+from sites import ksp
 
 browser: Browser | None = None
 
@@ -425,65 +435,6 @@ _RENDER_STABLE_POLLS = 2
 _RENDER_MIN_CHARS = 20  # floor: never declare an empty/near-empty page settled
 
 
-class ExtractionSource(str, Enum):
-    STRUCTURED = "structured"
-    SNIPPET = "snippet"
-    FULLTEXT = "fulltext"
-    BLOCKED = "blocked"
-
-
-# Tri-state: "can you get it" (pre-order/back-order/online-only count as available), not "on a
-# shelf". UNKNOWN is a real third state — a page with no availability signal is unknown, not
-# out of stock. Lowercase wire values like ExtractionSource; the backend's
-# accept-case-insensitive-enums maps them to the Java AvailabilityStatus.
-class AvailabilityStatus(str, Enum):
-    AVAILABLE = "available"
-    UNAVAILABLE = "unavailable"
-    UNKNOWN = "unknown"
-
-
-class ScrapeRequest(BaseModel):
-    url: str
-
-
-class PriceData(BaseModel):
-    price: float
-    currency: str
-    availability: AvailabilityStatus = AvailabilityStatus.UNKNOWN
-
-    @field_validator("availability", mode="before")
-    @classmethod
-    def _coerce_availability(cls, v):
-        # The JS normalizer emits a canonical token, but be defensive: an unrecognized / blank /
-        # None value becomes UNKNOWN rather than raising a ValidationError that would 500 the scrape.
-        if isinstance(v, AvailabilityStatus):
-            return v
-        if v is None:
-            return AvailabilityStatus.UNKNOWN
-        try:
-            return AvailabilityStatus(str(v).strip().lower())
-        except ValueError:
-            return AvailabilityStatus.UNKNOWN
-
-
-class ShopNameProposal(BaseModel):
-    # The scraper's proposed shop name and how confident the signal is: strong = a site-level
-    # signal (og:site_name / JSON-LD Organization), weak = a <title> guess. A proposal, not the
-    # final name — the backend resolver decides the stored name (a curated/learned mapping can
-    # override even a strong proposal). See _SITE_NAME_SCRIPT.
-    name: str
-    strong: bool
-
-
-class ScrapeResponse(BaseModel):
-    extractionSource: ExtractionSource
-    priceData: PriceData | None = None
-    snippet: str | None = None
-    innerText: str | None = None
-    blockedReason: str | None = None
-    shopNameProposal: ShopNameProposal | None = None
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global browser
@@ -768,6 +719,16 @@ async def scrape(request: ScrapeRequest):
     )
     try:
         page = await context.new_page()
+
+        # KSP: attach the price-SSE capture BEFORE goto — the stream fires during page load and
+        # can't be replayed (Cloudflare 403s out-of-band requests). Attached UNCONDITIONALLY: it's a
+        # passive, host-filtered listener (see attach_sse_capture — one substring check per response,
+        # body-read only for a real KSP SSE response), so the cost on non-KSP pages is ~nil. Doing it
+        # unconditionally means a non-KSP URL that REDIRECTS into KSP (a shortener/affiliate/share
+        # link) still has its page-load SSE captured; the handler only runs when the FINAL page.url is
+        # a KSP host (dispatch below), and the listener self-filters to KSP-host responses.
+        ksp_cap = ksp.attach_sse_capture(page)
+
         response = await page.goto(request.url, wait_until="domcontentloaded", timeout=30000)
 
         # Bot-wall detection. AWS WAF challenges fail fast — their JS challenge
@@ -804,6 +765,31 @@ async def scrape(request: ScrapeRequest):
                         extractionSource=ExtractionSource.BLOCKED,
                         blockedReason=reason,
                     )
+
+        # KSP handler-first (lean): KSP is a network/API extractor — it needs neither chrome-hide
+        # nor the generic render gate, so we try it right after bot-wall detection. Dispatch on the
+        # FINAL page.url host (post-redirect), so a non-KSP URL that landed on KSP is handled and a
+        # non-KSP page never runs the handler (no misleading "no price" warning). On success we return
+        # STRUCTURED before any generic work; a clean None (no price on a KSP item page) or an
+        # exception falls through to the generic waterfall — logged, so silent KSP degradation is
+        # observable.
+        if ksp.matches(page.url):
+            try:
+                ksp_result = await ksp.extract(page, ksp_cap)
+                if ksp_result is not None:
+                    return ksp_result
+                logging.getLogger(__name__).warning(
+                    "ksp handler returned no price requested=%s final=%s; falling back to generic",
+                    request.url,
+                    page.url,
+                )
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "ksp handler failed requested=%s final=%s; falling back",
+                    request.url,
+                    page.url,
+                    exc_info=True,
+                )
 
         # Hide chrome (nav/footer/cookie/banner/ads) BEFORE the render-wait so the stabilization
         # signal tracks product content, not chrome that renders early and would false-settle the

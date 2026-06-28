@@ -2,19 +2,22 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Stage 1: install deps from pyproject.toml. A placeholder main.py is needed
-# because hatchling's only-include = ["main.py"] requires the file to exist at
-# wheel-build time; uvicorn imports main:app from /app at runtime (not from the
-# installed wheel), so the placeholder is harmless and gets replaced below.
+# Stage 1: install third-party deps from pyproject.toml. Placeholders for every only-include
+# path (main.py, models.py, sites/) are needed because hatchling requires them at wheel-build
+# time; this wheel exists only to pull in deps. The heavy chromium-download layer stays cached
+# across code changes (the real code is copied in stage 2).
 COPY pyproject.toml ./
-RUN touch main.py && \
+RUN mkdir -p sites && \
+    touch main.py models.py sites/__init__.py && \
     pip install --no-cache-dir . && \
-    rm main.py && \
+    rm -rf main.py models.py sites && \
     playwright install --with-deps chromium
 
-# Stage 2: real source — only this layer invalidates on code change, so the
-# heavy chromium-download layer above stays cached.
-COPY main.py ./
+# Stage 2: real source — only these layers invalidate on code change.
+COPY main.py models.py ./
+COPY sites ./sites
+# No reinstall: uvicorn runs with app-dir "." so /app is first on sys.path and the real files
+# shadow the empty site-packages placeholders (the long-standing single-file Dockerfile pattern).
 
 EXPOSE 8001
 
