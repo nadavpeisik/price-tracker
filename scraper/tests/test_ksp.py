@@ -111,6 +111,13 @@ def test_price_tolerates_shape_change():
     assert ksp.parse_price_from_sse(sse, "1") is None
 
 
+def test_sse_data_blocks_strips_exactly_one_leading_space():
+    # SSE spec: remove at most ONE leading space from a data: value (not all whitespace). Two
+    # spaces -> one removed, one kept; a tab is preserved entirely.
+    assert list(ksp._sse_data_blocks("data:  X\n\n")) == [" X"]
+    assert list(ksp._sse_data_blocks("data:\tX\n\n")) == ["\tX"]
+
+
 # --- stock_status ----------------------------------------------------------------------------
 def _stores(qnts):
     return {"result": {"stores": {str(i): {"qnt": q} for i, q in enumerate(qnts)}}}

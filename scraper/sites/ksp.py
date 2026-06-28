@@ -82,9 +82,14 @@ def _sse_data_blocks(sse_text: str):
     """Yield each SSE event's concatenated `data:` payload (CRLF-tolerant, multi-line per spec)."""
     text = sse_text.replace("\r\n", "\n").replace("\r", "\n")
     for event in text.split("\n\n"):
-        data_lines = [
-            line[len("data:") :].lstrip() for line in event.split("\n") if line.startswith("data:")
-        ]
+        data_lines = []
+        for line in event.split("\n"):
+            if line.startswith("data:"):
+                value = line[len("data:") :]
+                # SSE spec: strip at most ONE leading space, not all whitespace (.lstrip() would
+                # over-strip a value where leading whitespace is significant). Harmless for KSP's
+                # JSON payloads, but keeps this a correct general SSE parser (gemini-code-assist).
+                data_lines.append(value[1:] if value.startswith(" ") else value)
         if data_lines:
             yield "\n".join(data_lines)
 
