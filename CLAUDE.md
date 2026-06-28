@@ -243,10 +243,14 @@ Design notes (decided in discussion, revisit when the work starts):
   rate-limit) or per-shop search; wrap it behind an interface so the source can be swapped.
 - **This IS the agentic use case** (unlike the deterministic extraction waterfall): the
   search→evaluate→refine loop is genuinely cyclic, so we plan to build it as an **agent with
-  LangGraph/LangChain** in the **Python scraper** (the LLM-orchestration libs belong there,
-  not in the Spring AI backend). Start with the deterministic pipeline above and add agentic
-  looping only where it pays off (query refinement when matches are weak) — don't make the
-  whole feature an autonomous agent on day one.
+  LangGraph/LangChain** in a **separate, containerized Python "discovery" service** — distinct
+  from the Playwright scraper (the LLM-orchestration libs belong in Python, not in the Spring
+  AI backend). *Decided so far:* discovery is its own container, not folded into the scraper;
+  **how** it drives the rest of the engine (call the scraper directly, route through the Spring
+  Boot track endpoint, or ride the Phase 2 Kafka pipeline) is still open — settle it when the
+  work starts. Start with the deterministic pipeline above and add agentic looping only where
+  it pays off (query refinement when matches are weak) — don't make the whole feature an
+  autonomous agent on day one.
 - **Phase 1.7 SSRF hardening becomes a hard prerequisite** — machine-discovered URLs are a
   far larger attack surface than user-pasted ones.
 - **At scale, feed-first beats scrape-first** — real comparison sites lean on merchant feeds
