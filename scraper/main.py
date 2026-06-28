@@ -721,9 +721,13 @@ async def scrape(request: ScrapeRequest):
         page = await context.new_page()
 
         # KSP: attach the price-SSE capture BEFORE goto — the stream fires during page load and
-        # can't be replayed (Cloudflare 403s out-of-band requests). Gated on host only, so KSP→KSP
-        # redirects to /web/item/<id> are still caught; the item-page gate lives in ksp.extract.
-        ksp_cap = ksp.attach_sse_capture(page) if ksp.matches(request.url) else None
+        # can't be replayed (Cloudflare 403s out-of-band requests). Attached UNCONDITIONALLY: it's a
+        # passive, host-filtered listener (see attach_sse_capture — one substring check per response,
+        # body-read only for a real KSP SSE response), so the cost on non-KSP pages is ~nil. Doing it
+        # unconditionally means a non-KSP URL that REDIRECTS into KSP (a shortener/affiliate/share
+        # link) still has its page-load SSE captured; the handler only runs when the FINAL page.url is
+        # a KSP host (dispatch below), and the listener self-filters to KSP-host responses.
+        ksp_cap = ksp.attach_sse_capture(page)
 
         response = await page.goto(request.url, wait_until="domcontentloaded", timeout=30000)
 
@@ -763,21 +767,28 @@ async def scrape(request: ScrapeRequest):
                     )
 
         # KSP handler-first (lean): KSP is a network/API extractor — it needs neither chrome-hide
-        # nor the generic render gate, so we try it right after bot-wall detection. On success we
-        # return STRUCTURED before any generic work; a clean None (no price on a KSP item page) or
-        # an exception falls through to the generic waterfall — logged, so silent KSP degradation
-        # is observable.
-        if ksp_cap is not None:
+        # nor the generic render gate, so we try it right after bot-wall detection. Dispatch on the
+        # FINAL page.url host (post-redirect), so a non-KSP URL that landed on KSP is handled and a
+        # non-KSP page never runs the handler (no misleading "no price" warning). On success we return
+        # STRUCTURED before any generic work; a clean None (no price on a KSP item page) or an
+        # exception falls through to the generic waterfall — logged, so silent KSP degradation is
+        # observable.
+        if ksp.matches(page.url):
             try:
                 ksp_result = await ksp.extract(page, ksp_cap)
                 if ksp_result is not None:
                     return ksp_result
                 logging.getLogger(__name__).warning(
-                    "ksp handler returned no price url=%s; falling back to generic", request.url
+                    "ksp handler returned no price requested=%s final=%s; falling back to generic",
+                    request.url,
+                    page.url,
                 )
             except Exception:
                 logging.getLogger(__name__).warning(
-                    "ksp handler failed url=%s; falling back", request.url, exc_info=True
+                    "ksp handler failed requested=%s final=%s; falling back",
+                    request.url,
+                    page.url,
+                    exc_info=True,
                 )
 
         # Hide chrome (nav/footer/cookie/banner/ads) BEFORE the render-wait so the stabilization

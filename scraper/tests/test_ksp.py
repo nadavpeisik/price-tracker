@@ -384,6 +384,29 @@ async def test_scrape_dispatches_to_ksp_end_to_end(monkeypatch):
     assert result.shopNameProposal.name == "KSP"
 
 
+async def test_scrape_dispatches_to_ksp_after_non_ksp_redirect(monkeypatch):
+    # A NON-KSP url (a shortener / affiliate / share link) that redirects INTO a KSP item must
+    # still trigger the handler: attach_sse_capture is now UNCONDITIONAL and dispatch keys on the
+    # FINAL page.url host. (A real shortener uses a network 302 the browser follows the same way;
+    # route.fulfill can't run a 302 target's scripts, so we redirect client-side — equivalent for
+    # the page.url the dispatch reads, and the price SSE then fires from the landed KSP page.)
+    import main
+
+    handler = _make_handler(_html(), _SSE_OK, _MLAY_INSTOCK, 0.0, _ITEM_URL)
+    async with async_playwright() as p:
+        real = await p.chromium.launch(headless=True, args=["--no-sandbox"])
+        monkeypatch.setattr(main, "browser", _RoutedBrowser(real, handler))
+        try:
+            result = await main.scrape(main.ScrapeRequest(url="https://kspl.ink/p/abc"))
+        finally:
+            await real.close()
+
+    assert result.extractionSource is ExtractionSource.STRUCTURED
+    assert result.priceData.price == 349.0
+    assert result.priceData.availability is AvailabilityStatus.AVAILABLE
+    assert result.shopNameProposal.name == "KSP"
+
+
 async def _scrape_with_ksp_extract(monkeypatch, fake_extract):
     import main
 
