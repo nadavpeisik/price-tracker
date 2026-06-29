@@ -57,7 +57,14 @@ public final class UrlSanitizer {
     // Scoped to the authority (scheme://[userinfo@]host…); an '@' later in the path/query is left intact.
     private static String stripUserInfo(String url) {
         int schemeSep = url.indexOf("://");
-        int authorityStart = schemeSep >= 0 ? schemeSep + 3 : 0;
+        int authorityStart;
+        if (schemeSep >= 0) {
+            authorityStart = schemeSep + 3;
+        } else if (url.startsWith("//")) {
+            authorityStart = 2; // scheme-relative URL: authority begins right after the leading "//"
+        } else {
+            authorityStart = 0;
+        }
         int authorityEnd = url.length();
         for (int i = authorityStart; i < url.length(); i++) {
             char c = url.charAt(i);

@@ -74,4 +74,10 @@ class UrlSanitizerTest {
         assertThat(UrlSanitizer.minimize("https://shop.com/u/@handle?ref=1"))
                 .isEqualTo("https://shop.com/u/@handle?ref=1");
     }
+
+    @Test
+    void stripsUserInfo_schemeRelativeUrl() {
+        // A scheme-relative "//user:pass@host/..." has no "://" — the authority still starts after "//".
+        assertThat(UrlSanitizer.minimize("//user:pass@shop.com/item")).isEqualTo("//shop.com/item");
+    }
 }

@@ -50,6 +50,8 @@ public class ScrapeAttemptRecorder {
 
     // failure_detail holds untrusted, potentially noisy exception/page text — bound it.
     private static final int MAX_DETAIL_CHARS = 1000;
+    // correlation_id column width — bound the MDC value so an over-long id can't fail the audit insert.
+    private static final int CORRELATION_ID_MAX_CHARS = 255;
 
     private final ScrapeAttemptRepository repository;
     private final LlmInputResolver llmInputResolver;
@@ -116,14 +118,14 @@ public class ScrapeAttemptRecorder {
                 .extractionSource(scraped.extractionSource())
                 .outcome(outcome)
                 .failureCode(code)
-                .failureDetail(truncate(detail))
+                .failureDetail(truncate(detail, MAX_DETAIL_CHARS))
                 .llmInput(llmInput)
                 .promptVersion(attribution.promptVersion())
                 .modelName(attribution.modelName())
                 .extractionConfigHash(attribution.extractionConfigHash())
                 .contentHash(Hashing.sha256Hex(rawEvidence(scraped)))
                 .llmInputHash(Hashing.sha256Hex(llmInput))
-                .correlationId(MDC.get(CORRELATION_ID_MDC_KEY))
+                .correlationId(truncate(MDC.get(CORRELATION_ID_MDC_KEY), CORRELATION_ID_MAX_CHARS))
                 .retentionUntil(now.plus(auditProperties.retention()))
                 .createdAt(now)
                 .build();
@@ -178,10 +180,12 @@ public class ScrapeAttemptRecorder {
         };
     }
 
-    private static String truncate(String detail) {
-        if (detail == null || detail.length() <= MAX_DETAIL_CHARS) {
-            return detail;
+    // Bounds a value to its column width before the audit write, so an over-long input can never throw a
+    // truncation error and lose the (best-effort) row. Null-safe.
+    private static String truncate(String value, int maxChars) {
+        if (value == null || value.length() <= maxChars) {
+            return value;
         }
-        return detail.substring(0, MAX_DETAIL_CHARS);
+        return value.substring(0, maxChars);
     }
 }

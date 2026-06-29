@@ -64,13 +64,14 @@ public class ScrapeAttemptPurgeScheduler {
                         batch < MAX_BATCHES_PER_RUN && !Thread.currentThread().isInterrupted();
                         batch++) {
                     List<Long> ids = repository.findExpiredIds(cutoff, page);
-                    if (ids.isEmpty()) {
-                        break;
+                    if (!ids.isEmpty()) {
+                        repository.deleteAllByIdInBatch(ids);
+                        deleted += ids.size();
                     }
-                    repository.deleteAllByIdInBatch(ids);
-                    deleted += ids.size();
+                    // A page smaller than BATCH_SIZE (incl. empty) means expired rows are exhausted — stop,
+                    // skipping a wasted follow-up query. Single exit keeps the loop simple.
                     if (ids.size() < BATCH_SIZE) {
-                        break; // partial page → expired rows exhausted; skip the empty follow-up query
+                        break;
                     }
                 }
                 log.info("Scrape-attempt purge deleted {} expired rows", deleted);
