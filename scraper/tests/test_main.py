@@ -1120,16 +1120,25 @@ def test_load_script_is_cached():
 
 
 def test_main_constants_are_the_loaded_assets():
-    # Single source of truth: main's constant IS the loader's output, so there's no drift between
-    # the value used at the page.evaluate() call sites and the asset on disk.
+    # Single source of truth: every main constant IS the loader's output for its asset, so there's
+    # no drift between the page.evaluate() call sites and the .js on disk — and a misbinding between
+    # a constant and its script name (e.g. a typo'd load_script arg) can't slip through.
+    assert main._DOM_PRUNE_SCRIPT is load_script("dom_prune")
+    assert main._HIDE_CHROME_SCRIPT is load_script("hide_chrome")
     assert main._STRUCTURED_DATA_SCRIPT is load_script("structured_data")
+    assert main._SITE_NAME_SCRIPT is load_script("site_name")
+    assert main._STRIP_DECOY_PRICES_SCRIPT is load_script("strip_decoy_prices")
     assert main._HAS_PRICE_SIGNAL_SCRIPT is load_script("has_price_signal")
+    assert main._VISIBLE_TEXT_LEN_SCRIPT is load_script("visible_text_len")
 
 
 def test_load_script_unknown_name_raises():
     # Fail-fast: a typo'd/missing asset raises at load time, not mid-scrape.
     with pytest.raises(FileNotFoundError):
         load_script("does_not_exist")
+    # A name that isn't a bare identifier (path traversal / separators) is rejected before any read.
+    with pytest.raises(ValueError):
+        load_script("../invalid")
 
 
 # Value-returning scripts: on a benign no-signal page each returns its documented "nothing found"

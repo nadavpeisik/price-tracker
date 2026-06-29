@@ -19,10 +19,12 @@ def load_script(name: str) -> str:
     runs from the repo root (CI) or from scraper/ (local). A missing/typo'd name raises
     FileNotFoundError at import — the desired fail-fast for a packaging bug, not a mid-scrape one.
 
-    load_script is only ever called with the hardcoded literal names in main.py (no dynamic input),
-    so `name` interpolated into the path has no traversal surface; add an allowlist only if that
-    ever changes.
+    load_script is only ever called with the hardcoded literal names in main.py, but it still
+    validates `name` is a bare identifier — cheap defense-in-depth so the interpolated `name` can
+    never path-traverse (e.g. `../`, `/`) if a future caller ever passes dynamic input.
     """
+    if not name.isidentifier():
+        raise ValueError(f"invalid script name: {name!r}")
     # utf-8-sig (not plain utf-8): strips a leading BOM if a Windows editor ever saves a .js with
     # one, so no stray ﻿ prefixes the script. A no-op when there is no BOM. (Repo supports Windows
     # clones — see CLAUDE.md core.symlinks note.)
