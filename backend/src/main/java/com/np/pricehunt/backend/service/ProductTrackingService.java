@@ -5,15 +5,15 @@ import com.np.pricehunt.backend.config.PriceTrackingProperties;
 import com.np.pricehunt.backend.domain.AvailabilityStatus;
 import com.np.pricehunt.backend.domain.PriceRecord;
 import com.np.pricehunt.backend.domain.Product;
+import com.np.pricehunt.backend.domain.ScrapeFailureCode;
 import com.np.pricehunt.backend.domain.TrackedItem;
 import com.np.pricehunt.backend.dto.*;
+import com.np.pricehunt.backend.observability.ScrapeAttemptRecorder;
 import com.np.pricehunt.backend.repository.PriceRecordRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
 import com.np.pricehunt.backend.service.ratelimit.RefreshCooldownLimiter;
 import com.np.pricehunt.backend.validator.UrlValidator;
-import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Locale;
@@ -45,8 +45,20 @@ public class ProductTrackingService {
     // below. Single-instance only, pre-Phase-2; a Redis-backed impl swaps in behind this interface.
     private final RefreshCooldownLimiter cooldownLimiter;
     private final Clock clock;
+    // Failure-first audit (issue #131). Best-effort: every call here is isolated so a recorder hiccup
+    // can never mask the real failure or convert a 502 into a 500.
+    private final ScrapeAttemptRecorder scrapeAttemptRecorder;
+    // Price-acceptance policy (#131): returns a Rejection (code + audit detail) or null. Extracted so the
+    // rules unit-test in isolation, separate from this orchestration.
+    private final PriceValidator priceValidator;
 
     private record ItemSnapshot(Long id, String url) {}
+
+    // Result of the persist transaction, surfaced so trackAndPersist can record a validation rejection
+    // AFTER the transaction closes (never a REQUIRES_NEW recorder call nested inside the template). A
+    // non-null rejection IS the rejection — no separate boolean to keep in sync; response is the usable
+    // last-known-good (rejection) or freshly-saved (accepted) price either way.
+    private record TrackPersistenceResult(TrackResponse response, PriceValidator.Rejection rejection) {}
 
     @Transactional
     public CreateProductResponse createProduct(CreateProductRequest request) {
@@ -203,15 +215,38 @@ public class ProductTrackingService {
             }
         }
 
-        // Step 4 — price extraction (network, may call the LLM). Failures propagate as before; the
-        // name is already committed.
-        PriceInfo info = scraped == null ? null : extractionService.extractPrice(scraped);
+        // Step 4 — price extraction (network, may call the LLM). On failure: record the scrape attempt
+        // (best-effort, OUTSIDE any tx) then rethrow the ORIGINAL exception, preserving the 502 +
+        // scheduler accounting. catch RuntimeException, NOT Throwable — a JVM Error must propagate
+        // untouched, never triggering a DB write. A null scrape is deliberately NOT recorded (no
+        // evidence to replay; already a job-run-item + the log above).
+        PriceInfo info;
+        if (scraped == null) {
+            info = null;
+        } else {
+            try {
+                info = extractionService.extractPrice(scraped);
+            } catch (RuntimeException e) {
+                safeRecordExtractionFailure(itemId, url, scraped, e);
+                throw e;
+            }
+        }
 
-        // Step 5 — validate + persist the price in a fresh, short-lived transaction.
-        return persistResultInTxn(itemId, info);
+        // Step 5 — validate + persist in a fresh, short-lived transaction; record a rejection AFTER it
+        // closes (the REQUIRES_NEW recorder must never run nested inside the template).
+        TrackPersistenceResult outcome = persistResultInTxn(itemId, info);
+        if (outcome.rejection() != null && scraped != null) {
+            safeRecordValidationRejection(
+                    itemId,
+                    url,
+                    scraped,
+                    outcome.rejection().code(),
+                    outcome.rejection().detail());
+        }
+        return outcome.response();
     }
 
-    private TrackResponse persistResultInTxn(Long itemId, PriceInfo info) {
+    private TrackPersistenceResult persistResultInTxn(Long itemId, PriceInfo info) {
         return transactionTemplate.execute(status -> {
             TrackedItem item = trackedItemRepository
                     .findById(itemId)
@@ -220,18 +255,20 @@ public class ProductTrackingService {
                     .findFirstByTrackedItemOrderByTimestampDesc(item)
                     .orElse(null);
 
-            if (info == null || !isValidPrice(info, latest)) {
+            PriceValidator.Rejection rejection = info == null ? null : priceValidator.validate(info, latest);
+            if (info == null || rejection != null) {
                 if (info != null) {
                     log.warn(
-                            "Extracted price failed validation — skipping save. url={} price={} currency={} source={}",
+                            "Extracted price failed validation ({}) — skipping save. url={} price={} currency={} source={}",
+                            rejection.code(),
                             item.getUrl(),
                             info.price(),
                             info.currency(),
                             info.extractionSource());
                 }
                 // intentional: return last known good price rather than an error, so the caller always gets a usable
-                // response
-                return buildTrackResponse(item.getProduct(), item, latest);
+                // response. info==null means a null scrape (not a validation rejection) → rejection=null.
+                return new TrackPersistenceResult(buildTrackResponse(item.getProduct(), item, latest), rejection);
             }
 
             // Defense at the persistence boundary: availability is optional metadata, so coalesce a
@@ -257,7 +294,7 @@ public class ProductTrackingService {
                     info.currency(),
                     availability);
 
-            return buildTrackResponse(item.getProduct(), item, record);
+            return new TrackPersistenceResult(buildTrackResponse(item.getProduct(), item, record), null);
         });
     }
 
@@ -279,33 +316,27 @@ public class ProductTrackingService {
                         .build()));
     }
 
-    private boolean isValidPrice(PriceInfo info, PriceRecord previous) {
-        if (info.price() == null || info.price().compareTo(BigDecimal.ZERO) <= 0) {
-            log.warn("Validation failed: price is zero or negative ({})", info.price());
-            return false;
-        }
-        if (info.currency() == null) {
-            log.warn("Validation failed: LLM returned null currency");
-            return false;
-        }
-        if (previous == null) return true;
-        if (!info.currency().equalsIgnoreCase(previous.getCurrency())) {
-            log.warn("Currency changed from {} to {} — skipping delta check", previous.getCurrency(), info.currency());
-            return true;
-        }
-
-        BigDecimal factor = BigDecimal.valueOf(trackingProperties.maxDeltaPercent())
-                .divide(BigDecimal.valueOf(100), 4, RoundingMode.HALF_UP)
-                .add(BigDecimal.ONE);
-        BigDecimal max = previous.getPrice().multiply(factor).setScale(4, RoundingMode.HALF_UP);
-        BigDecimal min = previous.getPrice().divide(factor, 4, RoundingMode.HALF_UP);
-        if (info.price().compareTo(max) > 0 || info.price().compareTo(min) < 0) {
+    private void safeRecordExtractionFailure(Long itemId, String url, ScrapeResponse scraped, RuntimeException cause) {
+        try {
+            scrapeAttemptRecorder.recordExtractionFailure(itemId, url, scraped, cause);
+        } catch (RuntimeException recordingError) {
             log.warn(
-                    "Validation failed: price {} is outside {}% delta of previous {} {}",
-                    info.price(), trackingProperties.maxDeltaPercent(), previous.getPrice(), previous.getCurrency());
-            return false;
+                    "Failed to record scrape_attempt for extraction failure (url={}): {}",
+                    url,
+                    recordingError.toString());
         }
-        return true;
+    }
+
+    private void safeRecordValidationRejection(
+            Long itemId, String url, ScrapeResponse scraped, ScrapeFailureCode code, String detail) {
+        try {
+            scrapeAttemptRecorder.recordValidationRejection(itemId, url, scraped, code, detail);
+        } catch (RuntimeException recordingError) {
+            log.warn(
+                    "Failed to record scrape_attempt for validation rejection (url={}): {}",
+                    url,
+                    recordingError.toString());
+        }
     }
 
     private TrackResponse buildTrackResponse(Product product, TrackedItem item, PriceRecord record) {

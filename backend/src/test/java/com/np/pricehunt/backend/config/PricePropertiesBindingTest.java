@@ -133,8 +133,88 @@ class PricePropertiesBindingTest {
                         assertThat(validationFailure(ctx.getStartupFailure())).isNotNull());
     }
 
+    // --- ScrapeAuditProperties ---
+
+    private final ApplicationContextRunner audit =
+            new ApplicationContextRunner().withUserConfiguration(AuditConfig.class);
+
+    @Test
+    void audit_defaultsApply() {
+        audit.run(ctx -> {
+            ScrapeAuditProperties props = ctx.getBean(ScrapeAuditProperties.class);
+            assertThat(props.retention()).isEqualTo(Duration.ofDays(90));
+            assertThat(props.maxLlmInputChars()).isEqualTo(8000);
+            assertThat(props.exportEnabled()).isFalse();
+            assertThat(props.purgeCron()).isEqualTo("0 15 3 * * *");
+        });
+    }
+
+    @Test
+    void audit_bindsExplicitValues() {
+        audit.withPropertyValues(
+                        "scrape.audit.retention=30d",
+                        "scrape.audit.max-llm-input-chars=12000",
+                        "scrape.audit.export-enabled=true")
+                .run(ctx -> {
+                    ScrapeAuditProperties props = ctx.getBean(ScrapeAuditProperties.class);
+                    assertThat(props.retention()).isEqualTo(Duration.ofDays(30));
+                    assertThat(props.maxLlmInputChars()).isEqualTo(12000);
+                    assertThat(props.exportEnabled()).isTrue();
+                });
+    }
+
+    @Test
+    void audit_rejectsRetentionBelowOneDay() {
+        audit.withPropertyValues("scrape.audit.retention=12h")
+                .run(ctx ->
+                        assertThat(validationFailure(ctx.getStartupFailure())).isNotNull());
+    }
+
+    @Test
+    void audit_rejectsNonPositiveMaxLlmInputChars() {
+        audit.withPropertyValues("scrape.audit.max-llm-input-chars=0")
+                .run(ctx ->
+                        assertThat(validationFailure(ctx.getStartupFailure())).isNotNull());
+    }
+
+    // --- OllamaChatOptionsProperties (the extraction-config-fingerprint mirror) ---
+
+    private final ApplicationContextRunner ollamaOptions =
+            new ApplicationContextRunner().withUserConfiguration(OllamaOptionsConfig.class);
+
+    @Test
+    void ollamaOptions_bindsExplicitValues() {
+        ollamaOptions
+                .withPropertyValues(
+                        "spring.ai.ollama.chat.options.temperature=0",
+                        "spring.ai.ollama.chat.options.format=json",
+                        "spring.ai.ollama.chat.options.num-ctx=4096")
+                .run(ctx -> {
+                    OllamaChatOptionsProperties props = ctx.getBean(OllamaChatOptionsProperties.class);
+                    assertThat(props.temperature()).isEqualTo(0.0);
+                    assertThat(props.format()).isEqualTo("json");
+                    assertThat(props.numCtx()).isEqualTo(4096);
+                });
+    }
+
+    @Test
+    void ollamaOptions_rejectsMissingTemperature() {
+        // @NotNull guards against Spring binding null while Spring AI silently falls back to its default.
+        ollamaOptions
+                .withPropertyValues(
+                        "spring.ai.ollama.chat.options.format=json", "spring.ai.ollama.chat.options.num-ctx=4096")
+                .run(ctx ->
+                        assertThat(validationFailure(ctx.getStartupFailure())).isNotNull());
+    }
+
     @EnableConfigurationProperties(PriceHistoryProperties.class)
     static class HistoryConfig {}
+
+    @EnableConfigurationProperties(ScrapeAuditProperties.class)
+    static class AuditConfig {}
+
+    @EnableConfigurationProperties(OllamaChatOptionsProperties.class)
+    static class OllamaOptionsConfig {}
 
     @EnableConfigurationProperties(PriceExtractionProperties.class)
     static class ExtractionConfig {}

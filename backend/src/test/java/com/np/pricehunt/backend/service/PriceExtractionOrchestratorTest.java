@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 import com.np.pricehunt.backend.config.PriceExtractionProperties;
+import com.np.pricehunt.backend.config.ScrapeAuditProperties;
 import com.np.pricehunt.backend.domain.AvailabilityStatus;
 import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.dto.PriceInfo;
@@ -16,6 +17,7 @@ import com.np.pricehunt.backend.exception.EmptyExtractionInputException;
 import com.np.pricehunt.backend.exception.MalformedLlmOutputException;
 import com.np.pricehunt.backend.exception.ScrapeBlockedException;
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -46,90 +48,9 @@ class PriceExtractionOrchestratorTest {
     @BeforeEach
     void setUp() {
         orchestrator = new PriceExtractionOrchestrator(
-                ollamaService, new PriceExtractionProperties(SNIPPET_MODEL, FULLTEXT_MODEL));
-    }
-
-    // --- filterLines ---
-
-    @Test
-    void filterLines_nullInput_returnsEmpty() {
-        assertThat(orchestrator.filterLines(null)).isEmpty();
-    }
-
-    @Test
-    void filterLines_blankInput_returnsEmpty() {
-        assertThat(orchestrator.filterLines("   \n  \n  ")).isEmpty();
-    }
-
-    @Test
-    void filterLines_noMatches_returnsTruncatedFallback() {
-        String noMatch = "hello world\nnothing here\njust text";
-        assertThat(orchestrator.filterLines(noMatch)).isEqualTo(noMatch);
-    }
-
-    @Test
-    void filterLines_noMatches_longInput_truncatesToFallbackChars() {
-        String longText = "x".repeat(4000);
-        String result = orchestrator.filterLines(longText);
-        assertThat(result).hasSize(3000);
-    }
-
-    @Test
-    void filterLines_singleMatch_includesPreviousAndNextLine() {
-        String input = "Product name\n$29.99\nIn stock";
-        String result = orchestrator.filterLines(input);
-        assertThat(result).isEqualTo("Product name\n$29.99\nIn stock");
-    }
-
-    @Test
-    void filterLines_consecutiveMatches_noDuplicateLines() {
-        String input = "header\n$29.99\n€25.00\nfooter";
-        String result = orchestrator.filterLines(input);
-        String[] lines = result.split("\n");
-        // all 4 lines present exactly once
-        assertThat(lines).containsExactly("header", "$29.99", "€25.00", "footer");
-    }
-
-    @Test
-    void filterLines_matchAtFirstLine_noIndexOutOfBounds() {
-        String input = "$29.99\nnext line";
-        assertThat(orchestrator.filterLines(input)).isEqualTo("$29.99\nnext line");
-    }
-
-    @Test
-    void filterLines_matchAtLastLine_noIndexOutOfBounds() {
-        String input = "prev line\n$29.99";
-        assertThat(orchestrator.filterLines(input)).isEqualTo("prev line\n$29.99");
-    }
-
-    @Test
-    void filterLines_keepsAvailabilityLine_farFromPrice() {
-        // The availability phrase is several lines from the price, so it survives ONLY by matching
-        // PRICE_LINE_PATTERN itself (not by price-adjacency). The FULLTEXT prompt classifies on these
-        // signals, so the filter must keep them or the model never sees the decisive evidence.
-        String input = "Product name\n$29.99\nspecs\nreviews\nNo longer available\nfooter";
-        String result = orchestrator.filterLines(input);
-        assertThat(result).contains("No longer available");
-    }
-
-    @Test
-    void filterLines_keepsOutOfStockLine_farFromPrice() {
-        String input = "Product name\n$29.99\nspecs\nreviews\nOut of stock\nfooter";
-        assertThat(orchestrator.filterLines(input)).contains("Out of stock");
-    }
-
-    @Test
-    void filterLines_keepsLowStockUrgencyLine_farFromPrice() {
-        // AVAILABLE-side signals the prompt classifies on must survive too, not just OOS phrases.
-        String input = "Product name\n$29.99\nspecs\nreviews\nOnly 2 left in stock\nfooter";
-        assertThat(orchestrator.filterLines(input)).contains("Only 2 left in stock");
-    }
-
-    @Test
-    void filterLines_keepsHebrewOutOfStockLine_farFromPrice() {
-        // Hebrew availability signals must survive too — exercises the UNICODE_CASE matching path.
-        String input = "מוצר\n$29.99\nמפרט\nביקורות\nחסר במלאי\nכותרת";
-        assertThat(orchestrator.filterLines(input)).contains("חסר במלאי");
+                ollamaService,
+                new PriceExtractionProperties(SNIPPET_MODEL, FULLTEXT_MODEL),
+                new LlmInputResolver(new ScrapeAuditProperties(Duration.ofDays(90), "0 15 3 * * *", 8000, false)));
     }
 
     // --- extractPrice waterfall routing ---
@@ -212,7 +133,8 @@ class PriceExtractionOrchestratorTest {
     void extractPrice_snippet_fastModelMalformedOutput_retriesWithAccurateModel() {
         String snippet = "malformed-json-trigger";
         when(ollamaService.extractPriceFromText(snippet, SNIPPET_MODEL))
-                .thenThrow(new MalformedLlmOutputException(SNIPPET_MODEL, new RuntimeException("JSON parse error")));
+                .thenThrow(
+                        new MalformedLlmOutputException(SNIPPET_MODEL, "v1", new RuntimeException("JSON parse error")));
         when(ollamaService.extractPriceFromText(snippet, FULLTEXT_MODEL)).thenReturn(STUB_LLM_RESULT);
         ScrapeResponse response = new ScrapeResponse(ExtractionSource.SNIPPET, null, snippet, null, null);
 
@@ -268,6 +190,25 @@ class PriceExtractionOrchestratorTest {
 
         assertThatThrownBy(() -> orchestrator.extractPrice(response)).isSameAs(heavyFailure);
         verify(ollamaService).extractPriceFromText(snippet, FULLTEXT_MODEL);
+    }
+
+    // The escalation path's failure-only context (issue #131): when the SNIPPET fast model emits
+    // malformed output and the escalated heavy model ALSO does, the propagated exception must attribute
+    // to the HEAVY model — so the recorder records the model that actually failed, not the nominal one.
+    @Test
+    void extractPrice_snippet_bothModelsMalformed_propagatesHeavyModelContext() {
+        String snippet = "ambiguous payload trigger";
+        when(ollamaService.extractPriceFromText(snippet, SNIPPET_MODEL))
+                .thenThrow(new MalformedLlmOutputException(SNIPPET_MODEL, "v1", new RuntimeException("snip bad")));
+        when(ollamaService.extractPriceFromText(snippet, FULLTEXT_MODEL))
+                .thenThrow(new MalformedLlmOutputException(FULLTEXT_MODEL, "v1", new RuntimeException("heavy bad")));
+        ScrapeResponse response = new ScrapeResponse(ExtractionSource.SNIPPET, null, snippet, null, null);
+
+        assertThatThrownBy(() -> orchestrator.extractPrice(response))
+                .isInstanceOfSatisfying(MalformedLlmOutputException.class, e -> {
+                    assertThat(e.getContext()).isNotNull();
+                    assertThat(e.getContext().modelName()).isEqualTo(FULLTEXT_MODEL);
+                });
     }
 
     @Test

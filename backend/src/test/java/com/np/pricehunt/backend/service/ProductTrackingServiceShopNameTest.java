@@ -19,6 +19,7 @@ import com.np.pricehunt.backend.domain.ShopNameSource;
 import com.np.pricehunt.backend.domain.TrackedItem;
 import com.np.pricehunt.backend.dto.ScrapeResponse;
 import com.np.pricehunt.backend.dto.TrackRequest;
+import com.np.pricehunt.backend.observability.ScrapeAttemptRecorder;
 import com.np.pricehunt.backend.repository.PriceRecordRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
@@ -73,6 +74,9 @@ class ProductTrackingServiceShopNameTest {
     @Mock
     private RefreshCooldownLimiter cooldownLimiter;
 
+    @Mock
+    private ScrapeAttemptRecorder scrapeAttemptRecorder;
+
     private ProductTrackingService service;
     private TrackedItem item;
 
@@ -89,7 +93,9 @@ class ProductTrackingServiceShopNameTest {
                 new PriceTrackingProperties(200, Duration.ofMinutes(1)),
                 shopNameResolver,
                 cooldownLimiter,
-                Clock.systemUTC());
+                Clock.systemUTC(),
+                scrapeAttemptRecorder,
+                new PriceValidator(new PriceTrackingProperties(200, Duration.ofMinutes(1))));
 
         Product product = Product.builder().id(1L).name("P").build();
         item = TrackedItem.builder().id(1L).url(URL).product(product).build();
