@@ -22,8 +22,9 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-# "sites" is the whole package dir (recursive), so new site handlers need no change here.
-only-include = ["main.py", "models.py", "sites"]
+# "sites" / "browser_scripts" are whole package dirs (recursive), so new handlers/scripts need no
+# change here. only-include is path-based (not extension-filtered), so browser_scripts/*.js ship too.
+only-include = ["main.py", "models.py", "sites", "browser_scripts"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
@@ -43,10 +44,3 @@ select = ["E", "F", "I", "B", "UP", "T20", "A"]
 # UP: pyupgrade (modernize syntax)
 # T20: flake8-print (catch stray print() — should be logger in a FastAPI service)
 # A: flake8-builtins (don't shadow list/id/type/etc.)
-
-[tool.ruff.lint.per-file-ignores]
-# main.py embeds JavaScript inside Python triple-quoted strings (sent to the
-# browser via page.evaluate). Wrapping long JS lines would either break JS
-# syntax or require ugly Python-side concatenation. `# noqa` markers can't
-# go inline (they'd become part of the JS payload). Pragmatic exemption.
-"main.py" = ["E501"]
