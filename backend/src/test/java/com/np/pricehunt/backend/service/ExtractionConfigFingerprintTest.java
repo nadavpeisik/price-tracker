@@ -29,6 +29,7 @@ class ExtractionConfigFingerprintTest {
         String base = fingerprint(0.0, "json", 4096).getExtractionConfigHash();
         assertThat(fingerprint(0.5, "json", 4096).getExtractionConfigHash()).isNotEqualTo(base); // temperature
         assertThat(fingerprint(0.0, "json", 8192).getExtractionConfigHash()).isNotEqualTo(base); // num-ctx
+        assertThat(fingerprint(0.0, "text", 4096).getExtractionConfigHash()).isNotEqualTo(base); // format
     }
 
     @Test

@@ -115,4 +115,14 @@ class PriceValidatorTest {
                         .code())
                 .isEqualTo(ScrapeFailureCode.DELTA_EXCEEDED);
     }
+
+    @Test
+    void currencyWithTrailingSpace_stillMatchesSoDeltaApplies() {
+        // "USD " is the same currency as "USD" — trimming both sides keeps the delta check active rather
+        // than skipping it as a (bogus) currency change, so 400 (4x) is still rejected.
+        assertThat(validator
+                        .validate(info("400.00", "USD "), previous("100.00", "USD"))
+                        .code())
+                .isEqualTo(ScrapeFailureCode.DELTA_EXCEEDED);
+    }
 }

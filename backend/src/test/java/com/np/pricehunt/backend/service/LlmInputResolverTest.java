@@ -61,7 +61,9 @@ class LlmInputResolverTest {
     void resolve_normalFulltext_isNotTruncated() {
         // A normal filtered FULLTEXT (well under the ceiling) is returned intact.
         String result = inputs.resolve(response(ExtractionSource.FULLTEXT, null, "specs\n$29.99\nIn stock\nreviews"));
-        assertThat(result).contains("$29.99").doesNotContain("x".repeat(10));
+        // Exact full output — proves the trailing availability/context lines aren't clipped, not just that
+        // the price survives.
+        assertThat(result).isEqualTo("specs\n$29.99\nIn stock\nreviews");
     }
 
     @Test
@@ -141,5 +143,12 @@ class LlmInputResolverTest {
         // Hebrew availability signals must survive too — exercises the UNICODE_CASE matching path.
         String input = "מוצר\n$29.99\nמפרט\nביקורות\nחסר במלאי\nכותרת";
         assertThat(LlmInputResolver.filterLines(input)).contains("חסר במלאי");
+    }
+
+    @Test
+    void filterLines_keepsSymbolOnlyShekelPriceLine() {
+        // A symbol-only ILS price (₪, no "ILS" text) is a first-class price signal in the prompt, so the
+        // reducer must recognize it and not drop the evidence on a Hebrew/Israeli FULLTEXT page.
+        assertThat(LlmInputResolver.filterLines("מוצר נהדר\n₪200\nתיאור")).contains("₪200");
     }
 }

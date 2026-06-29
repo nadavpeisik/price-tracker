@@ -21,6 +21,12 @@ public class OllamaPriceExtractionService {
     // termination even on a (pathological) cyclic chain. Real chains are only a few links deep.
     private static final int MAX_CAUSE_DEPTH = 50;
 
+    // Whether each call sends the generated JSON schema to Ollama as a native grammar constraint
+    // (format=json_schema), constraining the enum to its members at decode time. SINGLE source of truth:
+    // both the advisor below and ExtractionConfigFingerprint read this, so extraction_config_hash (#131)
+    // can never drift from what extractPriceFromText actually sends.
+    public static final boolean NATIVE_STRUCTURED_OUTPUT = true;
+
     // The extraction prompt, split into the system preamble and the per-call user template. Extracted
     // to constants (issue #131) so PROMPT_VERSION can be derived from them — moving the text does NOT
     // change it (text blocks strip to the same content). EDITING either string is a prompt change: run
@@ -120,13 +126,14 @@ public class OllamaPriceExtractionService {
         // (temperature, format=json, num-ctx) from spring.ai.ollama.chat.options.* in application.properties.
         PriceLlmResult result;
         try {
-            result = chatClient
-                    .prompt()
-                    // Send the generated JSON schema to Ollama as a native grammar constraint (format=json_schema)
-                    // rather than only the prompt's format=json — the enum is constrained to its 3 members at decode
-                    // time.
-                    .advisors(AdvisorParams.ENABLE_NATIVE_STRUCTURED_OUTPUT)
-                    .options(OllamaChatOptions.builder().model(model).build())
+            var spec = chatClient.prompt();
+            if (NATIVE_STRUCTURED_OUTPUT) {
+                // Send the generated JSON schema to Ollama as a native grammar constraint (format=json_schema)
+                // rather than only the prompt's format=json — the enum is constrained to its 3 members at decode
+                // time.
+                spec = spec.advisors(AdvisorParams.ENABLE_NATIVE_STRUCTURED_OUTPUT);
+            }
+            result = spec.options(OllamaChatOptions.builder().model(model).build())
                     .user(u -> u.text(USER_PROMPT_TEMPLATE).param("text", text))
                     .call()
                     .entity(outputConverter);

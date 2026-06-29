@@ -208,6 +208,7 @@ class PriceExtractionOrchestratorTest {
                 .isInstanceOfSatisfying(MalformedLlmOutputException.class, e -> {
                     assertThat(e.getContext()).isNotNull();
                     assertThat(e.getContext().modelName()).isEqualTo(FULLTEXT_MODEL);
+                    assertThat(e.getContext().promptVersion()).isEqualTo("v1");
                 });
     }
 

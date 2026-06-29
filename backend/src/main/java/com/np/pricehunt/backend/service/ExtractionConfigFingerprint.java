@@ -25,11 +25,6 @@ import org.springframework.stereotype.Component;
 @Component
 public class ExtractionConfigFingerprint {
 
-    // Reflects AdvisorParams.ENABLE_NATIVE_STRUCTURED_OUTPUT in OllamaPriceExtractionService. format=json
-    // and native structured output are distinct controls, so both are fingerprinted. Keep in sync if the
-    // service stops sending the native grammar constraint.
-    private static final boolean NATIVE_STRUCTURED_OUTPUT = true;
-
     private final String extractionConfigHash;
     private final String descriptor; // exposed for tests/debugging — the exact input that was hashed
 
@@ -39,8 +34,10 @@ public class ExtractionConfigFingerprint {
         String schema = new BeanOutputConverter<>(PriceLlmResult.class).getJsonSchema();
         // Length-frame the schema so text can't shift across the schema|options boundary; typed numerics
         // (Double/Integer) stringify deterministically, so 0 binds as "0.0" stably.
+        // native flag read from OllamaPriceExtractionService (single source of truth) — format=json and
+        // native structured output are distinct controls, so both are fingerprinted.
         this.descriptor = "schema:" + schema.length() + ":" + schema
-                + "|native:" + NATIVE_STRUCTURED_OUTPUT
+                + "|native:" + OllamaPriceExtractionService.NATIVE_STRUCTURED_OUTPUT
                 + "|temperature:" + options.temperature()
                 + "|numCtx:" + options.numCtx()
                 + "|format:" + options.format();

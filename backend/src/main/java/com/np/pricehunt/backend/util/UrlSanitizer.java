@@ -9,8 +9,9 @@ import java.util.Set;
  * Data-minimization for URLs persisted in the scrape-attempt audit (issue #131). The audit keeps
  * {@code url} for up to the retention window even after the tracked item is deleted; "public
  * product-page text" is an assumption, not enforced ({@code UrlValidator} accepts any HTTP(S) host),
- * and a URL can carry tracking params or identifiers. So on write we strip the fragment and known
- * tracking query params, keeping the product-identifying path + remaining query intact.
+ * and a URL can carry credentials, tracking params, or identifiers. So on write we strip the fragment,
+ * any authority userinfo (basic-auth credentials), and known tracking query params, keeping the
+ * product-identifying path + remaining query intact.
  *
  * <p>String-level (not URI re-encoding) so it never re-escapes a valid URL or throws on an odd one —
  * minimization is best-effort and must never break the best-effort audit insert.
@@ -23,19 +24,22 @@ public final class UrlSanitizer {
     private static final Set<String> TRACKING_PARAMS =
             Set.of("gclid", "fbclid", "msclkid", "mc_eid", "mc_cid", "igshid", "_ga", "yclid", "dclid", "gclsrc");
 
-    /** Returns {@code url} with its {@code #fragment} and known tracking query params removed. */
+    /**
+     * Returns {@code url} with its {@code #fragment}, authority userinfo (basic-auth credentials), and
+     * known tracking query params removed.
+     */
     public static String minimize(String url) {
         if (url == null || url.isBlank()) {
             return url;
         }
-        String withoutFragment = stripFragment(url.trim());
+        String sanitized = stripUserInfo(stripFragment(url.trim()));
 
-        int q = withoutFragment.indexOf('?');
+        int q = sanitized.indexOf('?');
         if (q < 0) {
-            return withoutFragment;
+            return sanitized;
         }
-        String base = withoutFragment.substring(0, q);
-        String query = withoutFragment.substring(q + 1);
+        String base = sanitized.substring(0, q);
+        String query = sanitized.substring(q + 1);
         if (query.isEmpty()) {
             return base;
         }
@@ -47,6 +51,23 @@ public final class UrlSanitizer {
     private static String stripFragment(String url) {
         int hash = url.indexOf('#');
         return hash >= 0 ? url.substring(0, hash) : url;
+    }
+
+    // Removes "user:pass@" from the authority so persisted URLs never retain basic-auth credentials.
+    // Scoped to the authority (scheme://[userinfo@]host…); an '@' later in the path/query is left intact.
+    private static String stripUserInfo(String url) {
+        int schemeSep = url.indexOf("://");
+        int authorityStart = schemeSep >= 0 ? schemeSep + 3 : 0;
+        int authorityEnd = url.length();
+        for (int i = authorityStart; i < url.length(); i++) {
+            char c = url.charAt(i);
+            if (c == '/' || c == '?' || c == '#') {
+                authorityEnd = i;
+                break;
+            }
+        }
+        int at = url.lastIndexOf('@', authorityEnd - 1);
+        return at >= authorityStart ? url.substring(0, authorityStart) + url.substring(at + 1) : url;
     }
 
     // Keeps the ORIGINAL pair for non-tracking params (we decode only to match, never to rewrite a kept value).

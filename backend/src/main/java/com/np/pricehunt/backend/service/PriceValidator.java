@@ -40,13 +40,18 @@ public class PriceValidator {
             log.warn("Validation failed: price is zero or negative ({})", info.price());
             return new Rejection(ScrapeFailureCode.PRICE_NON_POSITIVE, "price=" + info.price());
         }
-        if (info.currency() == null || info.currency().isBlank()) {
+        String currency = info.currency() == null ? null : info.currency().trim();
+        if (currency == null || currency.isBlank()) {
             log.warn("Validation failed: extracted currency is null or blank");
             return new Rejection(ScrapeFailureCode.NULL_CURRENCY, null);
         }
         if (previous == null) return null;
-        if (!info.currency().equalsIgnoreCase(previous.getCurrency())) {
-            log.warn("Currency changed from {} to {} — skipping delta check", previous.getCurrency(), info.currency());
+        // Trim both sides: a trailing-space variant ("USD ") is the SAME currency — it must not skip the
+        // delta check by failing equalsIgnoreCase against the stored "USD".
+        String previousCurrency =
+                previous.getCurrency() == null ? null : previous.getCurrency().trim();
+        if (!currency.equalsIgnoreCase(previousCurrency)) {
+            log.warn("Currency changed from {} to {} — skipping delta check", previousCurrency, currency);
             return null;
         }
 
@@ -62,7 +67,7 @@ public class PriceValidator {
             return new Rejection(
                     ScrapeFailureCode.DELTA_EXCEEDED,
                     "price=%s %s vs prior %s %s"
-                            .formatted(info.price(), info.currency(), previous.getPrice(), previous.getCurrency()));
+                            .formatted(info.price(), currency, previous.getPrice(), previousCurrency));
         }
         return null;
     }

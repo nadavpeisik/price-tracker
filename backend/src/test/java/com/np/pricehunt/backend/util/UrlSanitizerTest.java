@@ -60,4 +60,18 @@ class UrlSanitizerTest {
         assertThat(UrlSanitizer.minimize(null)).isNull();
         assertThat(UrlSanitizer.minimize("  ")).isEqualTo("  ");
     }
+
+    @Test
+    void stripsBasicAuthUserInfo() {
+        // Credentials embedded in the authority must never be persisted in the audit URL.
+        assertThat(UrlSanitizer.minimize("https://user:pass@shop.com/item?id=42"))
+                .isEqualTo("https://shop.com/item?id=42");
+    }
+
+    @Test
+    void keepsAtSignInPath() {
+        // An '@' in the path is not authority userinfo — it must survive.
+        assertThat(UrlSanitizer.minimize("https://shop.com/u/@handle?ref=1"))
+                .isEqualTo("https://shop.com/u/@handle?ref=1");
+    }
 }

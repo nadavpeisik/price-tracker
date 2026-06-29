@@ -277,7 +277,7 @@ public class ProductTrackingService {
                     info.availability() != null ? info.availability() : AvailabilityStatus.UNKNOWN;
             PriceRecord record = priceRecordRepository.save(PriceRecord.builder()
                     .price(info.price())
-                    .currency(info.currency().toUpperCase(Locale.ROOT))
+                    .currency(info.currency().trim().toUpperCase(Locale.ROOT))
                     .availability(availability)
                     .extractionSource(info.extractionSource())
                     .trackedItem(item)

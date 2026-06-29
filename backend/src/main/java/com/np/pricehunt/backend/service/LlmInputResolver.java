@@ -37,7 +37,7 @@ public class LlmInputResolver {
     // sees it, and the model defaults to UNKNOWN. Hebrew OOS phrases are appended without \b (Hebrew
     // letters aren't ASCII word chars, so \b wouldn't anchor them).
     private static final Pattern PRICE_LINE_PATTERN = Pattern.compile(
-            "[$£€¥₩]\\s*[\\d.,]+" + "|[\\d.,]+\\s*[$£€¥₩]"
+            "[$£€¥₩₪]\\s*[\\d.,]+" + "|[\\d.,]+\\s*[$£€¥₩₪]"
                     + "|\\b(USD|GBP|EUR|JPY|CAD|AUD|CHF|CNY|ILS|price|cost|sale|discount|"
                     + "stock|sold out|unavailable|availab\\w*|discontinued|selling fast|order soon|"
                     + "while supplies last|pre-?orders?|back-?order(ed)?|notify me|email me|coming soon|"
@@ -105,17 +105,17 @@ public class LlmInputResolver {
         int lastAddedIndex = -1;
 
         for (int i = 0; i < lines.length && matched.size() < MAX_FILTER_LINES && charCount < MAX_FILTER_CHARS; i++) {
-            if (PRICE_LINE_PATTERN.matcher(lines[i]).find()) {
-                int start = Math.max(0, i - 1);
-                int end = Math.min(lines.length - 1, i + 1);
-                for (int j = start; j <= end; j++) {
-                    if (j > lastAddedIndex) {
-                        matched.add(lines[j]);
-                        charCount += lines[j].length();
-                        lastAddedIndex = j;
-                    }
-                }
+            if (!PRICE_LINE_PATTERN.matcher(lines[i]).find()) {
+                continue;
             }
+            // Keep this line plus one neighbor each side, skipping any already taken (windows can overlap).
+            int from = Math.max(Math.max(0, i - 1), lastAddedIndex + 1);
+            int end = Math.min(lines.length - 1, i + 1);
+            for (int j = from; j <= end; j++) {
+                matched.add(lines[j]);
+                charCount += lines[j].length();
+            }
+            lastAddedIndex = Math.max(lastAddedIndex, end);
         }
 
         if (matched.isEmpty()) {

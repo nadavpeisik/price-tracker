@@ -42,18 +42,37 @@ class ScrapeAttemptPurgeSchedulerTest {
     }
 
     @Test
-    void purge_deletesInBatchesUntilEmpty_andReportsCount() {
+    void purge_partialPage_stopsAfterOneQuery_andReportsCount() {
         when(jobRunRecorder.start(ScrapeAttemptPurgeScheduler.JOB_NAME)).thenReturn(RUN_ID);
-        when(repository.findExpiredIds(any(), any()))
-                .thenReturn(List.of(1L, 2L, 3L))
-                .thenReturn(List.of());
+        // A page smaller than BATCH_SIZE means expired rows are exhausted — the loop must stop WITHOUT a
+        // follow-up (empty) query.
+        when(repository.findExpiredIds(any(), any())).thenReturn(List.of(1L, 2L, 3L));
 
         scheduler.purgeExpired();
 
         verify(repository).deleteAllByIdInBatch(List.of(1L, 2L, 3L));
-        verify(repository, times(2))
-                .findExpiredIds(any(), any()); // one full-ish page, then the empty page that stops the loop
+        verify(repository).findExpiredIds(any(), any()); // exactly once — no empty follow-up query
         verify(jobRunRecorder).complete(RUN_ID, JobStatus.SUCCESS, 1, 1, 0, "deleted=3");
+    }
+
+    @Test
+    void purge_fullPageThenPartial_loopsThenStops() {
+        when(jobRunRecorder.start(ScrapeAttemptPurgeScheduler.JOB_NAME)).thenReturn(RUN_ID);
+        // A full page (== BATCH_SIZE) does NOT short-circuit, so the loop queries again; the next (partial)
+        // page then stops it. Proves the loop iterates past one batch and sums the count.
+        List<Long> fullPage = java.util.stream.LongStream.rangeClosed(1, ScrapeAttemptPurgeScheduler.BATCH_SIZE)
+                .boxed()
+                .toList();
+        when(repository.findExpiredIds(any(), any())).thenReturn(fullPage).thenReturn(List.of(9999L));
+
+        scheduler.purgeExpired();
+
+        verify(repository).deleteAllByIdInBatch(fullPage);
+        verify(repository).deleteAllByIdInBatch(List.of(9999L));
+        verify(repository, times(2)).findExpiredIds(any(), any());
+        verify(jobRunRecorder)
+                .complete(
+                        RUN_ID, JobStatus.SUCCESS, 1, 1, 0, "deleted=" + (ScrapeAttemptPurgeScheduler.BATCH_SIZE + 1));
     }
 
     @Test

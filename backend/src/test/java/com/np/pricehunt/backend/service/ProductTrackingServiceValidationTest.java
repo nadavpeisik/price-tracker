@@ -326,6 +326,11 @@ class ProductTrackingServiceValidationTest {
         assertThatThrownBy(() -> service.trackUrl(1L, new TrackRequest("https://example.com/item")))
                 .isInstanceOf(ScrapeBlockedException.class)
                 .hasMessageContaining(reason);
+
+        // The best-effort wrapper must actually have been exercised — otherwise this test would pass even
+        // if recordExtractionFailure were never reached.
+        verify(scrapeAttemptRecorder)
+                .recordExtractionFailure(eq(1L), any(), eq(scrapeResponse), any(ScrapeBlockedException.class));
     }
 
     @Test

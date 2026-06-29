@@ -15,8 +15,10 @@ class HashingTest {
 
     @Test
     void sha256Hex_unicodeIsUtf8Encoded() {
-        // SHA-256 of the UTF-8 bytes of "₪200" — guards against a platform-default-charset regression.
-        assertThat(Hashing.sha256Hex("₪200")).hasSize(64).isLowerCase();
+        // Exact SHA-256 of the UTF-8 bytes of "₪200" — pins the encoding contract, so a platform-default
+        // charset regression (wrong bytes → wrong digest) is caught, not just shape/casing.
+        assertThat(Hashing.sha256Hex("₪200"))
+                .isEqualTo("d4e82b6427a1cb233285ffa519f8ee5749223852ad1b3536ce3a0349b39f1a01");
     }
 
     @Test

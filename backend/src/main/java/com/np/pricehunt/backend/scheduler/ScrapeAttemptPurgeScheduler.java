@@ -35,7 +35,8 @@ public class ScrapeAttemptPurgeScheduler {
 
     public static final String JOB_NAME = "SCRAPE_ATTEMPT_PURGE";
 
-    private static final int BATCH_SIZE = 1000; // modest IN-list per delete; bounds lock + statement size
+    // Package-private so the scheduler test can build a full page deterministically (early-break check).
+    static final int BATCH_SIZE = 1000; // modest IN-list per delete; bounds lock + statement size
     private static final int MAX_BATCHES_PER_RUN = 100; // ~100k rows/run; backlog drains over days
 
     private final ScrapeAttemptRepository repository;
@@ -68,6 +69,9 @@ public class ScrapeAttemptPurgeScheduler {
                     }
                     repository.deleteAllByIdInBatch(ids);
                     deleted += ids.size();
+                    if (ids.size() < BATCH_SIZE) {
+                        break; // partial page → expired rows exhausted; skip the empty follow-up query
+                    }
                 }
                 log.info("Scrape-attempt purge deleted {} expired rows", deleted);
             } catch (Exception e) {

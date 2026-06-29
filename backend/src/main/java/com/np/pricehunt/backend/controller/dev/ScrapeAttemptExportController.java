@@ -1,23 +1,19 @@
 package com.np.pricehunt.backend.controller.dev;
 
-import com.np.pricehunt.backend.domain.AvailabilityStatus;
-import com.np.pricehunt.backend.domain.ScrapeAttempt;
-import com.np.pricehunt.backend.repository.ScrapeAttemptRepository;
-import java.util.Locale;
+import com.np.pricehunt.backend.service.ScrapeAttemptExportService;
+import com.np.pricehunt.backend.service.ScrapeAttemptExportService.FixtureDraft;
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Profile;
-import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.server.ResponseStatusException;
 
 /**
  * Dev-only: promotes a stored scrape-attempt's exact LLM input into a <em>draft</em>
  * {@code availability-cases.json} fixture (issue #131), so a real production failure can become a
- * regression case.
+ * regression case. HTTP mapping only — the lookup/assembly lives in {@link ScrapeAttemptExportService}.
  *
  * <p><b>Double-gated</b> — {@code @Profile("dev")} AND {@code scrape.audit.export-enabled=true}
  * (disabled by default). There is no Spring Security in this app and the endpoint returns untrusted
@@ -34,23 +30,10 @@ import org.springframework.web.server.ResponseStatusException;
 @RequiredArgsConstructor
 public class ScrapeAttemptExportController {
 
-    private final ScrapeAttemptRepository repository;
-
-    /** A draft fixture entry in the {@code availability-cases.json} schema (human labels {@code expectedAvailability}). */
-    public record FixtureDraft(String name, String text, AvailabilityStatus expectedAvailability) {}
+    private final ScrapeAttemptExportService exportService;
 
     @GetMapping("/{id}/fixture")
     public FixtureDraft fixture(@PathVariable Long id) {
-        ScrapeAttempt attempt = repository
-                .findById(id)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Scrape attempt not found"));
-        if (attempt.getLlmInput() == null || attempt.getLlmInput().isBlank()) {
-            // BLOCKED/STRUCTURED/empty attempts have no LLM input — a null-text fixture is useless.
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Attempt has no LLM input to export (source=" + attempt.getExtractionSource() + ")");
-        }
-        String name = attempt.getFailureCode().name().toLowerCase(Locale.ROOT) + "_" + attempt.getId();
-        return new FixtureDraft(name, attempt.getLlmInput(), null);
+        return exportService.draftFor(id);
     }
 }
