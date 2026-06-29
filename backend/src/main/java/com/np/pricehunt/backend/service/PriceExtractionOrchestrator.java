@@ -10,9 +10,6 @@ import com.np.pricehunt.backend.exception.EmptyExtractionInputException;
 import com.np.pricehunt.backend.exception.MalformedLlmOutputException;
 import com.np.pricehunt.backend.exception.ScrapeBlockedException;
 import java.math.BigDecimal;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.regex.Pattern;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -22,32 +19,17 @@ import org.springframework.stereotype.Service;
 @RequiredArgsConstructor
 public class PriceExtractionOrchestrator implements PriceExtractionService {
 
-    private static final int MAX_FILTER_LINES = 50;
-    private static final int MAX_FILTER_CHARS = 2000;
-    private static final int FALLBACK_CHARS = 3000;
-    // Floor matches scraper's _snippet_has_useful_content (scraper/main.py:437).
-    // Backstop for the case where the scraper returns a payload but the text is
-    // empty/near-empty (undetected bot wall like Amazon's AWS WAF interstitial
-    // before detection caught it, or an upstream change). Prevents wasted LLM
-    // calls and bogus prices being persisted.
+    // Floor matches scraper's _snippet_has_useful_content (scraper/main.py). Backstop for the case
+    // where the scraper returns a payload but the text is empty/near-empty (undetected bot wall like
+    // Amazon's AWS WAF interstitial before detection caught it, or an upstream change). Prevents wasted
+    // LLM calls and bogus prices being persisted.
     private static final int MIN_LLM_INPUT_CHARS = 15;
-
-    // Matches currency symbols/codes, price keywords, and availability signals (US and EU number
-    // formats). The availability vocabulary must cover every signal the LLM prompt classifies on —
-    // otherwise filterLines() strips the evidence (e.g. "sold out", "pre-order") before the model
-    // sees it, and the model defaults to UNKNOWN. Hebrew OOS phrases are appended without \b (Hebrew
-    // letters aren't ASCII word chars, so \b wouldn't anchor them).
-    private static final Pattern PRICE_LINE_PATTERN = Pattern.compile(
-            "[$£€¥₩]\\s*[\\d.,]+" + "|[\\d.,]+\\s*[$£€¥₩]"
-                    + "|\\b(USD|GBP|EUR|JPY|CAD|AUD|CHF|CNY|ILS|price|cost|sale|discount|"
-                    + "stock|sold out|unavailable|availab\\w*|discontinued|selling fast|order soon|"
-                    + "while supplies last|pre-?orders?|back-?order(ed)?|notify me|email me|coming soon|"
-                    + "add to cart|buy now)\\b"
-                    + "|חסר במלאי|אזל מהמלאי|לא במלאי|הזמנה מראש",
-            Pattern.CASE_INSENSITIVE | Pattern.UNICODE_CASE);
 
     private final OllamaPriceExtractionService ollamaService;
     private final PriceExtractionProperties extractionProperties;
+    // Single source of truth for the LLM input (issue #131): the recorder re-derives the same text, so
+    // a persisted scrape_attempt's llm_input is byte-identical to what the model saw here.
+    private final LlmInputResolver llmInputResolver;
 
     @Override
     public PriceInfo extractPrice(ScrapeResponse response) {
@@ -55,7 +37,7 @@ public class PriceExtractionOrchestrator implements PriceExtractionService {
             case BLOCKED -> throw new ScrapeBlockedException(response.blockedReason());
             case STRUCTURED -> mapStructured(response.priceData());
             case SNIPPET -> {
-                String text = response.snippet() == null ? "" : response.snippet();
+                String text = llmInputResolver.resolve(response);
                 guardMinLength(text, "SNIPPET");
                 PriceLlmResult raw;
                 try {
@@ -80,7 +62,7 @@ public class PriceExtractionOrchestrator implements PriceExtractionService {
                         ExtractionSource.SNIPPET);
             }
             case FULLTEXT -> {
-                String text = filterLines(response.innerText());
+                String text = llmInputResolver.resolve(response);
                 guardMinLength(text, "FULLTEXT");
                 PriceLlmResult raw = ollamaService.extractPriceFromText(text, extractionProperties.fulltextModel());
                 yield new PriceInfo(
@@ -120,34 +102,5 @@ public class PriceExtractionOrchestrator implements PriceExtractionService {
     // one) becomes UNKNOWN — never null, which would violate PriceRecord.availability's NOT NULL.
     private static AvailabilityStatus availabilityOrUnknown(AvailabilityStatus availability) {
         return availability != null ? availability : AvailabilityStatus.UNKNOWN;
-    }
-
-    String filterLines(String innerText) {
-        if (innerText == null || innerText.isBlank()) return "";
-
-        String[] lines = innerText.split("\n");
-        List<String> matched = new ArrayList<>();
-        int charCount = 0;
-        int lastAddedIndex = -1;
-
-        for (int i = 0; i < lines.length && matched.size() < MAX_FILTER_LINES && charCount < MAX_FILTER_CHARS; i++) {
-            if (PRICE_LINE_PATTERN.matcher(lines[i]).find()) {
-                int start = Math.max(0, i - 1);
-                int end = Math.min(lines.length - 1, i + 1);
-                for (int j = start; j <= end; j++) {
-                    if (j > lastAddedIndex) {
-                        matched.add(lines[j]);
-                        charCount += lines[j].length();
-                        lastAddedIndex = j;
-                    }
-                }
-            }
-        }
-
-        if (matched.isEmpty()) {
-            return innerText.length() > FALLBACK_CHARS ? innerText.substring(0, FALLBACK_CHARS) : innerText;
-        }
-
-        return String.join("\n", matched);
     }
 }

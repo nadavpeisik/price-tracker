@@ -153,6 +153,11 @@ flip availability (issue #102). Needs `ollama serve` running. It is **manual, no
 so nothing runs it for you. When you add or change a prompt rule, add a covering case to
 the fixtures JSON in the same change.
 
+The prompt lives in the `SYSTEM_PROMPT` / `USER_PROMPT_TEMPLATE` constants, and
+`OllamaPriceExtractionService.PROMPT_VERSION` is **auto-derived** from a hash of those two
+strings (issue #131) — it changes iff the prompt changes, so there is no "remember to bump
+the version" step. The regression sanity check above is still required on any prompt edit.
+
 **Validation layer** (in `ProductTrackingService`, before saving `PriceRecord`):
 - Price must be > 0
 - If a prior price exists for the `TrackedItem` **and the currency matches**, new price must not differ by more than 200% (i.e. no more than 3x the previous price) — configurable via `price.tracking.max-delta-percent` in `application.properties`

@@ -3,6 +3,7 @@ package com.np.pricehunt.backend.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 import com.np.pricehunt.backend.client.ScraperClient;
@@ -11,10 +12,12 @@ import com.np.pricehunt.backend.domain.AvailabilityStatus;
 import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.domain.PriceRecord;
 import com.np.pricehunt.backend.domain.Product;
+import com.np.pricehunt.backend.domain.ScrapeFailureCode;
 import com.np.pricehunt.backend.domain.ShopNameSource;
 import com.np.pricehunt.backend.domain.TrackedItem;
 import com.np.pricehunt.backend.dto.*;
 import com.np.pricehunt.backend.exception.ScrapeBlockedException;
+import com.np.pricehunt.backend.observability.ScrapeAttemptRecorder;
 import com.np.pricehunt.backend.repository.PriceRecordRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
@@ -65,6 +68,9 @@ class ProductTrackingServiceValidationTest {
     @Mock
     private RefreshCooldownLimiter cooldownLimiter;
 
+    @Mock
+    private ScrapeAttemptRecorder scrapeAttemptRecorder;
+
     private ProductTrackingService service;
 
     private Product product;
@@ -84,7 +90,9 @@ class ProductTrackingServiceValidationTest {
                 new PriceTrackingProperties(200, Duration.ofMinutes(1)),
                 shopNameResolver,
                 cooldownLimiter,
-                Clock.systemUTC());
+                Clock.systemUTC(),
+                scrapeAttemptRecorder,
+                new PriceValidator(new PriceTrackingProperties(200, Duration.ofMinutes(1))));
 
         product = Product.builder().id(1L).name("Test Product").build();
         item = TrackedItem.builder()
@@ -131,8 +139,9 @@ class ProductTrackingServiceValidationTest {
 
         assertThat(response.currentPrice()).isEqualByComparingTo("100.00");
         verify(priceRecordRepository).save(any());
-        // trackUrl is first-time tracking, not a refresh — the cooldown limiter must not apply.
-        verifyNoInteractions(cooldownLimiter);
+        // trackUrl is first-time tracking, not a refresh — the cooldown limiter must not apply. A
+        // successful track must NOT record a scrape_attempt (failure-first; #131).
+        verifyNoInteractions(cooldownLimiter, scrapeAttemptRecorder);
     }
 
     @Test
@@ -166,6 +175,10 @@ class ProductTrackingServiceValidationTest {
         service.trackUrl(1L, new TrackRequest("https://example.com/item"));
 
         verify(priceRecordRepository, never()).save(any());
+        // A rejected price records a VALIDATION_REJECTED scrape_attempt with the precise code (#131).
+        verify(scrapeAttemptRecorder)
+                .recordValidationRejection(
+                        eq(1L), any(), eq(scrapeResponse), eq(ScrapeFailureCode.PRICE_NON_POSITIVE), any());
     }
 
     @Test
@@ -295,6 +308,29 @@ class ProductTrackingServiceValidationTest {
                 .hasMessageContaining(reason);
 
         verify(priceRecordRepository, never()).save(any());
+        // The failure is recorded once (EXTRACTION_FAILED) before the exception propagates (#131).
+        verify(scrapeAttemptRecorder)
+                .recordExtractionFailure(eq(1L), any(), eq(scrapeResponse), any(ScrapeBlockedException.class));
+    }
+
+    @Test
+    void trackUrl_recorderThrows_originalExceptionStillPropagates() {
+        // Audit is best-effort: a recorder failure must NEVER mask the real failure or turn a 502 into
+        // a 500. The original ScrapeBlockedException must surface, not the recorder's RuntimeException.
+        String reason = "cloudflare-managed:cf-ray=abc-TLV";
+        when(extractionService.extractPrice(scrapeResponse)).thenThrow(new ScrapeBlockedException(reason));
+        doThrow(new RuntimeException("recorder DB down"))
+                .when(scrapeAttemptRecorder)
+                .recordExtractionFailure(any(), any(), any(), any());
+
+        assertThatThrownBy(() -> service.trackUrl(1L, new TrackRequest("https://example.com/item")))
+                .isInstanceOf(ScrapeBlockedException.class)
+                .hasMessageContaining(reason);
+
+        // The best-effort wrapper must actually have been exercised — otherwise this test would pass even
+        // if recordExtractionFailure were never reached.
+        verify(scrapeAttemptRecorder)
+                .recordExtractionFailure(eq(1L), any(), eq(scrapeResponse), any(ScrapeBlockedException.class));
     }
 
     @Test
@@ -308,6 +344,8 @@ class ProductTrackingServiceValidationTest {
 
         verify(priceRecordRepository, never()).save(any());
         assertThat(response.currentPrice()).isEqualByComparingTo("99.00");
+        // A null scrape has no evidence to replay — deliberately NOT recorded (#131).
+        verifyNoInteractions(scrapeAttemptRecorder);
     }
 
     private PriceRecord priceRecord(String price, String currency) {

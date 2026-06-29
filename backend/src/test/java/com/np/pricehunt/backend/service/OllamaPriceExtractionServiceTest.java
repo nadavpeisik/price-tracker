@@ -103,8 +103,14 @@ class OllamaPriceExtractionServiceTest {
 
         OllamaPriceExtractionService service = new OllamaPriceExtractionService(ChatClient.builder(chatModel));
 
+        // The translated exception carries the failure-only context (issue #131): the actual model +
+        // the auto-derived prompt version, so the recorder attributes the failure precisely.
         assertThatThrownBy(() -> service.extractPriceFromText("$10 in stock", MODEL))
-                .isInstanceOf(MalformedLlmOutputException.class);
+                .isInstanceOfSatisfying(MalformedLlmOutputException.class, e -> {
+                    assertThat(e.getContext()).isNotNull();
+                    assertThat(e.getContext().modelName()).isEqualTo(MODEL);
+                    assertThat(e.getContext().promptVersion()).isEqualTo(OllamaPriceExtractionService.PROMPT_VERSION);
+                });
     }
 
     @Test

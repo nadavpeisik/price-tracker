@@ -14,6 +14,7 @@ import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.domain.ShopNameSource;
 import com.np.pricehunt.backend.domain.TrackedItem;
 import com.np.pricehunt.backend.dto.*;
+import com.np.pricehunt.backend.observability.ScrapeAttemptRecorder;
 import com.np.pricehunt.backend.repository.PriceRecordRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
@@ -65,6 +66,9 @@ class ProductTrackingServiceCrudTest {
     @Mock
     private RefreshCooldownLimiter cooldownLimiter;
 
+    @Mock
+    private ScrapeAttemptRecorder scrapeAttemptRecorder;
+
     private ProductTrackingService service;
 
     private Product product;
@@ -83,7 +87,9 @@ class ProductTrackingServiceCrudTest {
                 new PriceTrackingProperties(200, Duration.ofMinutes(1)),
                 shopNameResolver,
                 cooldownLimiter,
-                Clock.systemUTC());
+                Clock.systemUTC(),
+                scrapeAttemptRecorder,
+                new PriceValidator(new PriceTrackingProperties(200, Duration.ofMinutes(1))));
         // Run transactionTemplate callbacks inline so phase splits are exercised end-to-end.
         lenient().when(transactionTemplate.execute(any())).thenAnswer(inv -> {
             TransactionCallback<?> cb = inv.getArgument(0);
