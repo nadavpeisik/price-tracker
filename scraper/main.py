@@ -7,6 +7,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from playwright.async_api import Browser, async_playwright
 
+from browser_scripts import load_script
+
 # Re-exported for `from main import ...` consumers (tests). DTOs live in models.py so site
 # handlers (sites/ksp.py) can import them without a circular import back to main.
 from models import (
@@ -43,14 +45,7 @@ logging.basicConfig(
 # `<style>` is intentionally NOT pruned: stylesheets contain the display:none rules
 # that hide out-of-stock templates kept in the DOM. Removing them would make
 # is_visible() report every hidden template as visible.
-_DOM_PRUNE_SCRIPT = """() => {
-    const selectors = [
-        'nav', 'footer', 'script', 'noscript',
-        '[class*="cookie"]', '[class*="banner"]', '[class*="ad-"]',
-        '[id*="cookie"]', '[id*="popup"]'
-    ];
-    selectors.forEach(s => document.querySelectorAll(s).forEach(el => el.remove()));
-}"""
+_DOM_PRUNE_SCRIPT = load_script("dom_prune")
 
 # Chrome hider: injects a <style> that display:none's the _DOM_PRUNE_SCRIPT selectors MINUS
 # <script>/<noscript>, run before _wait_for_render. innerText (and checkVisibility) honor computed
@@ -60,184 +55,17 @@ _DOM_PRUNE_SCRIPT = """() => {
 # A *stylesheet rule* rather than removing nodes or setting inline styles, because:
 #   - non-destructive: nodes stay in the DOM, so removing-mid-hydration crashes (framework refs /
 #     querySelector null-derefs) can't happen;
-#   - reactive: the rule applies to *any* matching node, so SPA re-renders that tear down and recreate
-#     nav/banner/footer get hidden too — inline styles would be lost on the new nodes and let chrome
-#     back into innerText, re-settling the gate on chrome.
+#   - reactive: the rule applies to *any* matching node, so SPA re-renders that tear down and
+#     recreate nav/banner/footer get hidden too — inline styles would be lost on the new nodes
+#     and let chrome back into innerText, re-settling the gate on chrome.
 # <script> stays intact for Tier-1 JSON-LD; the full _DOM_PRUNE_SCRIPT removes the hidden nodes
 # post-Tier-1. document.head may not exist this early, so fall back to documentElement.
-_HIDE_CHROME_SCRIPT = """() => {
-    const styleId = 'scraper-hide-chrome';
-    if (document.getElementById(styleId)) return;
-    const selectors = [
-        'nav', 'footer',
-        '[class*="cookie"]', '[class*="banner"]', '[class*="ad-"]',
-        '[id*="cookie"]', '[id*="popup"]'
-    ];
-    const style = document.createElement('style');
-    style.id = styleId;
-    style.textContent = selectors.map(s => s + ' { display: none !important; }').join('\\n');
-    (document.head || document.documentElement).appendChild(style);
-}"""
+_HIDE_CHROME_SCRIPT = load_script("hide_chrome")
 
 # JavaScript run via page.evaluate() to extract structured price data. Tries
 # JSON-LD first (Schema.org as embedded script); if that yields nothing, falls
 # back to Schema.org Microdata (itemprop/itemtype attributes on the HTML itself).
-_STRUCTURED_DATA_SCRIPT = """() => {
-    // MSRP-style labels we want to discard when both list and sale prices are
-    // present. Match by suffix so 'https://schema.org/ListPrice' and bare
-    // 'ListPrice' both work.
-    const MSRP_SUFFIXES = ['ListPrice', 'MSRP', 'SRP', 'RegularPrice', 'StrikethroughPrice'];
-    const isMsrpType = (pt) => {
-        if (!pt) return false;
-        const s = String(pt);
-        return MSRP_SUFFIXES.some(suf => s === suf || s.endsWith('/' + suf));
-    };
-
-    // Schema.org types that represent the product's unit price. Anything else
-    // in priceSpecification[] (DeliveryChargeSpecification, PaymentChargeSpec,
-    // etc.) carries shipping/tax/fees, not the item price — must be filtered
-    // out before the min-price reduce, or we'd return shipping as the product.
-    // Untyped entries pass through (publishers commonly omit @type on the
-    // canonical UnitPriceSpecification).
-    const PRODUCT_PRICE_TYPES = ['UnitPriceSpecification', 'PriceSpecification', 'CompoundPriceSpecification'];
-    const isProductPriceType = (atType) => {
-        if (!atType) return true;
-        const s = String(atType);
-        return PRODUCT_PRICE_TYPES.some(t => s === t || s.endsWith('/' + t));
-    };
-
-    const parseNumeric = (raw) => {
-        if (raw === undefined || raw === null) return NaN;
-        const cleaned = String(raw).replace(/[^0-9.,]/g, '');
-        const lastDot = cleaned.lastIndexOf('.');
-        const lastComma = cleaned.lastIndexOf(',');
-        const sep = lastDot > lastComma ? '.' : (lastComma > lastDot ? ',' : null);
-        if (sep === null) {
-            return parseFloat(cleaned);
-        }
-        const sepIdx = cleaned.lastIndexOf(sep);
-        const tail = cleaned.substring(sepIdx + 1);
-        // Treat as thousands-grouping (strip all separators) when either:
-        //  - the separator appears more than once ("1.234.567" — every dot is grouping)
-        //  - it appears once with exactly 3 trailing digits ("1,234", "9,990" —
-        //    ambiguous in isolation, but in practice almost always a thousands
-        //    separator; a decimal with exactly 3 trailing digits is rare outside
-        //    of scientific notation, while comma-thousands is common, especially
-        //    on ILS/EUR sites that emit prices like "9,990" in JSON-LD).
-        if (cleaned.split(sep).length > 2 || tail.length === 3) {
-            return parseFloat(cleaned.replace(/[^0-9]/g, ''));
-        }
-        return parseFloat(
-            cleaned.substring(0, sepIdx).replace(/[^0-9]/g, '')
-            + '.'
-            + tail
-        );
-    };
-
-    // "can you get it" — orderable states (presale/preorder/backorder/onlineonly) count as available.
-    const AVAILABLE_TOKENS = ['instock', 'instoreonly', 'onlineonly', 'limitedavailability', 'presale', 'preorder', 'backorder'];
-    const UNAVAILABLE_TOKENS = ['outofstock', 'soldout', 'discontinued'];
-    // Normalize a schema.org availability value (full URI, bare token, or {@id}/{url} object) to a
-    // bare lowercase alphanumeric token: take the leaf segment (drops the schema.org/ prefix), strip
-    // any ?query/#fragment/trailing-slash, then non-alphanumerics ('In Stock'/'in-stock' -> 'instock').
-    const normalizeAvailability = (availability) => {
-        let raw = availability;
-        if (raw && typeof raw === 'object') raw = raw['@id'] || raw.url || '';
-        let s = String(raw || '').trim();
-        if (!s) return '';
-        s = s.split('?')[0].split('#')[0].replace(/\\/+$/, '');
-        const leaf = s.substring(s.lastIndexOf('/') + 1);
-        return leaf.toLowerCase().replace(/[^a-z0-9]/g, '');
-    };
-    const buildResult = (price, currency, availability) => {
-        if (isNaN(price) || price <= 0 || !currency) return null;
-        const token = normalizeAvailability(availability);
-        let status = 'unknown';
-        if (AVAILABLE_TOKENS.includes(token)) status = 'available';
-        else if (UNAVAILABLE_TOKENS.includes(token)) status = 'unavailable';
-        return {
-            price: price,
-            currency: currency,
-            availability: status
-        };
-    };
-
-    // Resolve the active price for a JSON-LD Offer. Sites with sales sometimes
-    // omit offer.price entirely and put both prices in priceSpecification[] as
-    // UnitPriceSpecification entries (one labelled ListPrice for MSRP, one
-    // unlabelled for the sale). Filter MSRP-tagged entries out, then pick the
-    // lowest of the survivors. Fall back to overall-lowest if every entry is
-    // tagged ListPrice (broken publisher) so we still return *a* price.
-    const resolveOfferPrice = (offer) => {
-        let rawPrice = offer.price ?? offer.lowPrice;
-        let currency = offer.priceCurrency;
-        if (rawPrice !== undefined && rawPrice !== null) {
-            return { rawPrice, currency };
-        }
-        const raw = offer.priceSpecification;
-        const specs = Array.isArray(raw) ? raw : (raw ? [raw] : []);
-        const valid = specs
-            .map(s => ({ spec: s, num: parseNumeric(s && s.price) }))
-            .filter(x => !isNaN(x.num) && x.num > 0 && isProductPriceType(x.spec && x.spec['@type']));
-        if (valid.length === 0) return { rawPrice: undefined, currency };
-        const survivors = valid.filter(x => !isMsrpType(x.spec.priceType));
-        const pool = survivors.length > 0 ? survivors : valid;
-        const chosen = pool.reduce((min, x) => x.num < min.num ? x : min);
-        return {
-            rawPrice: chosen.spec.price,
-            currency: currency || chosen.spec.priceCurrency,
-        };
-    };
-
-    // Tier 1a: JSON-LD
-    const scripts = Array.from(document.querySelectorAll('script[type="application/ld+json"]'));
-    for (const script of scripts) {
-        try {
-            const data = JSON.parse(script.textContent);
-            const nodes = Array.isArray(data) ? data : [data];
-            for (const node of nodes) {
-                const items = node['@graph'] ? node['@graph'] : [node];
-                for (const item of items) {
-                    const type = item['@type'];
-                    let offer = null;
-                    if (type === 'Product' || type === 'IndividualProduct') {
-                        offer = item.offers || item.offer;
-                        if (Array.isArray(offer)) offer = offer[0];
-                    } else if (type === 'Offer' || type === 'AggregateOffer') {
-                        offer = item;
-                    }
-                    if (!offer) continue;
-                    const { rawPrice, currency } = resolveOfferPrice(offer);
-                    const result = buildResult(parseNumeric(rawPrice), currency, offer.availability);
-                    if (result) return result;
-                }
-            }
-        } catch (e) {}
-    }
-
-    // Tier 1b: Schema.org Microdata fallback. Suffix match on itemtype covers
-    // 'https://schema.org/Offer' and the legacy http variant.
-    const readProp = (root, name) => {
-        const el = root.querySelector('[itemprop="' + name + '"]');
-        if (!el) return null;
-        const v = el.getAttribute('content')
-            || el.getAttribute('href')
-            || (el.innerText || '').trim();
-        return v || null;
-    };
-    const offerEls = document.querySelectorAll(
-        '[itemtype$="/Offer"], [itemtype$="/AggregateOffer"]'
-    );
-    for (const offerEl of offerEls) {
-        const rawPrice = readProp(offerEl, 'price') ?? readProp(offerEl, 'lowPrice');
-        const currency = readProp(offerEl, 'priceCurrency');
-        const availability = readProp(offerEl, 'availability') || '';
-        const result = buildResult(parseNumeric(rawPrice), currency, availability);
-        if (result) return result;
-    }
-
-    return null;
-}"""
+_STRUCTURED_DATA_SCRIPT = load_script("structured_data")
 
 # JavaScript run via page.evaluate() to detect the STORE/site name (issue #33), tiered by
 # confidence. og:site_name and Schema.org Organization/WebSite/Store are site-level signals
@@ -247,152 +75,14 @@ _STRUCTURED_DATA_SCRIPT = """() => {
 # mapping — capturing it belongs in a separate per-listing field (follow-up issue). JSON-LD
 # `brand` is never read either — it's the manufacturer ("Sony"), not the shop. Returns
 # {name, strong} or null.
-_SITE_NAME_SCRIPT = """() => {
-    // Strip Unicode bidi/directional control chars (RTL pages wrap titles in them) so a leading
-    // mark can't glue to a segment and defeat the og:title de-dup below; then trim.
-    const clean = (s) => {
-        if (typeof s !== 'string') return '';
-        let out = '';
-        for (const ch of s) {
-            const c = ch.codePointAt(0);
-            if ((c >= 0x200e && c <= 0x200f) || (c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069)) continue;
-            out += ch;
-        }
-        return out.trim();
-    };
-
-    // Tier A: OpenGraph site name — strong.
-    const og = document.querySelector('meta[property="og:site_name"]');
-    const ogName = og ? clean(og.getAttribute('content')) : '';
-    if (ogName) return { name: ogName, strong: true };
-
-    // Collect JSON-LD nodes at the top level only (each block's top-level entries + one level of
-    // @graph) — deliberately NOT recursing into nested objects, so a nested offers.seller
-    // Organization can't be mistaken for the storefront. Each block parsed in its own try/catch.
-    const nodes = [];
-    const addTop = (data) => {
-        const arr = Array.isArray(data) ? data : [data];
-        for (const n of arr) {
-            if (!n || typeof n !== 'object') continue;
-            nodes.push(n);
-            if (Array.isArray(n['@graph'])) {
-                for (const g of n['@graph']) if (g && typeof g === 'object') nodes.push(g);
-            }
-        }
-    };
-    for (const s of document.querySelectorAll('script[type="application/ld+json"]')) {
-        try { addTop(JSON.parse(s.textContent)); } catch (e) {}
-    }
-    const typesOf = (n) => {
-        const t = n && n['@type'];
-        if (!t) return [];
-        return (Array.isArray(t) ? t : [t]).map(x => String(x).toLowerCase());
-    };
-    const ORG_TYPES = ['organization', 'website', 'store', 'onlinestore', 'corporation', 'localbusiness'];
-    const stripWww = (h) => (h.startsWith('www.') ? h.slice(4) : h);
-    const pageHost = stripWww((location.hostname || '').toLowerCase());
-    const hostOf = (v) => {
-        if (typeof v !== 'string') return '';
-        const t = v.trim();
-        const s = t.startsWith('//') ? 'https:' + t : t; // resolve protocol-relative urls
-        if (!(s.startsWith('http://') || s.startsWith('https://'))) return ''; // ignore relative / #frag @id
-        try { return stripWww(new URL(s).hostname.toLowerCase()); } catch (e) { return ''; }
-    };
-    const sameSite = (h) => h === pageHost || h.endsWith('.' + pageHost) || pageHost.endsWith('.' + h);
-
-    // Tier B: Schema.org Organization/WebSite/Store name. An org whose url/@id host MATCHES the page
-    // is the site publisher → strong (safe to learn into the shared domain mapping). An org on a
-    // DIFFERENT host is a brand/manufacturer (e.g. url=sony.com on a shop page) → skipped, so it can
-    // never poison the domain mapping. An org with no resolvable host is shown but NOT learned (weak).
-    let weakOrgName = null;
-    for (const n of nodes) {
-        if (!(typesOf(n).some(t => ORG_TYPES.includes(t)) && clean(n.name))) continue;
-        const orgHost = hostOf(n.url) || hostOf(n['@id']);
-        if (orgHost && sameSite(orgHost)) {
-            return { name: clean(n.name), strong: true };
-        }
-        if (!orgHost && weakOrgName === null) {
-            weakOrgName = clean(n.name);
-        }
-    }
-    if (weakOrgName !== null) {
-        return { name: weakOrgName, strong: false };
-    }
-
-    // Tier C: <title> heuristic — weak. A title with no separator is just the product name (no
-    // shop segment), so it is rejected outright (return null) rather than used verbatim — the
-    // product name must never be mistaken for the shop name. Only a title with a real separator is
-    // mined for a shop segment: split on pipe / en- / em-dash / spaced ascii hyphen (so "SLO-30" /
-    // "Wi-Fi" don't split), else fall back to colon. Drop the product segment (anything contained
-    // in og:title) and the bare-host segment; accept only if exactly one segment survives.
-    const title = clean(document.title);
-    if (title) {
-        let parts = title.split(/\\s+[|\\u2013\\u2014-]\\s+/).map(clean).filter(Boolean);
-        if (parts.length < 2) parts = title.split(/\\s*:\\s*/).map(clean).filter(Boolean);
-        if (parts.length >= 2) {
-            const ot = document.querySelector('meta[property="og:title"]');
-            const ogTitle = (ot ? clean(ot.getAttribute('content')) : '').toLowerCase();
-            const host = (location.hostname || '').replace(/^www\\./, '').toLowerCase();
-            const survivors = parts.filter(p => {
-                const pl = p.toLowerCase();
-                if (ogTitle && ogTitle.includes(pl)) return false;
-                if (host && pl === host) return false;
-                return true;
-            });
-            if (survivors.length === 1) return { name: survivors[0], strong: false };
-        }
-    }
-
-    return null;
-}"""
+_SITE_NAME_SCRIPT = load_script("site_name")
 
 # JavaScript run via page.evaluate() to remove decoy prices (strikethrough MSRP
 # and paired .regular-price) from the rendered DOM. Runs before Tier 1 so
 # microdata's innerText-based reads see clean values; runs before Tier 2 so the
 # snippet doesn't flatten both prices into one string. Safe to run before
 # _DOM_PRUNE_SCRIPT because it does not touch <script> tags — JSON-LD survives.
-_STRIP_DECOY_PRICES_SCRIPT = """() => {
-    // Digit-gated: <del>/<s>/<strike> wrapping non-numeric text (e.g.
-    // <s>Sold Out</s>) is a UX signal Tier 2/3 needs for availability.
-    // Only strip when the node contains numerals — that's the price-MSRP case.
-    // Class selector uses [class~=] (exact whitespace-separated token) instead
-    // of [class*=] so we don't accidentally strip a `.not-strikethrough` opt-out
-    // class. <del>/<s>/<strike> tags catch all the semantic cases anyway.
-    document.querySelectorAll('del, s, strike, [class~="strikethrough"], [class~="strikethrough-price"]')
-        .forEach(n => { if (/[0-9]/.test(n.textContent || '')) n.remove(); });
-
-    // Conditional: .regular-price means "MSRP" only when paired with a
-    // .sale-price sibling. Walk up from each sale-price until we find an
-    // ancestor that actually contains a regular-price. Depth cap +
-    // class-based firewall guard against cross-card poisoning on PDPs with
-    // related-product carousels.
-    const MAX_ASCENT = 4;
-    const MACRO_WORDS = ['grid', 'row', 'carousel', 'list', 'table'];
-    // Legacy table-based product grids: <tr>/<table> often carry no class, so
-    // a className-only firewall would miss them. Treat their tags as a hard
-    // boundary regardless of class.
-    const MACRO_TAGS = new Set(['TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR']);
-    const isMacroLayout = (el) => {
-        if (MACRO_TAGS.has(el.tagName)) return true;
-        const cls = (typeof el.className === 'string') ? el.className.toLowerCase() : '';
-        return MACRO_WORDS.some(w => cls.includes(w));
-    };
-    document.querySelectorAll('[class*="sale-price"]').forEach(saleEl => {
-        let container = saleEl.parentElement;
-        let depth = 0;
-        while (container && depth < MAX_ASCENT) {
-            const regulars = container.querySelectorAll('[class*="regular-price"]');
-            if (regulars.length > 0) {
-                regulars.forEach(n => n.remove());
-                break;
-            }
-            const next = container.parentElement;
-            if (!next || isMacroLayout(next)) break;
-            container = next;
-            depth++;
-        }
-    });
-}"""
+_STRIP_DECOY_PRICES_SCRIPT = load_script("strip_decoy_prices")
 
 
 # Fast-path signal for _wait_for_render(): a price already exists in the DOM, so an
@@ -402,26 +92,12 @@ _STRIP_DECOY_PRICES_SCRIPT = """() => {
 # ready at first paint. (The Tier 3 / body-text clause that used to live here was removed:
 # a fixed length threshold trips on page chrome before the product renders — see
 # _wait_for_render, which waits for the text to *settle* instead.)
-_HAS_PRICE_SIGNAL_SCRIPT = """() => {
-    // Tier 1 signal: a JSON-LD block that actually carries price/offer data.
-    for (const s of document.querySelectorAll('script[type="application/ld+json"]'))
-        if (/"(price|offers|Offer)"/.test(s.textContent || '')) return true;
-    // Structured microdata/meta: a valid signal even when not visually rendered.
-    if (document.querySelector('[itemprop="price"], meta[property="product:price:amount"]'))
-        return true;
-    // Tier 2 heuristic: a [class*="price"] element, but only if it's visible AND holds a
-    // digit. Visibility skips hidden skeletons; the digit check skips *visible* empty
-    // skeletons/placeholders (e.g. <div class="price-skeleton">) that render before the
-    // price data is fetched — both would otherwise trip the gate before the price exists.
-    for (const el of document.querySelectorAll('[class*="price"]'))
-        if (el.checkVisibility && el.checkVisibility() && /[0-9]/.test(el.textContent || '')) return true;
-    return false;
-}"""
+_HAS_PRICE_SIGNAL_SCRIPT = load_script("has_price_signal")
 
 # Length of the page's *visible* text, whitespace-collapsed. innerText (not textContent)
 # so hidden display:none templates — which the scraper deliberately keeps in the DOM —
 # don't inflate the count and trip the stability check before the real content renders.
-_VISIBLE_TEXT_LEN_SCRIPT = """() => (document.body ? (document.body.innerText || '') : '').replace(/\\s+/g, ' ').trim().length"""
+_VISIBLE_TEXT_LEN_SCRIPT = load_script("visible_text_len")
 
 # Render-wait tuning. The scraper reads the DOM at domcontentloaded, but SPAs inject product
 # data afterward. Absent a price signal, we poll the visible-text length until it stops
@@ -720,13 +396,14 @@ async def scrape(request: ScrapeRequest):
     try:
         page = await context.new_page()
 
-        # KSP: attach the price-SSE capture BEFORE goto — the stream fires during page load and
-        # can't be replayed (Cloudflare 403s out-of-band requests). Attached UNCONDITIONALLY: it's a
-        # passive, host-filtered listener (see attach_sse_capture — one substring check per response,
-        # body-read only for a real KSP SSE response), so the cost on non-KSP pages is ~nil. Doing it
-        # unconditionally means a non-KSP URL that REDIRECTS into KSP (a shortener/affiliate/share
-        # link) still has its page-load SSE captured; the handler only runs when the FINAL page.url is
-        # a KSP host (dispatch below), and the listener self-filters to KSP-host responses.
+        # KSP: attach the price-SSE capture BEFORE goto — the stream fires during page
+        # load and can't be replayed (Cloudflare 403s out-of-band requests). Attached
+        # UNCONDITIONALLY: it's a passive, host-filtered listener (see attach_sse_capture
+        # — one substring check per response, body-read only for a real KSP SSE response),
+        # so the cost on non-KSP pages is ~nil. Doing it unconditionally means a non-KSP
+        # URL that REDIRECTS into KSP (a shortener/affiliate/share link) still has its
+        # page-load SSE captured; the handler only runs when the FINAL page.url is a KSP
+        # host (dispatch below), and the listener self-filters to KSP-host responses.
         ksp_cap = ksp.attach_sse_capture(page)
 
         response = await page.goto(request.url, wait_until="domcontentloaded", timeout=30000)
@@ -766,11 +443,12 @@ async def scrape(request: ScrapeRequest):
                         blockedReason=reason,
                     )
 
-        # KSP handler-first (lean): KSP is a network/API extractor — it needs neither chrome-hide
-        # nor the generic render gate, so we try it right after bot-wall detection. Dispatch on the
-        # FINAL page.url host (post-redirect), so a non-KSP URL that landed on KSP is handled and a
-        # non-KSP page never runs the handler (no misleading "no price" warning). On success we return
-        # STRUCTURED before any generic work; a clean None (no price on a KSP item page) or an
+        # KSP handler-first (lean): KSP is a network/API extractor — it needs neither
+        # chrome-hide nor the generic render gate, so we try it right after bot-wall
+        # detection. Dispatch on the FINAL page.url host (post-redirect), so a non-KSP URL
+        # that landed on KSP is handled and a non-KSP page never runs the handler (no
+        # misleading "no price" warning). On success we return STRUCTURED before any
+        # generic work; a clean None (no price on a KSP item page) or an
         # exception falls through to the generic waterfall — logged, so silent KSP degradation is
         # observable.
         if ksp.matches(page.url):
@@ -791,11 +469,11 @@ async def scrape(request: ScrapeRequest):
                     exc_info=True,
                 )
 
-        # Hide chrome (nav/footer/cookie/banner/ads) BEFORE the render-wait so the stabilization
-        # signal tracks product content, not chrome that renders early and would false-settle the
-        # gate. Injects a display:none stylesheet (not node removal / inline styles): non-destructive
-        # so SPA hydration can't crash, and reactive so re-rendered chrome stays hidden. <script>
-        # stays intact for Tier-1 JSON-LD below.
+        # Hide chrome (nav/footer/cookie/banner/ads) BEFORE the render-wait so the
+        # stabilization signal tracks product content, not chrome that renders early and
+        # would false-settle the gate. Injects a display:none stylesheet (not node removal
+        # / inline styles): non-destructive so SPA hydration can't crash, and reactive so
+        # re-rendered chrome stays hidden. <script> stays intact for Tier-1 JSON-LD below.
         try:
             await page.evaluate(_HIDE_CHROME_SCRIPT)
         except Exception:

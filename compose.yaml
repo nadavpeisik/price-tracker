@@ -16,7 +16,10 @@ services:
       - '8001:8001'
     volumes:
       - ./scraper:/app
-    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001", "--reload"]
+    # --reload-include '*.js' so edits to browser_scripts/*.js restart the worker (uvicorn watches
+    # only *.py by default); the restart clears load_script's in-process @lru_cache so the new JS
+    # is picked up. The bind mount above means dev runs the host files, not the baked image.
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001", "--reload", "--reload-include", "*.js"]
   grafana:
     image: 'grafana/grafana:11.4.0'
     environment:

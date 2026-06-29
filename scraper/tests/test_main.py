@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from playwright.async_api import async_playwright
 
 import main
+from browser_scripts import load_script
 from main import (
     _HAS_PRICE_SIGNAL_SCRIPT,
     _HIDE_CHROME_SCRIPT,
@@ -1093,3 +1094,102 @@ async def test_extract_site_name_wrapper(page):
 async def test_extract_site_name_wrapper_none(page):
     await page.set_content("<html><head></head><body><p>x</p></body></html>")
     assert await _extract_site_name(page) is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Browser-script assets + loader (issue #135). The 7 page.evaluate() scripts now live in
+# browser_scripts/*.js, loaded by load_script() and bound to main's _*_SCRIPT constants at import.
+# These cover the loader itself and prove every asset evaluates AND executes in real Chromium —
+# a no-throw-only check is too weak, because an unexecuted function would serialize to None.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_VALUE_SCRIPTS = ["structured_data", "site_name", "has_price_signal", "visible_text_len"]
+_VOID_SCRIPTS = ["dom_prune", "hide_chrome", "strip_decoy_prices"]
+
+
+def test_load_script_returns_arrow_with_sourceurl():
+    src = load_script("structured_data")
+    assert "() =>" in src
+    assert src.rstrip().endswith("//# sourceURL=scraper/browser_scripts/structured_data.js")
+
+
+def test_load_script_is_cached():
+    # @lru_cache returns the same object each call — also what preserves the identity check
+    # _FakeRenderPage relies on (`script is _HAS_PRICE_SIGNAL_SCRIPT`).
+    assert load_script("has_price_signal") is load_script("has_price_signal")
+
+
+def test_main_constants_are_the_loaded_assets():
+    # Single source of truth: main's constant IS the loader's output, so there's no drift between
+    # the value used at the page.evaluate() call sites and the asset on disk.
+    assert main._STRUCTURED_DATA_SCRIPT is load_script("structured_data")
+    assert main._HAS_PRICE_SIGNAL_SCRIPT is load_script("has_price_signal")
+
+
+def test_load_script_unknown_name_raises():
+    # Fail-fast: a typo'd/missing asset raises at load time, not mid-scrape.
+    with pytest.raises(FileNotFoundError):
+        load_script("does_not_exist")
+
+
+# Value-returning scripts: on a benign no-signal page each returns its documented "nothing found"
+# value, which proves the function actually RAN (not merely parsed/defined).
+@pytest.mark.parametrize(
+    "name, expected",
+    [
+        ("structured_data", None),  # no price → null
+        ("site_name", None),  # no signal → null
+        ("has_price_signal", False),  # no price element → false
+        ("visible_text_len", 1),  # len("x") after whitespace-collapse
+    ],
+)
+async def test_value_script_executes(page, name, expected):
+    await page.set_content("<html><body><p>x</p></body></html>")
+    assert await page.evaluate(load_script(name)) == expected
+
+
+# Void DOM-mutators: assert they evaluate and execute without throwing on a benign page (their real
+# behavior is covered by the dom-prune / hide-chrome / strip tests). Together with the value-script
+# test above, all 7 assets carry a direct loader-eval check.
+@pytest.mark.parametrize("name", _VOID_SCRIPTS)
+async def test_void_script_evaluates(page, name):
+    await page.set_content("<html><body><nav>n</nav><p>x</p></body></html>")
+    assert await page.evaluate(load_script(name)) is None
+
+
+# _DOM_PRUNE_SCRIPT behavior (had no direct assertion before #135): strips
+# nav/footer/script/cookie/popup chrome, but KEEPS <style> (its display:none rules drive
+# is_visible) and the product content.
+async def test_dom_prune_removes_chrome_keeps_style_and_content(page):
+    await page.set_content(
+        "<html><head>"
+        "<style>.x{display:none}</style>"
+        '<script type="application/ld+json">{"@type":"Product"}</script>'
+        "</head><body>"
+        "<nav>menu</nav><footer>foot</footer>"
+        '<div class="cookie-banner">cookies</div><div id="popup-1">promo</div>'
+        "<main>product text</main>"
+        "</body></html>"
+    )
+    await page.evaluate(load_script("dom_prune"))
+    state = await page.evaluate(
+        """() => {
+            const el = document.querySelector('main');
+            return {
+                nav: document.querySelectorAll('nav').length,
+                footer: document.querySelectorAll('footer').length,
+                script: document.querySelectorAll('script').length,
+                cookie: document.querySelectorAll('[class*="cookie"]').length,
+                popup: document.querySelectorAll('[id*="popup"]').length,
+                style: document.querySelectorAll('style').length,
+                mainText: el ? el.textContent : null,
+            };
+        }"""
+    )
+    assert state["nav"] == 0
+    assert state["footer"] == 0
+    assert state["script"] == 0  # dom_prune DOES strip <script> (it runs post-Tier-1)
+    assert state["cookie"] == 0
+    assert state["popup"] == 0
+    assert state["style"] == 1  # <style> intentionally kept
+    assert state["mainText"] == "product text"
