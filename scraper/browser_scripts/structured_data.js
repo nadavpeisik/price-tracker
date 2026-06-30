@@ -120,6 +120,28 @@
     const PRODUCT_TYPES = ['product', 'individualproduct'];
     const OFFER_TYPES = ['offer', 'aggregateoffer'];
 
+    // Resolve a price from one JSON-LD node/item: gather its offers (a Product's offers[], or the
+    // node itself when it is an Offer / dual-typed with an inline price) and return the first that
+    // yields a valid price, else null. Extracted so the Tier 1a scan loop below stays shallow.
+    const offerFromItem = (item) => {
+        const types = typeTokens(item['@type']);
+        const isProduct = types.some(t => PRODUCT_TYPES.includes(t));
+        const isOffer = types.some(t => OFFER_TYPES.includes(t));
+        let offers = [];
+        if (isProduct) {
+            const raw = item.offers || item.offer;
+            offers = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+        }
+        if (offers.length === 0 && isOffer) offers = [item]; // dual ["Product","Offer"] w/ inline price
+        for (const offer of offers) {
+            if (!offer || typeof offer !== 'object' || Array.isArray(offer)) continue;
+            const { rawPrice, currency } = resolveOfferPrice(offer);
+            const result = buildResult(parseNumeric(rawPrice), currency, offer.availability);
+            if (result) return result;
+        }
+        return null;
+    };
+
     // Tier 1a: JSON-LD
     const scripts = Array.from(document.querySelectorAll('script[type="application/ld+json"]'));
     for (const script of scripts) {
@@ -132,24 +154,10 @@
                 // top-level Product that also carries an auxiliary @graph isn't dropped.
                 const graph = node['@graph'];
                 const graphNodes = Array.isArray(graph) ? graph : (graph && typeof graph === 'object' ? [graph] : []);
-                const items = [node, ...graphNodes];
-                for (const item of items) {
+                for (const item of [node, ...graphNodes]) {
                     if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
-                    const types = typeTokens(item['@type']);
-                    const isProduct = types.some(t => PRODUCT_TYPES.includes(t));
-                    const isOffer = types.some(t => OFFER_TYPES.includes(t));
-                    let offers = [];
-                    if (isProduct) {
-                        const raw = item.offers || item.offer;
-                        offers = Array.isArray(raw) ? raw : (raw ? [raw] : []);
-                    }
-                    if (offers.length === 0 && isOffer) offers = [item]; // dual ["Product","Offer"] w/ inline price
-                    for (const offer of offers) {
-                        if (!offer || typeof offer !== 'object' || Array.isArray(offer)) continue;
-                        const { rawPrice, currency } = resolveOfferPrice(offer);
-                        const result = buildResult(parseNumeric(rawPrice), currency, offer.availability);
-                        if (result) return result;
-                    }
+                    const result = offerFromItem(item);
+                    if (result) return result;
                 }
             }
         } catch (e) {}
