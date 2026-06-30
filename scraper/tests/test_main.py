@@ -1202,3 +1202,195 @@ async def test_dom_prune_removes_chrome_keeps_style_and_content(page):
     assert state["popup"] == 0
     assert state["style"] == 1  # <style> intentionally kept
     assert state["mainText"] == "product text"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Issue #142 — hardened JSON-LD @type matching (full-IRI / array spellings), all-offers
+# iteration, and malformed-entry resilience, plus the bidi-strip refactor. The @type-normalizing
+# helper (leafType/typeTokens) is duplicated in site_name.js and structured_data.js (separate
+# page.evaluate contexts can't share); these fixtures exercise both copies, so a behavioural
+# regression in either is caught here.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+# Item 1 — site_name.js: an Organization @type written as a full schema.org IRI is matched
+# (on main the lowercased IRI never equals "organization" → shop name missed).
+async def test_sitename_jsonld_organization_iri_type_is_strong(page):
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@context":"https://schema.org","@type":"https://schema.org/Organization","name":"Wild Guitars","url":"https://wildguitars.co.il"}
+    </script></head><body><p>x</p></body></html>
+    """
+    await _load_on_host(page, html, "https://www.wildguitars.co.il/product/x")
+    assert await page.evaluate(_SITE_NAME_SCRIPT) == {"name": "Wild Guitars", "strong": True}
+
+
+# Item 1 — site_name.js: a @graph written as a single object (not an array) is read.
+async def test_sitename_jsonld_single_object_graph_org(page):
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@graph":{"@type":"Organization","name":"6th String","url":"https://string6.co.il"}}
+    </script></head><body><p>x</p></body></html>
+    """
+    await _load_on_host(page, html, "https://www.string6.co.il/product/x")
+    assert await page.evaluate(_SITE_NAME_SCRIPT) == {"name": "6th String", "strong": True}
+
+
+# Item 4 — site_name.js: the bidi-control strip covers all three former ranges (equivalence guard;
+# passes on main + refactor — its job is to catch a future typo in the control set).
+async def test_sitename_strips_all_bidi_ranges(page):
+    name = "Shop" + chr(0x200E) + "Name" + chr(0x202A) + "Co" + chr(0x2068)
+    html = f"""
+    <html><head><meta property="og:site_name" content="{name}"></head>
+    <body><p>x</p></body></html>
+    """
+    await page.set_content(html)
+    assert await page.evaluate(_SITE_NAME_SCRIPT) == {"name": "ShopNameCo", "strong": True}
+
+
+# Item 2 — structured_data.js: Product @type as a full schema.org IRI is matched.
+async def test_jsonld_iri_product_type(page):
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@type":"https://schema.org/Product","name":"X","offers":{"@type":"Offer","price":"42","priceCurrency":"EUR","availability":"InStock"}}
+    </script></head><body></body></html>
+    """
+    await page.set_content(html)
+    result = await page.evaluate(_STRUCTURED_DATA_SCRIPT)
+    assert result == {"price": 42, "currency": "EUR", "availability": "available"}
+
+
+# Item 2 — structured_data.js: Product @type as an array is matched.
+async def test_jsonld_array_product_type(page):
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@type":["Product","Thing"],"offers":{"price":"9990","priceCurrency":"ILS"}}
+    </script></head><body></body></html>
+    """
+    await page.set_content(html)
+    result = await page.evaluate(_STRUCTURED_DATA_SCRIPT)
+    assert result["price"] == 9990
+    assert result["currency"] == "ILS"
+
+
+# Item 2 — structured_data.js: a later offer is found when offers[0] has no price (on main only
+# offers[0] is inspected → falls through to null).
+async def test_jsonld_offers_array_picks_first_priced(page):
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@type":"Product","offers":[
+        {"@type":"Offer","availability":"OutOfStock"},
+        {"@type":"Offer","price":"1299","priceCurrency":"USD","availability":"InStock"}
+    ]}
+    </script></head><body></body></html>
+    """
+    await page.set_content(html)
+    result = await page.evaluate(_STRUCTURED_DATA_SCRIPT)
+    assert result == {"price": 1299, "currency": "USD", "availability": "available"}
+
+
+# Item 2 — structured_data.js: standalone Offer @type as a full IRI.
+async def test_jsonld_iri_offer_type(page):
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@type":"https://schema.org/Offer","price":"55","priceCurrency":"USD","availability":"InStock"}
+    </script></head><body></body></html>
+    """
+    await page.set_content(html)
+    result = await page.evaluate(_STRUCTURED_DATA_SCRIPT)
+    assert result == {"price": 55, "currency": "USD", "availability": "available"}
+
+
+# Item 2 — structured_data.js: standalone Offer @type as an array.
+async def test_jsonld_array_offer_type(page):
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@type":["Offer","Thing"],"price":"7","priceCurrency":"GBP"}
+    </script></head><body></body></html>
+    """
+    await page.set_content(html)
+    result = await page.evaluate(_STRUCTURED_DATA_SCRIPT)
+    assert result["price"] == 7
+    assert result["currency"] == "GBP"
+
+
+# Item 2 — structured_data.js: a node dual-typed ["Product","Offer"] with the price inline on the
+# node itself (no nested offers) is handled via the offer fallback.
+async def test_jsonld_product_and_offer_type_inline_price(page):
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@type":["Product","Offer"],"price":"310","priceCurrency":"USD","availability":"InStock"}
+    </script></head><body></body></html>
+    """
+    await page.set_content(html)
+    result = await page.evaluate(_STRUCTURED_DATA_SCRIPT)
+    assert result == {"price": 310, "currency": "USD", "availability": "available"}
+
+
+# Item 3 — structured_data.js: a null entry in the top-level array doesn't abort the rest (on main
+# null['@graph'] throws → the whole <script> is skipped).
+async def test_jsonld_null_node_skipped_continues(page):
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    [null, {"@type":"Product","offers":{"price":"49","priceCurrency":"EUR"}}]
+    </script></head><body></body></html>
+    """
+    await page.set_content(html)
+    result = await page.evaluate(_STRUCTURED_DATA_SCRIPT)
+    assert result["price"] == 49
+    assert result["currency"] == "EUR"
+
+
+# Item 3 — structured_data.js: a null entry inside @graph doesn't abort the rest.
+async def test_jsonld_null_graph_entry_skipped(page):
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@graph":[null, {"@type":"Product","offers":{"price":"12","priceCurrency":"USD"}}]}
+    </script></head><body></body></html>
+    """
+    await page.set_content(html)
+    result = await page.evaluate(_STRUCTURED_DATA_SCRIPT)
+    assert result["price"] == 12
+    assert result["currency"] == "USD"
+
+
+# Item 3 — structured_data.js: @graph as a single object (not an array) is read (on main, iterating
+# a plain object with for...of throws → the <script> is skipped).
+async def test_jsonld_single_object_graph_product(page):
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@graph":{"@type":"Product","offers":{"price":"88","priceCurrency":"USD"}}}
+    </script></head><body></body></html>
+    """
+    await page.set_content(html)
+    result = await page.evaluate(_STRUCTURED_DATA_SCRIPT)
+    assert result["price"] == 88
+    assert result["currency"] == "USD"
+
+
+# Item 2/3 — structured_data.js: a top-level Product that ALSO carries an @graph still has its own
+# offers read — the node is scanned alongside its graph entries (on main only the @graph is scanned,
+# so the Product's offers are missed → null).
+async def test_jsonld_top_level_product_with_graph(page):
+    html = """
+    <html><head>
+    <script type="application/ld+json">
+    {"@type":"Product","offers":{"price":"77","priceCurrency":"USD"},
+     "@graph":[{"@type":"BreadcrumbList"},{"@type":"WebSite","name":"x"}]}
+    </script></head><body></body></html>
+    """
+    await page.set_content(html)
+    result = await page.evaluate(_STRUCTURED_DATA_SCRIPT)
+    assert result["price"] == 77
+    assert result["currency"] == "USD"

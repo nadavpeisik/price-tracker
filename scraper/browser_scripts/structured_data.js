@@ -107,6 +107,19 @@
         };
     };
 
+    // schema.org @type -> lowercase leaf token (bare "Product" | full IRI ".../Product" | array).
+    // Identical to the copy in site_name.js (separate page.evaluate contexts can't share);
+    // mirrored fixtures exercise both copies. Char class (no backslash escapes) keeps the regex simple;
+    // filter(Boolean) drops empty segments so a trailing / or # doesn't collapse the leaf to "".
+    const leafType = (x) => {
+        if (typeof x !== 'string') return '';
+        const tokens = x.trim().split(/[/#]/).filter(Boolean);
+        return (tokens.pop() || '').toLowerCase();
+    };
+    const typeTokens = (t) => (Array.isArray(t) ? t : [t]).map(leafType).filter(Boolean);
+    const PRODUCT_TYPES = ['product', 'individualproduct'];
+    const OFFER_TYPES = ['offer', 'aggregateoffer'];
+
     // Tier 1a: JSON-LD
     const scripts = Array.from(document.querySelectorAll('script[type="application/ld+json"]'));
     for (const script of scripts) {
@@ -114,20 +127,29 @@
             const data = JSON.parse(script.textContent);
             const nodes = Array.isArray(data) ? data : [data];
             for (const node of nodes) {
-                const items = node['@graph'] ? node['@graph'] : [node];
+                if (!node || typeof node !== 'object' || Array.isArray(node)) continue;
+                // Scan the node itself AND its @graph entries (single-object @graph tolerated), so a
+                // top-level Product that also carries an auxiliary @graph isn't dropped.
+                const graph = node['@graph'];
+                const graphNodes = Array.isArray(graph) ? graph : (graph && typeof graph === 'object' ? [graph] : []);
+                const items = [node, ...graphNodes];
                 for (const item of items) {
-                    const type = item['@type'];
-                    let offer = null;
-                    if (type === 'Product' || type === 'IndividualProduct') {
-                        offer = item.offers || item.offer;
-                        if (Array.isArray(offer)) offer = offer[0];
-                    } else if (type === 'Offer' || type === 'AggregateOffer') {
-                        offer = item;
+                    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+                    const types = typeTokens(item['@type']);
+                    const isProduct = types.some(t => PRODUCT_TYPES.includes(t));
+                    const isOffer = types.some(t => OFFER_TYPES.includes(t));
+                    let offers = [];
+                    if (isProduct) {
+                        const raw = item.offers || item.offer;
+                        offers = Array.isArray(raw) ? raw : (raw ? [raw] : []);
                     }
-                    if (!offer) continue;
-                    const { rawPrice, currency } = resolveOfferPrice(offer);
-                    const result = buildResult(parseNumeric(rawPrice), currency, offer.availability);
-                    if (result) return result;
+                    if (offers.length === 0 && isOffer) offers = [item]; // dual ["Product","Offer"] w/ inline price
+                    for (const offer of offers) {
+                        if (!offer || typeof offer !== 'object' || Array.isArray(offer)) continue;
+                        const { rawPrice, currency } = resolveOfferPrice(offer);
+                        const result = buildResult(parseNumeric(rawPrice), currency, offer.availability);
+                        if (result) return result;
+                    }
                 }
             }
         } catch (e) {}
