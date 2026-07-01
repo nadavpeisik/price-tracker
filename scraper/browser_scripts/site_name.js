@@ -5,13 +5,9 @@
     // mark can't glue to a segment and defeat the og:title de-dup below; then trim.
     const clean = (s) => {
         if (typeof s !== 'string') return '';
-        let out = '';
-        for (const ch of s) {
-            const c = ch.codePointAt(0);
-            if ((c >= 0x200e && c <= 0x200f) || (c >= 0x202a && c <= 0x202e) || (c >= 0x2066 && c <= 0x2069)) continue;
-            out += ch;
-        }
-        return out.trim();
+        // \p{Bidi_Control} matches all Unicode bidi/directional controls (LRM/RLM, embeddings,
+        // overrides, isolates, ALM) — the explicit-range loop this replaces, made self-documenting.
+        return s.replace(/\p{Bidi_Control}/gu, '').trim();
     };
 
     // Tier A: OpenGraph site name — strong.
@@ -26,21 +22,27 @@
     const addTop = (data) => {
         const arr = Array.isArray(data) ? data : [data];
         for (const n of arr) {
-            if (!n || typeof n !== 'object') continue;
+            if (!n || typeof n !== 'object' || Array.isArray(n)) continue;
             nodes.push(n);
-            if (Array.isArray(n['@graph'])) {
-                for (const g of n['@graph']) if (g && typeof g === 'object') nodes.push(g);
-            }
+            const graph = n['@graph'];
+            const graphNodes = Array.isArray(graph) ? graph : (graph && typeof graph === 'object' ? [graph] : []);
+            for (const g of graphNodes) if (g && typeof g === 'object' && !Array.isArray(g)) nodes.push(g);
         }
     };
     for (const s of document.querySelectorAll('script[type="application/ld+json"]')) {
         try { addTop(JSON.parse(s.textContent)); } catch (e) {}
     }
-    const typesOf = (n) => {
-        const t = n && n['@type'];
-        if (!t) return [];
-        return (Array.isArray(t) ? t : [t]).map(x => String(x).toLowerCase());
+    // schema.org @type -> lowercase leaf token (bare "Product" | full IRI ".../Product" | array).
+    // Identical to the copy in structured_data.js (separate page.evaluate contexts can't share);
+    // mirrored fixtures exercise both copies. Char class (no backslash escapes) keeps the regex simple;
+    // filter(Boolean) drops empty segments so a trailing / or # doesn't collapse the leaf to "".
+    const leafType = (x) => {
+        if (typeof x !== 'string') return '';
+        const tokens = x.trim().split(/[/#]/).filter(Boolean);
+        return (tokens.pop() || '').toLowerCase();
     };
+    const typeTokens = (t) => (Array.isArray(t) ? t : [t]).map(leafType).filter(Boolean);
+    const typesOf = (n) => typeTokens(n && n['@type']);
     const ORG_TYPES = ['organization', 'website', 'store', 'onlinestore', 'corporation', 'localbusiness'];
     const stripWww = (h) => (h.startsWith('www.') ? h.slice(4) : h);
     const pageHost = stripWww((location.hostname || '').toLowerCase());
