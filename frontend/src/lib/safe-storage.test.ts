@@ -29,4 +29,17 @@ describe('safeStorage degrade path', () => {
     expect(() => safeStorage.get('t')).not.toThrow()
     expect(safeStorage.get('missing')).toBeNull()
   })
+
+  it('prefers the in-memory value over a STALE localStorage value after a failed write', () => {
+    // An earlier successful write left 'old' in localStorage...
+    safeStorage.set('t', 'old')
+    expect(localStorage.getItem('t')).toBe('old')
+    // ...then a later write fails (quota / private mode) and falls to memory.
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('QuotaExceededError')
+    })
+    safeStorage.set('t', 'new')
+    // get() must return the latest value, not the stale localStorage one.
+    expect(safeStorage.get('t')).toBe('new')
+  })
 })

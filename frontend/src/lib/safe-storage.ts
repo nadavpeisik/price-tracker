@@ -13,20 +13,24 @@ const memory = new Map<string, string>()
 
 export const safeStorage = {
   get(key: string): string | null {
+    // Memory FIRST: a key is only in `memory` because a write fell back to
+    // it, which means localStorage may hold a STALE earlier value for that
+    // key — memory is the latest. (A later successful write clears memory in
+    // `set`, restoring localStorage as the source of truth.)
+    if (memory.has(key)) return memory.get(key) ?? null
     try {
       const value = localStorage.getItem(key)
       if (value !== null) return value
     } catch {
-      /* storage unavailable — fall through to memory */
+      /* storage unavailable — treat as absent */
     }
-    // Also consulted when localStorage READS work but an earlier WRITE threw
-    // (Safari private mode) and the value landed in memory.
-    return memory.get(key) ?? null
+    return null
   },
 
   set(key: string, value: string): void {
     try {
       localStorage.setItem(key, value)
+      memory.delete(key) // localStorage is authoritative again for this key
       return
     } catch {
       /* storage unavailable or quota/private-mode write failure */

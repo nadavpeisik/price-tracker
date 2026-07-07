@@ -47,6 +47,16 @@ interface ProductAvatarProps {
 export function ProductAvatar({ name, imageUrl, category }: ProductAvatarProps) {
   const [imageFailed, setImageFailed] = useState(false)
 
+  // Reset the failed flag when the source changes (the standard adjust-state-
+  // during-render pattern) — otherwise a previously-failed image would keep
+  // this instance on the fallback even after the product's imageUrl updates
+  // to a valid one (relevant once the backend image endpoint lands).
+  const [seenUrl, setSeenUrl] = useState(imageUrl)
+  if (imageUrl !== seenUrl) {
+    setSeenUrl(imageUrl)
+    setImageFailed(false)
+  }
+
   if (imageUrl !== null && !imageFailed) {
     return (
       <img
