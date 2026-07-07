@@ -106,6 +106,12 @@ describe('mockFetchListings', () => {
   })
 
   it('rejects for an unknown product id (drives the row-level error/retry UX)', async () => {
-    await expect(listings(-1)).rejects.toThrow()
+    // Attach the rejection expectation BEFORE advancing the fake timers, so
+    // the promise never rejects while unhandled (which Vitest fails the run
+    // over) — the shared `listings` helper awaits timers before returning.
+    const pending = mockFetchListings(-1)
+    const assertion = expect(pending).rejects.toThrow('Unknown product id')
+    await vi.runAllTimersAsync()
+    await assertion
   })
 })
