@@ -9,6 +9,85 @@ on:
     branches: [main]
 
 jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend  # the npm shell lives in the subfolder
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v6
+        with:
+          # Keep in sync with frontend/.nvmrc and engines.node — Vite 8 /
+          # ESLint 10 require Node >= 20.19.
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build (production)
+        run: npm run build
+
+      # ── Prod mock-gate (#144) ─────────────────────────────────────────
+      # 1) Bundle sentinel: the mock-only token must be absent from the
+      #    compiled production assets (belt-and-suspenders against a
+      #    side-effecting mock import surviving the import.meta.env.DEV gate).
+      #    Reuses the dist/ from the step above — no rebuild. Scans every
+      #    asset except source maps, so a future .mjs/.cjs emit can't slip a
+      #    leak past a .js-only filter.
+      - name: Mock gate — sentinel absent from production bundle
+        run: |
+          # Handle grep's three exit codes explicitly: 0 = sentinel found
+          # (leak → fail), 1 = not found (clean), anything else = grep itself
+          # errored (e.g. dist/ missing/unreadable) and must fail too — a bare
+          # `if grep` would misread that error as "clean" and green a broken
+          # security gate.
+          set +e
+          matches=$(grep -rl --exclude='*.map' '__MOCK_DATA_SENTINEL__' dist/)
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "::error::Mock data sentinel found in the production bundle — mocks leaked:"
+            echo "$matches"
+            exit 1
+          elif [ "$status" -ne 1 ]; then
+            echo "::error::grep failed (exit $status) — dist/ missing or unreadable; cannot verify the mock gate."
+            exit 1
+          fi
+          echo "Sentinel absent from production bundle."
+
+      # 2) A production build with mock mode enabled must FAIL, and fail
+      #    *specifically* via the vite.config.ts gate — not from some
+      #    unrelated build error that would green this check without ever
+      #    exercising the gate. Runs last (it deliberately fails the build).
+      - name: Mock gate — VITE_USE_MOCK=true build must fail via the gate
+        run: |
+          if VITE_USE_MOCK=true npm run build > mock-build.log 2>&1; then
+            echo "::error::VITE_USE_MOCK=true production build SUCCEEDED — the mock gate is broken."
+            cat mock-build.log
+            exit 1
+          fi
+          if ! grep -q 'VITE_USE_MOCK=true is not allowed for production builds' mock-build.log; then
+            echo "::error::Mock-mode build failed, but NOT via the mock gate — an unrelated build error is masking it."
+            cat mock-build.log
+            exit 1
+          fi
+          echo "Mock-mode production build failed via the gate, as intended."
+
   build-test-scan:
     runs-on: ubuntu-latest
     steps:

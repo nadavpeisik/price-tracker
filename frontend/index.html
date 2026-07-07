@@ -4,7 +4,54 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>frontend</title>
+    <title>PriceHunt</title>
+    <!--
+      Browser-chrome color. A single meta whose content is set from JS (here
+      pre-paint, and again in src/hooks/use-theme.ts on toggle / OS change) —
+      NOT two prefers-color-scheme media metas, which would leave the mobile
+      address bar mismatched when the user manually overrides the theme.
+      Colors mirror --bg in src/index.css; keep them in sync.
+    -->
+    <meta name="theme-color" content="#F1EDE7" />
+    <!--
+      Pre-paint theme script (#144): applies the stored theme BEFORE first
+      paint so a dark-mode user never sees a white flash. Runs before any app
+      code exists, so it does its own try/catch around localStorage — access
+      can throw (SecurityError) in restricted/iframe contexts, and a failure
+      here must fall back to the OS preference, never block render. React
+      later initializes its theme state from the class this script sets.
+      Keep the storage key in sync with src/hooks/use-theme.ts.
+    -->
+    <script>
+      ;(function () {
+        var stored = null
+        try {
+          stored = localStorage.getItem('ph.theme')
+        } catch (e) {
+          /* storage unavailable — fall through to the OS preference */
+        }
+        var dark =
+          stored === 'dark' ||
+          (stored !== 'light' &&
+            typeof window.matchMedia === 'function' &&
+            window.matchMedia('(prefers-color-scheme: dark)').matches)
+        if (dark) document.documentElement.classList.add('dark')
+        var meta = document.querySelector('meta[name="theme-color"]')
+        if (meta) meta.setAttribute('content', dark ? '#14120D' : '#F1EDE7')
+      })()
+    </script>
+    <!--
+      Preload the display webfont. `crossorigin` is required even same-origin:
+      fonts load in anonymous CORS mode, and a preload without it doesn't
+      match the real request, so the browser would fetch the file twice.
+    -->
+    <link
+      rel="preload"
+      href="/fonts/nunito-sans-latin-wght-normal.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
   </head>
   <body>
     <div id="root"></div>

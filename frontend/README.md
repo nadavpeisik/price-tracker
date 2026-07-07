@@ -1,73 +1,49 @@
-# React + TypeScript + Vite
+# PriceHunt frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React SPA for the tracked-items dashboard (issue #144). Stack: **Vite +
+React 19 + TypeScript + Tailwind CSS v4 + shadcn/ui (Radix) + TanStack Query
++ Motion**.
 
-Currently, two official plugins are available:
+## Run
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+nvm use            # Node 22 (.nvmrc); engines are enforced as >=20.19 <23
+npm ci
+npm run dev        # http://localhost:5173 — mock data by default (see below)
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Dev serves the dashboard from **typed mock data** (`.env.development` sets
+`VITE_USE_MOCK=true`) because the backend dashboard endpoint doesn't exist
+yet (#145/#146 own it). The mock client implements the same
+`DashboardQuery → DashboardResponse` contract, so live wiring is a URL swap
+in `src/lib/api-client.ts`. The Vite dev server proxies `/api` →
+`http://localhost:8080` (Spring) for when it does.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+**Mock data can never ship:** mock imports sit behind `import.meta.env.DEV`
+(dead-code-eliminated from prod bundles), a production build with
+`VITE_USE_MOCK=true` **fails** (see `vite.config.ts`), and CI greps the
+compiled bundle for a mock-only sentinel. Production currently renders a
+placeholder screen instead of the dashboard until the backend lands.
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+## Scripts
+
+| Script | What |
+|---|---|
+| `npm run dev` | Dev server with HMR (mock data) |
+| `npm test` / `npm run test:watch` | Vitest + React Testing Library |
+| `npm run lint` | ESLint |
+| `npm run typecheck` | `tsc -b` |
+| `npm run build` | Typecheck + production bundle |
+
+## Layout
+
+- `src/lib/` — types (view model + query contract), API client/adapter,
+  formatting, URL-state store, shop/product colors, safe storage/URL guards
+- `src/mocks/` — DEV-only mock data builder + mock dashboard client
+- `src/hooks/` — theme, URL query state, shared 60s ticker, reduced motion,
+  count-up
+- `src/components/dashboard/` — the screen; `src/components/ui/` — vendored
+  shadcn components
+- `design/` — committed design reference: mockup source, token sheet,
+  motion notes (the visual source of truth for reviewers)
+- `public/fonts/` — self-hosted Nunito Sans (rounded display face) + license
