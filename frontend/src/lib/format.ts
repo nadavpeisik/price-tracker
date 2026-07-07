@@ -10,6 +10,9 @@
 
 const formatterCache = new Map<string, Intl.NumberFormat>()
 
+/** Return a cached `Intl.NumberFormat` for the given ISO currency, creating
+ *  (and caching) one on first use. Formatters are relatively expensive to
+ *  construct, and the same handful of currencies recur across every row. */
 function currencyFormatter(currency: string): Intl.NumberFormat {
   let fmt = formatterCache.get(currency)
   if (!fmt) {

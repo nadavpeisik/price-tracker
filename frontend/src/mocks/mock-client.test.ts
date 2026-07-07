@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mockFetchDashboard } from '@/mocks/mock-client'
-import { resetMockDb } from '@/mocks/mock-client'
+import { mockFetchDashboard, mockFetchListings, resetMockDb } from '@/mocks/mock-client'
 import type { DashboardQuery } from '@/lib/types'
 
 /**
@@ -85,5 +84,28 @@ describe('mockFetchDashboard', () => {
     expect(response.globalSummary.totalTracked).toBeGreaterThan(1)
     expect(response.summaryForCurrentQuery.totalTracked).toBe(1)
     expect(response.globalSummary.biggestDrop).not.toBeNull()
+  })
+})
+
+describe('mockFetchListings', () => {
+  async function listings(productId: number) {
+    const promise = mockFetchListings(productId)
+    await vi.runAllTimersAsync()
+    return promise
+  }
+
+  it('sorts listings cheapest-first with null prices last', async () => {
+    // Sony (id 1) has three priced ILS listings — cheapest first.
+    const result = await listings(1)
+    const prices = result.map((l) => (l.price === null ? null : Number(l.price)))
+    const nonNull = prices.filter((p): p is number => p !== null)
+    expect(nonNull).toEqual([...nonNull].sort((a, b) => a - b))
+    // Any null-priced listing sorts after every priced one.
+    const firstNull = prices.indexOf(null)
+    if (firstNull !== -1) expect(prices.slice(firstNull).every((p) => p === null)).toBe(true)
+  })
+
+  it('rejects for an unknown product id (drives the row-level error/retry UX)', async () => {
+    await expect(listings(-1)).rejects.toThrow()
   })
 })

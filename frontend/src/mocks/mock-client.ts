@@ -61,6 +61,12 @@ function compare(a: TrackedProduct, b: TrackedProduct, sort: DashboardQuery['sor
       if (b.delta7d === null) return -1
       return a.delta7d - b.delta7d
     }
+    default: {
+      // A new sort variant becomes a compile error here, not a silent
+      // "everything equal" at runtime.
+      const exhaustive: never = sort
+      return exhaustive
+    }
   }
 }
 

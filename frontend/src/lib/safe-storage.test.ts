@@ -42,4 +42,17 @@ describe('safeStorage degrade path', () => {
     // get() must return the latest value, not the stale localStorage one.
     expect(safeStorage.get('t')).toBe('new')
   })
+
+  it('clears the in-memory override once a later write succeeds again', () => {
+    safeStorage.set('t', 'old')
+    // One failing write forces the value into memory...
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementationOnce(() => {
+      throw new DOMException('QuotaExceededError')
+    })
+    safeStorage.set('t', 'from-memory')
+    // ...then a successful write must heal back to localStorage authority.
+    safeStorage.set('t', 'persisted')
+    expect(localStorage.getItem('t')).toBe('persisted')
+    expect(safeStorage.get('t')).toBe('persisted')
+  })
 })

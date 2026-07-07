@@ -6,6 +6,7 @@
  * the mockup, which reuses one gradient set across light/dark). The first
  * hue doubles as the product accent (`--pa`) that tints the expanded row.
  */
+import { hashString } from '@/lib/hash'
 import { normalizeShopName } from '@/lib/shop-colors'
 
 export interface ProductGradient {
@@ -23,14 +24,6 @@ const GRADIENT_PAIRS: readonly ProductGradient[] = [
   { from: '#0E7FA8', to: '#8155E6' }, // cyan → violet
   { from: '#C05C09', to: '#D63C93' }, // orange → magenta
 ] as const
-
-function hashString(value: string): number {
-  let hash = 5381
-  for (let i = 0; i < value.length; i++) {
-    hash = (hash * 33) ^ value.charCodeAt(i)
-  }
-  return hash >>> 0
-}
 
 export function productGradient(name: string): ProductGradient {
   // Normalization rules are shared with shop colors (trim/NFC/lowercase).

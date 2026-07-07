@@ -148,6 +148,31 @@ export function Dashboard() {
   const showSkeleton = !showPageError && (data === undefined || clamping)
   const isEmpty = !showPageError && !showSkeleton && data !== undefined && data.items.length === 0
 
+  // List body as flat, ordered branches (avoids a deep nested ternary in JSX).
+  let listBody: React.ReactNode
+  if (showPageError) {
+    listBody = <ErrorState onRetry={() => void result.refetch()} />
+  } else if (showSkeleton) {
+    listBody = <SkeletonRows />
+  } else if (isEmpty) {
+    listBody = filterActive ? (
+      <NoMatchesState onClear={() => update({ search: '', shops: [], page: 1 })} />
+    ) : (
+      <ZeroTrackedState />
+    )
+  } else {
+    listBody = data!.items.map((product, index) => (
+      <ProductRow
+        key={product.id}
+        product={product}
+        index={index}
+        expanded={expandedId === product.id}
+        onToggle={() => setExpandedId((cur) => (cur === product.id ? null : product.id))}
+        celebrate={celebrating.has(product.id)}
+      />
+    ))
+  }
+
   return (
     <div className="mx-auto max-w-[1080px] px-5 pb-24 pt-6">
       <header className="mb-6 flex items-center justify-between gap-4">
@@ -198,28 +223,7 @@ export function Dashboard() {
           <span />
         </div>
 
-        {showPageError ? (
-          <ErrorState onRetry={() => void result.refetch()} />
-        ) : showSkeleton ? (
-          <SkeletonRows />
-        ) : isEmpty ? (
-          filterActive ? (
-            <NoMatchesState onClear={() => update({ search: '', shops: [], page: 1 })} />
-          ) : (
-            <ZeroTrackedState />
-          )
-        ) : (
-          data!.items.map((product, index) => (
-            <ProductRow
-              key={product.id}
-              product={product}
-              index={index}
-              expanded={expandedId === product.id}
-              onToggle={() => setExpandedId((cur) => (cur === product.id ? null : product.id))}
-              celebrate={celebrating.has(product.id)}
-            />
-          ))
-        )}
+        {listBody}
       </div>
 
       {!showPageError && !showSkeleton && data !== undefined && totalPages > 1 && (

@@ -14,6 +14,7 @@
  * built Tailwind class names, which the static scanner can't see and would
  * purge from the prod bundle.
  */
+import { hashString } from '@/lib/hash'
 
 export interface ShopColorVariant {
   /** Chip/badge text — AA vs `bg`. */
@@ -80,15 +81,6 @@ export const SHOP_PALETTE: readonly ShopColor[] = [
  */
 export function normalizeShopName(name: string): string {
   return name.trim().normalize('NFC').toLowerCase()
-}
-
-/** djb2 string hash — stable, fast, good-enough spread for a small palette. */
-function hashString(value: string): number {
-  let hash = 5381
-  for (let i = 0; i < value.length; i++) {
-    hash = (hash * 33) ^ value.charCodeAt(i)
-  }
-  return hash >>> 0 // force unsigned so the modulo below can't go negative
 }
 
 export function shopColorIndex(name: string): number {

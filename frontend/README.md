@@ -20,10 +20,12 @@ in `src/lib/api-client.ts`. The Vite dev server proxies `/api` →
 `http://localhost:8080` (Spring) for when it does.
 
 **Mock data can never ship:** mock imports sit behind `import.meta.env.DEV`
-(dead-code-eliminated from prod bundles), a production build with
-`VITE_USE_MOCK=true` **fails** (see `vite.config.ts`), and CI greps the
-compiled bundle for a mock-only sentinel. Production currently renders a
-placeholder screen instead of the dashboard until the backend lands.
+(dead-code-eliminated from prod bundles); a production build with
+`VITE_USE_MOCK=true` **fails** — the gate in `vite.config.ts` resolves the
+flag via `loadEnv`, so it catches the value whether it comes from a shell
+export or an `.env.production` file; and CI greps the compiled bundle for a
+mock-only sentinel as a backstop. Production currently renders a placeholder
+screen instead of the dashboard until the backend lands.
 
 ## Scripts
 

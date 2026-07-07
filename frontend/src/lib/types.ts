@@ -21,7 +21,7 @@ export type ListingAvailability = 'AVAILABLE' | 'UNAVAILABLE' | 'UNKNOWN'
 
 export interface AvailabilityRollup {
   /** MIXED drives the amber "N of M in stock" badge. */
-  status: 'AVAILABLE' | 'UNAVAILABLE' | 'UNKNOWN' | 'MIXED'
+  status: ListingAvailability | 'MIXED'
   availableCount: number
   /**
    * CAN BE 0: the backend allows a product with zero tracked items. Render
@@ -118,6 +118,12 @@ export interface DashboardPageMeta {
   totalPages: number
 }
 
+export interface BiggestDrop {
+  productId: number
+  productName: string
+  deltaPct: number
+}
+
 export interface DashboardSummary {
   totalTracked: number
   drops7d: number
@@ -125,14 +131,18 @@ export interface DashboardSummary {
    * Enough to render + link the tile — the biggest-drop product may not be
    * on the current page, so the name travels with the id.
    */
-  biggestDrop: { productId: number; productName: string; deltaPct: number } | null
+  biggestDrop: BiggestDrop | null
+}
+
+export interface DashboardFacets {
+  shops: string[]
 }
 
 export interface DashboardResponse {
   items: TrackedProduct[]
   page: DashboardPageMeta
   /** GLOBAL shop list for the filter chips — never derived from the page. */
-  facets: { shops: string[] }
+  facets: DashboardFacets
   /** Whole tracked set → the standing tiles. */
   globalSummary: DashboardSummary
   /** Scoped to the active search/filter → annotation on the current view. */

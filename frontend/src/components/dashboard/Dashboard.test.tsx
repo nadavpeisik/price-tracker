@@ -259,22 +259,25 @@ describe('Dashboard', () => {
     expect(screen.queryByText(/in this filter/)).not.toBeInTheDocument()
   })
 
-  it('distinguishes the two empty states: zero tracked vs no matches', async () => {
-    fetchDashboardMock.mockResolvedValue(
-      response([], {
-        globalSummary: { totalTracked: 0, drops7d: 0, biggestDrop: null },
-        summaryForCurrentQuery: { totalTracked: 0, drops7d: 0, biggestDrop: null },
-      }),
-    )
+  const EMPTY_RESPONSE = () =>
+    response([], {
+      globalSummary: { totalTracked: 0, drops7d: 0, biggestDrop: null },
+      summaryForCurrentQuery: { totalTracked: 0, drops7d: 0, biggestDrop: null },
+    })
+
+  it('shows the zero-tracked rocket empty state when nothing is tracked', async () => {
+    fetchDashboardMock.mockResolvedValue(EMPTY_RESPONSE())
     renderDashboard()
     expect(await screen.findByText('Nothing tracked yet')).toBeInTheDocument()
+  })
 
-    // Same zero-results payload but WITH a filter → the lightweight state.
+  it('shows the no-matches empty state (with clear-filters) when a filter matches nothing', async () => {
+    fetchDashboardMock.mockResolvedValue(EMPTY_RESPONSE())
     window.history.replaceState(null, '', '/?q=zzz')
     const user = userEvent.setup()
     renderDashboard()
     expect(await screen.findByText(/No products match/)).toBeInTheDocument()
-    await user.click(screen.getAllByRole('button', { name: 'Clear filters' })[0])
+    await user.click(screen.getByRole('button', { name: 'Clear filters' }))
     expect(window.location.search).toBe('')
   })
 

@@ -76,9 +76,12 @@ export function ListingPanel({ productId, open }: { productId: number; open: boo
   }
 
   if (status === 'error') {
+    // The alert region stays text-only (WAI-ARIA: interactive controls inside
+    // an alert get announced inconsistently by assistive tech); the Retry
+    // button is a sibling, not a descendant.
     return (
-      <div className="flex items-center gap-3 px-4.5 py-3 ps-7 text-sm text-ink-muted" role="alert">
-        Couldn't load listings.
+      <div className="flex items-center gap-3 px-4.5 py-3 ps-7 text-sm text-ink-muted">
+        <span role="alert">Couldn't load listings.</span>
         <Button size="sm" variant="outline" onClick={() => void refetch()} disabled={isRefetching}>
           Retry
         </Button>

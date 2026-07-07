@@ -70,7 +70,12 @@ export function RocketIntro({ onDone }: { onDone: () => void }) {
     <div
       className="fixed inset-0 z-50 grid place-items-center overflow-hidden bg-background"
       onClick={finish}
-      role="presentation"
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ' || e.key === 'Escape') finish()
+      }}
+      role="button"
+      tabIndex={0}
+      aria-label="Skip intro animation"
     >
       <span
         ref={rocketRef}
