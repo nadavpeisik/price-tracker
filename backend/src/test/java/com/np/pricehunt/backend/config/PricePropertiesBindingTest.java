@@ -177,6 +177,70 @@ class PricePropertiesBindingTest {
                         assertThat(validationFailure(ctx.getStartupFailure())).isNotNull());
     }
 
+    // --- UrlValidationProperties (SSRF DNS bulkhead knobs, #139) ---
+
+    private final ApplicationContextRunner urlValidation =
+            new ApplicationContextRunner().withUserConfiguration(UrlValidationConfig.class);
+
+    @Test
+    void urlValidation_defaultsApply() {
+        urlValidation.run(ctx -> {
+            UrlValidationProperties props = ctx.getBean(UrlValidationProperties.class);
+            assertThat(props.dnsResolveTimeout()).isEqualTo(Duration.ofSeconds(2));
+            assertThat(props.dnsResolverPoolSize()).isEqualTo(8);
+            assertThat(props.dnsResolverQueueCapacity()).isEqualTo(16);
+            assertThat(props.unsupportedSitesEnabled()).isTrue();
+        });
+    }
+
+    @Test
+    void urlValidation_bindsExplicitValues() {
+        urlValidation
+                .withPropertyValues(
+                        "price.validation.dns-resolve-timeout=500ms",
+                        "price.validation.dns-resolver-pool-size=4",
+                        "price.validation.dns-resolver-queue-capacity=32")
+                .run(ctx -> {
+                    UrlValidationProperties props = ctx.getBean(UrlValidationProperties.class);
+                    assertThat(props.dnsResolveTimeout()).isEqualTo(Duration.ofMillis(500));
+                    assertThat(props.dnsResolverPoolSize()).isEqualTo(4);
+                    assertThat(props.dnsResolverQueueCapacity()).isEqualTo(32);
+                });
+    }
+
+    @Test
+    void urlValidation_rejectsNonPositivePoolSize() {
+        urlValidation
+                .withPropertyValues("price.validation.dns-resolver-pool-size=0")
+                .run(ctx ->
+                        assertThat(validationFailure(ctx.getStartupFailure())).isNotNull());
+    }
+
+    @Test
+    void urlValidation_rejectsSubMillisecondTimeout() {
+        // @DurationMin(millis=1): 0s truncates to 0ms at toMillis() (an instant timeout) — must be rejected.
+        urlValidation
+                .withPropertyValues("price.validation.dns-resolve-timeout=0s")
+                .run(ctx ->
+                        assertThat(validationFailure(ctx.getStartupFailure())).isNotNull());
+    }
+
+    @Test
+    void urlValidation_rejectsPoolSizeAboveMax() {
+        urlValidation
+                .withPropertyValues("price.validation.dns-resolver-pool-size=100")
+                .run(ctx ->
+                        assertThat(validationFailure(ctx.getStartupFailure())).isNotNull());
+    }
+
+    @Test
+    void urlValidation_rejectsQueueCapacityAboveMax() {
+        urlValidation
+                .withPropertyValues("price.validation.dns-resolver-queue-capacity=2000")
+                .run(ctx ->
+                        assertThat(validationFailure(ctx.getStartupFailure())).isNotNull());
+    }
+
     // --- OllamaChatOptionsProperties (the extraction-config-fingerprint mirror) ---
 
     private final ApplicationContextRunner ollamaOptions =
@@ -224,4 +288,7 @@ class PricePropertiesBindingTest {
 
     @EnableConfigurationProperties(PriceTrackingProperties.class)
     static class TrackingConfig {}
+
+    @EnableConfigurationProperties(UrlValidationProperties.class)
+    static class UrlValidationConfig {}
 }

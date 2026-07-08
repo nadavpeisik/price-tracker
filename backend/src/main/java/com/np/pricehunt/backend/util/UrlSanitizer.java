@@ -8,8 +8,9 @@ import java.util.Set;
 /**
  * Data-minimization for URLs persisted in the scrape-attempt audit (issue #131). The audit keeps
  * {@code url} for up to the retention window even after the tracked item is deleted; "public
- * product-page text" is an assumption, not enforced ({@code UrlValidator} accepts any HTTP(S) host),
- * and a URL can carry credentials, tracking params, or identifiers. So on write we strip the fragment,
+ * product-page text" is an assumption, only partly enforced ({@code UrlValidator} now blocks
+ * private/internal/metadata hosts, but not DNS-rebinding/redirects), and a URL can carry credentials,
+ * tracking params, or identifiers. So on write we strip the fragment,
  * any authority userinfo (basic-auth credentials), and known tracking query params, keeping the
  * product-identifying path + remaining query intact.
  *

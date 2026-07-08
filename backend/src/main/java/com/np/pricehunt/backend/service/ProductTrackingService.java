@@ -68,6 +68,13 @@ public class ProductTrackingService {
     }
 
     public TrackResponse trackUrl(Long productId, TrackRequest request) {
+        // Guard a null body (POST with literal JSON `null`) before dereferencing request.url() — an
+        // empty body is already a 400 via Spring's message-not-readable handling.
+        if (request == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Request body is required");
+        }
+        // Full user-input validation (SSRF + parser-differential + UX blocklist) BEFORE storing a row,
+        // so a bad URL 400s without persisting a junk TrackedItem.
         urlValidator.validate(request.url());
         ItemSnapshot snapshot = transactionTemplate.execute(status -> {
             Product product = productRepository
@@ -77,7 +84,8 @@ public class ProductTrackingService {
             return new ItemSnapshot(item.getId(), item.getUrl());
         });
 
-        return trackAndPersist(snapshot.id(), snapshot.url());
+        // Already validated above → skip the chokepoint re-check (revalidate=false): no double DNS lookup.
+        return trackAndPersist(snapshot.id(), snapshot.url(), false);
     }
 
     public TrackResponse refreshTrackedItem(Long productId, Long itemId) {
@@ -100,7 +108,9 @@ public class ProductTrackingService {
                     HttpStatus.TOO_MANY_REQUESTS, "Item was refreshed recently, try again later");
         }
 
-        return trackAndPersist(snapshot.id(), snapshot.url());
+        // revalidate=true → the SSRF chokepoint re-checks the stored URL (the cooldown is intentionally
+        // consumed first, so a would-be-blocked URL still burns the window like any failed refresh).
+        return trackAndPersist(snapshot.id(), snapshot.url(), true);
     }
 
     // System-initiated refresh: bypasses the rate-limit (the scheduler is the system, not a user).
@@ -111,7 +121,7 @@ public class ProductTrackingService {
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found"));
             return new ItemSnapshot(item.getId(), item.getUrl());
         });
-        return trackAndPersist(snapshot.id(), snapshot.url());
+        return trackAndPersist(snapshot.id(), snapshot.url(), true);
     }
 
     // Durable half of the refresh cooldown: a successful refresh persists lastChecked, which
@@ -173,7 +183,15 @@ public class ProductTrackingService {
     // DB transactions bracket the two network calls (scrape, then LLM extract) — a transaction is
     // never held across that I/O. Shop-name resolution is committed before price extraction, so a
     // price failure never loses the name.
-    private TrackResponse trackAndPersist(Long itemId, String url) {
+    private TrackResponse trackAndPersist(Long itemId, String url, boolean revalidate) {
+        // Step 0 — pre-scrape SSRF chokepoint (refresh / scheduler paths). Rejects an internal /
+        // parser-differential stored URL BEFORE any downstream work (shop-name resolution, scrape,
+        // persistence). Outside any transaction — no DB connection is held across the DNS lookup. The
+        // track path already ran the full validate() before storing the row, so it passes revalidate=false.
+        if (revalidate) {
+            urlValidator.validateForScrape(url);
+        }
+
         // Step 1 — pre-scrape tx: ensure a name floor (host only fills a blank) and detect whether
         // the domain resolves to a curated row (authoritative → skip post-scrape name work).
         // Best-effort like step 3: a name-resolution failure here must never block price tracking,
