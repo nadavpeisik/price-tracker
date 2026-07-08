@@ -234,6 +234,20 @@ class UrlValidatorTest {
     }
 
     @Test
+    void ipv6SiitTranslatedInternal_rejected() {
+        // ::ffff:0:127.0.0.1 (IPv4-translated / SIIT: ffff at bytes 8-9, 0000 at 10-11).
+        assertResolvedAddrBlocked(addr6(0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0, 0, 0x7f, 0, 0, 1));
+    }
+
+    @Test
+    void ipv6SiitTranslatedPublic_passes() {
+        // ::ffff:0:8.8.8.8 must still pass — the SIIT extraction must not over-block a public embed.
+        InetAddress a = addr6(0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0, 0, 0x08, 0x08, 0x08, 0x08);
+        UrlValidator v = validatorWith(resolverReturning(a));
+        assertThatCode(() -> v.validate("https://ok.example/x")).doesNotThrowAnyException();
+    }
+
+    @Test
     void ipv4MappedViaGetByName_collapsesButStillBlocked() {
         // getByName("::ffff:127.0.0.1") collapses to Inet4Address → the plain isBlockedV4 path.
         assertResolvedAddrBlocked(addr("::ffff:127.0.0.1"));

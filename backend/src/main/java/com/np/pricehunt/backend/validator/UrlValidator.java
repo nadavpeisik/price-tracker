@@ -172,14 +172,14 @@ public class UrlValidator {
             addrs = hostResolver.resolve(h);
         } catch (UnknownHostException e) {
             log.debug("SSRF check: host did not resolve: {}", h); // typos/scans are common → DEBUG
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unable to resolve host");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unable to resolve host", e);
         } catch (TimeoutException e) {
             log.warn("SSRF check: host resolution timed out: {}", h);
-            throw new ResponseStatusException(HttpStatus.GATEWAY_TIMEOUT, "Host resolution timed out");
+            throw new ResponseStatusException(HttpStatus.GATEWAY_TIMEOUT, "Host resolution timed out", e);
         } catch (HostResolutionUnavailableException e) {
-            // Pass e: keep the cause chain (saturation vs interruption) for diagnosing bulkhead pressure.
+            // Keep the cause chain (saturation vs interruption) for diagnosing bulkhead pressure.
             log.warn("SSRF check: resolver unavailable for: {}", h, e);
-            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Host resolution unavailable");
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Host resolution unavailable", e);
         }
         if (addrs == null || addrs.length == 0) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unable to resolve host");
@@ -256,6 +256,13 @@ public class UrlValidator {
     private static byte[] embeddedIpv4(byte[] b) {
         if (allZero(b, 0, 10) && (b[10] & 0xff) == 0xff && (b[11] & 0xff) == 0xff) {
             return Arrays.copyOfRange(b, 12, 16); // IPv4-mapped ::ffff:0:0/96
+        }
+        if (allZero(b, 0, 8)
+                && (b[8] & 0xff) == 0xff
+                && (b[9] & 0xff) == 0xff
+                && (b[10] & 0xff) == 0x00
+                && (b[11] & 0xff) == 0x00) {
+            return Arrays.copyOfRange(b, 12, 16); // IPv4-translated ::ffff:0:0/96 (SIIT, RFC 2765)
         }
         if (allZero(b, 0, 12)) {
             return Arrays.copyOfRange(b, 12, 16); // IPv4-compatible ::/96 (also catches :: and ::1 as 0.0.0.x)
