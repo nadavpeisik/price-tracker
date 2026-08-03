@@ -64,7 +64,7 @@ Always runs `codex exec --sandbox read-only` — no sandbox toggle.
 Exit codes:
   0    review produced (or nothing to review)
   1    usage / environment error
-  2    review FAILED (codex error, timeout, or quota/rate-limit) — this is NOT a
+  2    review FAILED (codex error, timeout, quota/rate-limit, or no output) — this is NOT a
        code review
   130  aborted by the user (Ctrl+C)
 EOF
@@ -258,6 +258,22 @@ if [ "$before" != "$after" ]; then
     echo "Inspect with 'git status' / 'git diff' and do NOT commit until the cause is"
     echo "confirmed: this is NOT a valid review."
     echo "================================================================"
+  } >&2
+  exit 2
+fi
+
+# --- empty output is a FAILURE, never a clean review -------------------------
+# No known Codex failure mode produces this (unlike agy, which soft-denies tools in
+# headless mode), but the invariant is the same for every reviewer: a header with no
+# findings under it must never be readable as "reviewed, found nothing".
+if [ -z "$(printf '%s' "$OUTPUT" | tr -d '[:space:]')" ]; then
+  {
+    echo "================ REVIEW FAILED (no output) =================="
+    echo "codex exited $status but produced no review text."
+    echo "--- stderr ---"
+    printf '%s\n' "$ERR"
+    echo "============================================================"
+    echo "This is NOT a code review — re-run before trusting it."
   } >&2
   exit 2
 fi

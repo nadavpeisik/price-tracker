@@ -42,6 +42,13 @@ Environment:
                       or edit files (defends against prompt injection in the diff).
                       ONLY the value 0 disables it (fail-safe: a typo can't silently
                       turn off the sandbox); set 0 to let agy explore for extra context.
+  AGY_REVIEW_MAX_PROMPT_BYTES
+                      Hard ceiling on the prompt (default: 768000 = 750 KiB). The
+                      prompt is passed in argv, which the OS bounds by ARG_MAX (1MB
+                      on macOS, shared with the environment; Linux additionally caps
+                      a single argument near 128 KiB). Must be a positive integer of
+                      at most 18 digits. Over the ceiling the script exits 2 before
+                      calling agy.
   AGY_REVIEW_BASE     Base ref for the default range (default: origin/main).
   AGY_REVIEW_FETCH    1 (default) refreshes the base ref with a best-effort
                       'git fetch'; set 0 to skip (offline / slow remote).
@@ -178,12 +185,20 @@ before="$(snapshot_state)"
 PROMPT_MAX_BYTES="${AGY_REVIEW_MAX_PROMPT_BYTES:-768000}" # 750 KiB, leaving argv+env headroom
 # A non-numeric override would make `[ -gt ]` error out, and a failing test inside `if`
 # just skips the branch — the guard would silently not run. Reject it loudly instead.
+# 19+ digits can exceed the signed 64-bit range `[` compares in, and 0 contradicts the
+# "positive integer" contract below. Both are rejected up front rather than left to the
+# `-gt` test: an erroring test inside `if` reads as false, silently skipping the guard.
+prompt_max_invalid=0
 case "$PROMPT_MAX_BYTES" in
-  '' | *[!0-9]*)
-    echo "error: AGY_REVIEW_MAX_PROMPT_BYTES must be a positive integer (got: $PROMPT_MAX_BYTES)" >&2
-    exit 1
-    ;;
+  '' | *[!0-9]*) prompt_max_invalid=1 ;;
 esac
+if [ "$prompt_max_invalid" -eq 0 ] && { [ "${#PROMPT_MAX_BYTES}" -gt 18 ] || [ "$PROMPT_MAX_BYTES" -eq 0 ]; }; then
+  prompt_max_invalid=1
+fi
+if [ "$prompt_max_invalid" -eq 1 ]; then
+  echo "error: AGY_REVIEW_MAX_PROMPT_BYTES must be a positive integer of at most 18 digits (got: $PROMPT_MAX_BYTES)" >&2
+  exit 1
+fi
 prompt_bytes="$(printf '%s' "$PROMPT" | wc -c | tr -cd '0-9')"
 if [ "$prompt_bytes" -gt "$PROMPT_MAX_BYTES" ]; then
   {

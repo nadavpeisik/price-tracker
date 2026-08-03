@@ -58,7 +58,7 @@ Both scripts get their diff from the same shared helper, `scripts/get-review-dif
 - **`agy-review.sh`** wraps the Antigravity CLI (`agy -p`), default model **Gemini 3.6 Flash (High)** (`AGY_REVIEW_MODEL`, switch to `Gemini 3.1 Pro (High)` off the free tier).
 - **`codex-review.sh`** wraps plain `codex exec --sandbox read-only -`, model pinned to **gpt-5.6-sol** (`CODEX_REVIEW_MODEL`, set to the empty string to inherit Codex CLI's own default), reasoning effort **high** by default (`CODEX_REVIEW_REASONING_EFFORT`). Both model and effort are pinned in-script so review quality doesn't drift when `~/.codex/config.toml` is retuned for interactive use.
 
-Both produce findings grouped **HIGH / MEDIUM / LOW**, ending with `VERDICT:`. Two independent models fill issue #81's "second opinion" role. Run either script with `--help` for the full environment-variable reference. On failure — quota/rate-limit, or agy returning no output — either script prints `REVIEW FAILED` to stderr (exit 2); never mistake that for a clean review.
+Both produce findings grouped **HIGH / MEDIUM / LOW**, ending with `VERDICT:`. Two independent models fill issue #81's "second opinion" role. Run either script with `--help` for the full environment-variable reference. On failure — quota/rate-limit, an oversized prompt, or a reviewer returning no output — either script prints `REVIEW FAILED` to stderr (exit 2); never mistake that for a clean review.
 
 Guardrails (per issue #81's coordination model):
 - **Read-only:** `agy-review.sh` runs `agy --sandbox`; `codex-review.sh` runs `codex exec --sandbox read-only`. Neither can edit/commit/push — only review. **One owner per branch:** Claude implements, Gemini AND Codex critique.
