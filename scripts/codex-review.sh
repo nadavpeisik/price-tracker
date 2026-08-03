@@ -10,7 +10,7 @@
 #
 set -euo pipefail
 
-MODEL="${CODEX_REVIEW_MODEL:-}"                    # empty = use Codex CLI's configured default
+MODEL="${CODEX_REVIEW_MODEL-gpt-5.6-sol}"          # pinned so reviews don't drift with ~/.codex/config.toml; set to "" to use Codex's own default
 REASONING="${CODEX_REVIEW_REASONING_EFFORT:-high}" # passed as -c model_reasoning_effort="<value>"
 TIMEOUT="${CODEX_REVIEW_TIMEOUT:-240s}"
 BASE_REF="${CODEX_REVIEW_BASE:-origin/main}"
@@ -39,8 +39,10 @@ so both reviewers see the exact same diff text. Findings are grouped HIGH/MEDIUM
 ending with a 'VERDICT:' line, matching agy-review.sh's format.
 
 Environment:
-  CODEX_REVIEW_MODEL  Model override passed as `-m <model>` (default: empty — use
-                      Codex CLI's configured default).
+  CODEX_REVIEW_MODEL  Model passed as `-m <model>` (default: gpt-5.6-sol — pinned so
+                      review quality doesn't drift when ~/.codex/config.toml changes
+                      for interactive use). Set to the empty string to fall back to
+                      Codex CLI's own configured default.
   CODEX_REVIEW_REASONING_EFFORT
                       Passed as `-c model_reasoning_effort="<value>"` (default: high
                       — better critique quality for a second-opinion reviewer).

@@ -55,8 +55,8 @@ Workflow: **write code → run BOTH `scripts/agy-review.sh` AND `scripts/codex-r
 
 Both scripts get their diff from the same shared helper, `scripts/get-review-diff.sh` — **Gemini and Codex review the exact same diff text**, so a disagreement between them reflects different judgment, not different scope.
 
-- **`agy-review.sh`** wraps the Antigravity CLI (`agy -p`), default model **Gemini 3.5 Flash (High)** (`AGY_REVIEW_MODEL`, switch to `Gemini 3.1 Pro (High)` off the free tier).
-- **`codex-review.sh`** wraps plain `codex exec --sandbox read-only -`, using Codex CLI's configured default model unless overridden (`CODEX_REVIEW_MODEL`), reasoning effort **high** by default (`CODEX_REVIEW_REASONING_EFFORT`).
+- **`agy-review.sh`** wraps the Antigravity CLI (`agy -p`), default model **Gemini 3.6 Flash (High)** (`AGY_REVIEW_MODEL`, switch to `Gemini 3.1 Pro (High)` off the free tier).
+- **`codex-review.sh`** wraps plain `codex exec --sandbox read-only -`, model pinned to **gpt-5.6-sol** (`CODEX_REVIEW_MODEL`, set to the empty string to inherit Codex CLI's own default), reasoning effort **high** by default (`CODEX_REVIEW_REASONING_EFFORT`). Both model and effort are pinned in-script so review quality doesn't drift when `~/.codex/config.toml` is retuned for interactive use.
 
 Both produce findings grouped **HIGH / MEDIUM / LOW**, ending with `VERDICT:`. Both preserve Gemini-bot review quality locally after the GitHub `gemini-code-assist` bot sunsets (2026-07-17), and add a second, independent model's perspective per issue #81's "second opinion" role. Run either script with `--help` for the full environment-variable reference. On a quota/rate-limit, either script prints `REVIEW FAILED` to stderr (exit 2) — never mistake this for a clean review.
 
@@ -86,6 +86,21 @@ Workflow: **write plan → print the full plan to the user → run BOTH `scripts
 - **`codex-plan-review.sh`** shares `CODEX_REVIEW_MODEL` / `CODEX_REVIEW_REASONING_EFFORT` / `CODEX_REVIEW_TIMEOUT` with `codex-review.sh`; plan dir via `CODEX_PLAN_DIR` (falls back to `AGY_PLAN_DIR`). Always runs `codex exec --sandbox read-only` — unlike agy's all-or-nothing sandbox, this blocks all writes while letting Codex read the codebase (including `AGENTS.md`, auto-loaded as context) for a grounded critique.
 
 Both produce findings grouped **HIGH / MEDIUM / LOW**, ending with `VERDICT:`.
+
+**One-time agy setup (per machine).** agy auto-allows reads *inside* the trusted workspace,
+but plans live in `~/.claude/plans` — outside it. Since agy 1.1.3 a headless (`-p`) run
+cannot prompt for permission, so it **soft-denies** the read, emits **zero bytes, and still
+exits 0**. `~/.gemini/antigravity-cli/settings.json` therefore needs:
+
+```json
+"permissions": { "allow": ["read_file(/Users/<your-username>/.claude/plans)"] }
+```
+
+Both agy scripts now treat empty output as a hard failure (exit 2) and print agy's stderr,
+which names the exact allow-rule required — an empty run can never read as "reviewed, no
+findings". A tool other than `read_file` (e.g. `command`) is still soft-denied by design;
+that's a loud failure to re-run, **not** something to fix by granting `command`, which would
+break the read-only guarantee below.
 
 Guardrails (same model as the diff review and issue #81):
 - **Read-only:** `agy-plan-review.sh` runs `agy --sandbox` (set `AGY_REVIEW_SANDBOX=0` for codebase access); `codex-plan-review.sh` always runs `codex exec --sandbox read-only`, which permits codebase reads while blocking all writes — no toggle needed.

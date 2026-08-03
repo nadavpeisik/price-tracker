@@ -14,7 +14,7 @@
 #
 set -euo pipefail
 
-MODEL="${CODEX_REVIEW_MODEL:-}"                    # shared with codex-review.sh; empty = Codex's configured default
+MODEL="${CODEX_REVIEW_MODEL-gpt-5.6-sol}"          # shared with codex-review.sh; pinned, set to "" for Codex's own default
 REASONING="${CODEX_REVIEW_REASONING_EFFORT:-high}" # shared with codex-review.sh
 TIMEOUT="${CODEX_REVIEW_TIMEOUT:-240s}"            # shared with codex-review.sh
 # Falls back to AGY_PLAN_DIR if set — both tools read the same plan directory by
@@ -47,8 +47,9 @@ our custom prompt, not Codex's native review skill, which only applies to
 `codex exec review`'s git-diff mode), ending with a 'VERDICT:' line.
 
 Environment:
-  CODEX_REVIEW_MODEL  Model override passed as `-m <model>` (default: empty — use
-                      Codex's configured default). Shared with codex-review.sh.
+  CODEX_REVIEW_MODEL  Model passed as `-m <model>` (default: gpt-5.6-sol — pinned so
+                      reviews don't drift with ~/.codex/config.toml). Set to the empty
+                      string for Codex's own default. Shared with codex-review.sh.
   CODEX_REVIEW_REASONING_EFFORT
                       Passed as `-c model_reasoning_effort="<value>"` (default:
                       high). Shared with codex-review.sh.
