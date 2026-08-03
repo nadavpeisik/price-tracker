@@ -58,7 +58,7 @@ Both scripts get their diff from the same shared helper, `scripts/get-review-dif
 - **`agy-review.sh`** wraps the Antigravity CLI (`agy -p`), default model **Gemini 3.6 Flash (High)** (`AGY_REVIEW_MODEL`, switch to `Gemini 3.1 Pro (High)` off the free tier).
 - **`codex-review.sh`** wraps plain `codex exec --sandbox read-only -`, model pinned to **gpt-5.6-sol** (`CODEX_REVIEW_MODEL`, set to the empty string to inherit Codex CLI's own default), reasoning effort **high** by default (`CODEX_REVIEW_REASONING_EFFORT`). Both model and effort are pinned in-script so review quality doesn't drift when `~/.codex/config.toml` is retuned for interactive use.
 
-Both produce findings grouped **HIGH / MEDIUM / LOW**, ending with `VERDICT:`. Both preserve Gemini-bot review quality locally after the GitHub `gemini-code-assist` bot sunsets (2026-07-17), and add a second, independent model's perspective per issue #81's "second opinion" role. Run either script with `--help` for the full environment-variable reference. On a quota/rate-limit, either script prints `REVIEW FAILED` to stderr (exit 2) — never mistake this for a clean review.
+Both produce findings grouped **HIGH / MEDIUM / LOW**, ending with `VERDICT:`. Two independent models fill issue #81's "second opinion" role. Run either script with `--help` for the full environment-variable reference. On failure — quota/rate-limit, or agy returning no output — either script prints `REVIEW FAILED` to stderr (exit 2); never mistake that for a clean review.
 
 Guardrails (per issue #81's coordination model):
 - **Read-only:** `agy-review.sh` runs `agy --sandbox`; `codex-review.sh` runs `codex exec --sandbox read-only`. Neither can edit/commit/push — only review. **One owner per branch:** Claude implements, Gemini AND Codex critique.
@@ -93,8 +93,12 @@ cannot prompt for permission, so it **soft-denies** the read, emits **zero bytes
 exits 0**. `~/.gemini/antigravity-cli/settings.json` therefore needs:
 
 ```json
-"permissions": { "allow": ["read_file(/Users/<your-username>/.claude/plans)"] }
+{
+  "permissions": { "allow": ["read_file(/Users/<your-username>/.claude/plans)"] }
+}
 ```
+
+Merge the `permissions` key into the existing root object — don't replace the file.
 
 Both agy scripts now treat empty output as a hard failure (exit 2) and print agy's stderr,
 which names the exact allow-rule required — an empty run can never read as "reviewed, no

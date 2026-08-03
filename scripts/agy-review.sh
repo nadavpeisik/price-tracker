@@ -6,9 +6,9 @@
 # findings to stdout. Meant to be run on-demand from the pre-push workflow (by Claude
 # Code or by hand). It NEVER edits, stages, commits, or pushes — it only reviews.
 #
-# Why this exists: the Gemini code-assist GitHub bot sunsets 2026-07-17. Antigravity's
-# `agy` keeps the same Gemini model family available locally, so we can get that review
-# quality *before* the diff ever reaches GitHub.
+# Why this exists: the Gemini code-assist GitHub bot is gone (sunset 2026-07-17).
+# Antigravity's `agy` keeps the same Gemini model family available locally, so we can get
+# that review quality *before* the diff ever reaches GitHub.
 #
 set -euo pipefail
 
@@ -56,7 +56,8 @@ Environment:
 Exit codes:
   0    review produced (or nothing to review)
   1    usage / environment error
-  2    review FAILED (agy error or quota/rate-limit) — this is NOT a clean review
+  2    review FAILED (agy error, quota/rate-limit, oversized prompt, or agy
+       returning no output) — this is NOT a clean review
   130  aborted by the user (Ctrl+C)
 EOF
 }
@@ -175,6 +176,14 @@ before="$(snapshot_state)"
 # ${#PROMPT}: the latter counts characters, and a diff with multi-byte content (Hebrew
 # shop pages, box-drawing chars) would undercount and slip past this guard.
 PROMPT_MAX_BYTES="${AGY_REVIEW_MAX_PROMPT_BYTES:-768000}" # 750 KiB, leaving argv+env headroom
+# A non-numeric override would make `[ -gt ]` error out, and a failing test inside `if`
+# just skips the branch — the guard would silently not run. Reject it loudly instead.
+case "$PROMPT_MAX_BYTES" in
+  '' | *[!0-9]*)
+    echo "error: AGY_REVIEW_MAX_PROMPT_BYTES must be a positive integer (got: $PROMPT_MAX_BYTES)" >&2
+    exit 1
+    ;;
+esac
 prompt_bytes="$(printf '%s' "$PROMPT" | wc -c | tr -cd '0-9')"
 if [ "$prompt_bytes" -gt "$PROMPT_MAX_BYTES" ]; then
   {
