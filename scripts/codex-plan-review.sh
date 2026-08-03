@@ -14,7 +14,7 @@
 #
 set -euo pipefail
 
-MODEL="${CODEX_REVIEW_MODEL:-}"                    # shared with codex-review.sh; empty = Codex's configured default
+MODEL="${CODEX_REVIEW_MODEL-gpt-5.6-sol}"          # shared with codex-review.sh; pinned, set to "" for Codex's own default
 REASONING="${CODEX_REVIEW_REASONING_EFFORT:-high}" # shared with codex-review.sh
 TIMEOUT="${CODEX_REVIEW_TIMEOUT:-240s}"            # shared with codex-review.sh
 # Falls back to AGY_PLAN_DIR if set — both tools read the same plan directory by
@@ -47,8 +47,9 @@ our custom prompt, not Codex's native review skill, which only applies to
 `codex exec review`'s git-diff mode), ending with a 'VERDICT:' line.
 
 Environment:
-  CODEX_REVIEW_MODEL  Model override passed as `-m <model>` (default: empty — use
-                      Codex's configured default). Shared with codex-review.sh.
+  CODEX_REVIEW_MODEL  Model passed as `-m <model>` (default: gpt-5.6-sol — pinned so
+                      reviews don't drift with ~/.codex/config.toml). Set to the empty
+                      string for Codex's own default. Shared with codex-review.sh.
   CODEX_REVIEW_REASONING_EFFORT
                       Passed as `-c model_reasoning_effort="<value>"` (default:
                       high). Shared with codex-review.sh.
@@ -69,7 +70,7 @@ No sandbox toggle is offered.
 Exit codes:
   0    review produced (or nothing to review)
   1    usage / environment error
-  2    review FAILED (codex error, timeout, or quota/rate-limit) — this is NOT a
+  2    review FAILED (codex error, timeout, quota/rate-limit, or no output) — this is NOT a
        plan review
   130  aborted by the user (Ctrl+C)
 EOF
@@ -296,6 +297,22 @@ if [ "$before" != "$after" ]; then
     echo "Inspect with 'git status' / 'git diff' and do NOT act on this until the cause"
     echo "is confirmed: this is NOT a valid review."
     echo "================================================================"
+  } >&2
+  exit 2
+fi
+
+# --- empty output is a FAILURE, never a clean review -------------------------
+# No known Codex failure mode produces this (unlike agy, which soft-denies tools in
+# headless mode), but the invariant is the same for every reviewer: a header with no
+# findings under it must never be readable as "reviewed, found nothing".
+if [ -z "$(printf '%s' "$OUTPUT" | tr -d '[:space:]')" ]; then
+  {
+    echo "============== PLAN REVIEW FAILED (no output) =============="
+    echo "codex exited $status but produced no review text."
+    echo "--- stderr ---"
+    printf '%s\n' "$ERR"
+    echo "============================================================"
+    echo "This is NOT a plan review — re-run before trusting it."
   } >&2
   exit 2
 fi

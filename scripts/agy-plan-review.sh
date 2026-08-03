@@ -9,12 +9,12 @@
 # approval. It NEVER edits, stages, commits, or pushes — it only reviews.
 #
 # Why this exists: catching a flawed approach at the plan stage is far cheaper than catching
-# it in code review. The Gemini code-assist GitHub bot sunsets 2026-07-17; Antigravity's `agy`
-# keeps that review quality available locally.
+# it in code review. The Gemini code-assist GitHub bot is gone (sunset 2026-07-17);
+# Antigravity's `agy` keeps that review quality available locally.
 #
 set -euo pipefail
 
-MODEL="${AGY_REVIEW_MODEL:-Gemini 3.5 Flash (High)}"
+MODEL="${AGY_REVIEW_MODEL:-Gemini 3.6 Flash (High)}"
 TIMEOUT="${AGY_REVIEW_TIMEOUT:-240s}"
 SANDBOX="${AGY_REVIEW_SANDBOX:-1}" # sandbox ON unless explicitly "0" (fail-safe); 0 = allow agy command/file access
 PLAN_DIR="${AGY_PLAN_DIR:-$HOME/.claude/plans}"
@@ -35,7 +35,7 @@ Usage:
   scripts/agy-plan-review.sh -h | --help   Show this help
 
 Environment:
-  AGY_REVIEW_MODEL    Model (default: "Gemini 3.5 Flash (High)"; switch to
+  AGY_REVIEW_MODEL    Model (default: "Gemini 3.6 Flash (High)"; switch to
                       "Gemini 3.1 Pro (High)" when off the free tier). Shared with
                       agy-review.sh so both tools use one set of dials.
   AGY_REVIEW_TIMEOUT  agy --print-timeout value (default: 240s).
@@ -45,13 +45,21 @@ Environment:
                       sandbox). Setting 0 lets agy read the codebase for extra context — more
                       useful here than for a diff review, since a plan is abstract and the
                       surrounding code sharpens the critique.
+  AGY_REVIEW_MAX_PROMPT_BYTES
+                      Hard ceiling on the prompt (default: 768000 = 750 KiB). The
+                      prompt is passed in argv, which the OS bounds by ARG_MAX (1MB
+                      on macOS, shared with the environment; Linux additionally caps
+                      a single argument near 128 KiB). Must be a positive integer of
+                      at most 18 digits. Over the ceiling the script exits 2 before
+                      calling agy.
   AGY_PLAN_DIR        Directory scanned for the newest plan when no file is given
                       (default: ~/.claude/plans).
 
 Exit codes:
   0    review produced (or nothing to review)
   1    usage / environment error
-  2    review FAILED (agy error or quota/rate-limit) — this is NOT a clean review
+  2    review FAILED (agy error, quota/rate-limit, oversized prompt, or agy
+       returning no output) — this is NOT a clean review
   130  aborted by the user (Ctrl+C)
 EOF
 }
@@ -153,7 +161,7 @@ PROMPT="$INSTRUCTIONS
 === IMPLEMENTATION PLAN (source: $PLAN_DESC) ===
 $PLAN"
 
-# --- run the review (read-only; prompt via stdin to avoid ARG_MAX limits) -----
+# --- run the review (read-only; prompt via argv — see PROMPT_MAX_BYTES below) -
 errfile="$(mktemp)"
 trap 'rm -f "$errfile"' EXIT
 
@@ -165,15 +173,51 @@ trap 'rm -f "$errfile"' EXIT
 # wouldn't change) is still caught.
 before="$(git status --porcelain -uno && git diff)"
 
+# Hard ceiling on the prompt. agy 1.1.9 no longer reads the prompt from stdin (the old
+# `-p -` form now sends the literal string "-"), so it goes in argv — which is bounded by
+# ARG_MAX (1MB on macOS, shared with the environment). Measured with `wc -c`, NOT
+# ${#PROMPT}: the latter counts characters, so a plan with multi-byte content would
+# undercount and slip past this guard. Plans run far smaller than diffs (largest to date
+# ~70KB), so this should never fire here — it stays for parity with agy-review.sh.
+PROMPT_MAX_BYTES="${AGY_REVIEW_MAX_PROMPT_BYTES:-768000}" # 750 KiB, leaving argv+env headroom
+# A non-numeric override would make `[ -gt ]` error out, and a failing test inside `if`
+# just skips the branch — the guard would silently not run. Reject it loudly instead.
+# 19+ digits can exceed the signed 64-bit range `[` compares in, and 0 contradicts the
+# "positive integer" contract below. Both are rejected up front rather than left to the
+# `-gt` test: an erroring test inside `if` reads as false, silently skipping the guard.
+prompt_max_invalid=0
+case "$PROMPT_MAX_BYTES" in
+  '' | *[!0-9]*) prompt_max_invalid=1 ;;
+esac
+if [ "$prompt_max_invalid" -eq 0 ] && { [ "${#PROMPT_MAX_BYTES}" -gt 18 ] || [ "$PROMPT_MAX_BYTES" -eq 0 ]; }; then
+  prompt_max_invalid=1
+fi
+if [ "$prompt_max_invalid" -eq 1 ]; then
+  echo "error: AGY_REVIEW_MAX_PROMPT_BYTES must be a positive integer of at most 18 digits (got: $PROMPT_MAX_BYTES)" >&2
+  exit 1
+fi
+prompt_bytes="$(printf '%s' "$PROMPT" | wc -c | tr -cd '0-9')"
+if [ "$prompt_bytes" -gt "$PROMPT_MAX_BYTES" ]; then
+  {
+    echo "Prompt is ${prompt_bytes} bytes, over the ${PROMPT_MAX_BYTES}-byte argv limit."
+    echo "Split the plan, or trim inlined code/log dumps out of it."
+  } >&2
+  exit 2
+fi
+
 # Build the agy args once; --sandbox is conditionally prepended (read-only by default).
 # The array is never empty, so "${agy_args[@]}" is safe under set -u on bash 3.2.
-agy_args=(--model "$MODEL" --print-timeout "$TIMEOUT" -p -)
+# -p="$PROMPT" (bound form): agy's Go stdlib flag parser handles `-p "$PROMPT"` with a
+# leading-dash prompt fine, but the bound form stays correct if agy ever moves to a
+# parser that stops at unknown flags. --disable-slash-commands stops agy 1.1.9's print-
+# mode slash/skill expansion from firing on command-like text inside the reviewed plan.
+agy_args=(--model "$MODEL" --print-timeout "$TIMEOUT" --disable-slash-commands -p="$PROMPT")
 if [ "$SANDBOX" != "0" ]; then
   agy_args=(--sandbox "${agy_args[@]}")
 fi
 
 set +e
-OUTPUT="$(printf '%s' "$PROMPT" | agy "${agy_args[@]}" 2>"$errfile")"
+OUTPUT="$(agy "${agy_args[@]}" 2>"$errfile")"
 status=$?
 set -e
 ERR="$(cat "$errfile")"
@@ -184,6 +228,27 @@ after="$(git status --porcelain -uno && git diff)"
 if [ "$status" -eq 130 ]; then
   echo "Review aborted by user." >&2
   exit 130
+fi
+
+# --- argv overflow (E2BIG) — a size problem, never a quota problem ------------
+# The preflight guard above should catch this first, but argv is also bounded by the
+# environment size and by per-arg limits that differ across platforms (Linux caps a
+# single argument near 128KiB), so exec can still fail here. Matched on stderr rather
+# than the exit status: a bare 126 also means "permission denied", which would get the
+# wrong advice. Checked BEFORE the quota branch so the misleading "retry later" hint
+# below never fires for an overflow, where retrying is guaranteed to fail identically.
+if printf '%s' "$ERR" | grep -qi 'argument list too long'; then
+  {
+    echo "============== REVIEW FAILED (prompt too large) =============="
+    echo "agy never started: the prompt exceeded the OS argv limit (E2BIG)."
+    echo "agy exit status: $status   prompt bytes: $prompt_bytes"
+    echo "--- stderr ---"
+    printf '%s\n' "$ERR"
+    echo "============================================================="
+    echo "This is NOT a plan review, and retrying will NOT help."
+    echo "Split the plan, or trim inlined code/log dumps out of it."
+  } >&2
+  exit 2
 fi
 
 # --- detect quota / auth / hard errors — never mistake these for a review ----
@@ -227,6 +292,30 @@ if [ "$before" != "$after" ]; then
 fi
 
 # --- emit the review ---------------------------------------------------------
+# --- empty output is a FAILURE, never a clean review -------------------------
+# agy >= 1.1.3 soft-denies any tool needing confirmation in headless mode (it cannot
+# prompt), and when that happens it emits ZERO bytes on stdout and still exits 0 — the
+# reason lands on stderr, which a status-0 run would otherwise discard. Without this
+# guard the script prints its header and nothing else, which reads as "reviewed, found
+# nothing". This bit plan reviews specifically: plans live outside the workspace, so
+# reading one needs read_file(~/.claude/plans) in ~/.gemini/antigravity-cli/settings.json
+# (workspace files are auto-allowed). agy's stderr names the exact rule — surface it.
+if [ -z "$(printf '%s' "$OUTPUT" | tr -d '[:space:]')" ]; then
+  {
+    echo "============== PLAN REVIEW FAILED (no output) =============="
+    echo "agy exited $status but produced no review text."
+    echo "--- stderr ---"
+    printf '%s\n' "$ERR"
+    echo "============================================================"
+    echo "This is NOT a plan review. If stderr names an auto-denied read_file OUTSIDE the"
+    echo "workspace (plans live in ~/.claude/plans), add that read_file rule to"
+    echo "permissions.allow in ~/.gemini/antigravity-cli/settings.json. Never grant"
+    echo "command(...) or write_file(...) to silence this — a reviewer that can run commands"
+    echo "or edit files is no longer read-only. Any other denied tool: just re-run."
+  } >&2
+  exit 2
+fi
+
 echo "# Gemini plan review via agy — model: $MODEL — source: $PLAN_DESC"
 echo
 printf '%s\n' "$OUTPUT"
