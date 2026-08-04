@@ -13,6 +13,7 @@ import com.np.pricehunt.backend.dto.TrackedItemRefreshView;
 import com.np.pricehunt.backend.observability.JobRunRecorder;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
 import com.np.pricehunt.backend.service.ProductTrackingService;
+import com.np.pricehunt.backend.validator.UrlValidator;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -37,6 +38,9 @@ class PriceCheckSchedulerTest {
     @Mock
     private JobRunRecorder jobRunRecorder;
 
+    @Mock
+    private UrlValidator urlValidator;
+
     private PriceCheckScheduler scheduler;
 
     @BeforeEach
@@ -45,7 +49,8 @@ class PriceCheckSchedulerTest {
                 trackingService,
                 trackedItemRepository,
                 jobRunRecorder,
-                new PriceSchedulerProperties(FIXED_DELAY, Duration.ofMinutes(1)));
+                new PriceSchedulerProperties(FIXED_DELAY, Duration.ofMinutes(1)),
+                urlValidator);
         when(jobRunRecorder.start(PriceCheckScheduler.JOB_NAME)).thenReturn(RUN_ID);
     }
 
@@ -111,6 +116,30 @@ class PriceCheckSchedulerTest {
 
         verify(trackingService).scheduledRefresh(1L);
         verify(jobRunRecorder).complete(eq(RUN_ID), eq(JobStatus.SUCCESS), eq(1), eq(1), eq(0), isNull());
+    }
+
+    @Test
+    void refreshAll_skipsBlocklistedItems_notCountedAsFailed() {
+        Instant old = Instant.now().minusSeconds(60 * 60 * 24);
+        List<TrackedItemRefreshView> items = List.of(
+                new TrackedItemRefreshView(1L, "https://ok.com/1", old),
+                new TrackedItemRefreshView(2L, "https://www.amazon.com/2", old),
+                new TrackedItemRefreshView(3L, "https://ok.com/3", old));
+        when(trackedItemRepository.findStaleItems(any(Instant.class))).thenReturn(items);
+        // Explicit per-URL stubs (no lenient): every call the loop makes matches a stub, and all are used.
+        when(urlValidator.isUnsupportedHost("https://ok.com/1")).thenReturn(false);
+        when(urlValidator.isUnsupportedHost("https://www.amazon.com/2")).thenReturn(true);
+        when(urlValidator.isUnsupportedHost("https://ok.com/3")).thenReturn(false);
+
+        scheduler.refreshAll();
+
+        // Blocklisted item is never refreshed (no request sent) and does NOT count as processed/failed.
+        verify(trackingService).scheduledRefresh(1L);
+        verify(trackingService).scheduledRefresh(3L);
+        verify(trackingService, never()).scheduledRefresh(2L);
+        verify(jobRunRecorder, never()).recordItem(anyLong(), eq("https://www.amazon.com/2"), any(), anyLong(), any());
+        // processed = 2 (only the non-blocklisted items), 0 failed.
+        verify(jobRunRecorder).complete(eq(RUN_ID), eq(JobStatus.SUCCESS), eq(2), eq(2), eq(0), isNull());
     }
 
     @Test

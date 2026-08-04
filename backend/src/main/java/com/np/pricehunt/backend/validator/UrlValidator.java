@@ -19,15 +19,13 @@ import org.springframework.web.server.ResponseStatusException;
 /**
  * Validates user-submitted / stored URLs before they reach the scraper.
  *
- * <p>Two entry points, deliberately split (issue #139):
- *
- * <ul>
- *   <li>{@link #validate(String)} — <b>user input</b> (initial track): scheme + parser-differential
- *       string checks + the SSRF/internal-host check + the UX "unsupported sites" blocklist.
- *   <li>{@link #validateForScrape(String)} — <b>pre-scrape chokepoint</b> (refresh / scheduler): the
- *       same <em>except</em> the UX blocklist, so a legacy stored row for a since-blocklisted host (e.g.
- *       {@code amazon.com}) keeps refreshing while internal/obfuscated stored URLs are still rejected.
- * </ul>
+ * <p>{@link #validate(String)} is the single gate for <b>every</b> path that reaches the scraper (new
+ * track, manual refresh, scheduler): parser-differential string checks + the SSRF/internal-host check +
+ * the operational unsupported-site blocklist. The blocklist is a <b>safety control</b> — it stops us
+ * hammering sites with anti-bot walls that could get our IP flagged — so it is enforced everywhere:
+ * blocklisting a host halts ALL outbound requests to it, including refreshes of already-tracked items.
+ * The scheduler additionally calls {@link #isUnsupportedHost(String)} to skip blocklisted items up front
+ * (a clean skip, not a failed scrape attempt) so they are never even attempted.
  *
  * <p>The SSRF host check ({@link #assertHostAllowed}) resolves the host and rejects any resolved IP in a
  * private / loopback / link-local / CGNAT / ULA / multicast / reserved range or a cloud-metadata
@@ -55,7 +53,11 @@ public class UrlValidator {
         }
     }
 
-    /** User-input path: parser-differential + SSRF checks AND the UX unsupported-site blocklist. */
+    /**
+     * Full validation for every path that reaches the scraper: parser-differential string checks + the
+     * operational unsupported-site blocklist + the SSRF/internal-host check. Throws
+     * {@link ResponseStatusException} on any rejection.
+     */
     public void validate(String url) {
         HostContext ctx = validateCommon(url);
         // Cheap regex blocklist BEFORE the DNS-based SSRF check, so a blocklisted host 400s without
@@ -64,10 +66,22 @@ public class UrlValidator {
         assertHostAllowed(ctx.bare());
     }
 
-    /** Pre-scrape chokepoint (refresh / scheduler): parser-differential + SSRF checks only. */
-    public void validateForScrape(String url) {
-        HostContext ctx = validateCommon(url);
-        assertHostAllowed(ctx.bare());
+    /**
+     * Non-throwing predicate: is {@code url}'s host on the operational unsupported-site blocklist? The
+     * scheduler uses this to skip blocklisted items up front (a clean skip, not a FAILED scrape attempt),
+     * so we never send them a request. Parses defensively — an unparseable / host-less URL returns
+     * {@code false} and flows on to full {@link #validate}, which will reject it there.
+     */
+    public boolean isUnsupportedHost(String url) {
+        if (!unsupportedSitesEnabled || url == null) {
+            return false;
+        }
+        try {
+            String host = new URI(url).getHost();
+            return host != null && matchesBlocklist(host.toLowerCase(Locale.ROOT));
+        } catch (URISyntaxException e) {
+            return false;
+        }
     }
 
     // The bracket-stripped host plus its lowercase form, produced once by validateCommon.
@@ -154,15 +168,24 @@ public class UrlValidator {
     }
 
     private void rejectUnsupportedSites(String host) {
+        if (matchesBlocklist(host)) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "URLs from " + host + " are not currently supported");
+        }
+    }
+
+    // Shared by rejectUnsupportedSites (throwing, in validate) and isUnsupportedHost (predicate, for the
+    // scheduler). Honors the enable flag so a disabled blocklist matches nothing.
+    private boolean matchesBlocklist(String hostLc) {
         if (!unsupportedSitesEnabled) {
-            return;
+            return false;
         }
         for (Pattern pattern : blockedHostPatterns) {
-            if (pattern.matcher(host).find()) {
-                throw new ResponseStatusException(
-                        HttpStatus.BAD_REQUEST, "URLs from " + host + " are not currently supported");
+            if (pattern.matcher(hostLc).find()) {
+                return true;
             }
         }
+        return false;
     }
 
     // Resolve the host and reject if ANY resolved IP is internal — defeats split public/private A-records.

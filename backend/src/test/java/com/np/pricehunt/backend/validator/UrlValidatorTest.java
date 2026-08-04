@@ -372,28 +372,51 @@ class UrlValidatorTest {
     }
 
     @Test
-    void nullOrBlankUrl_bothEntryPoints_return400() {
+    void nullOrBlankUrl_return400() {
         UrlValidator v = validatorWith(FAIL_IF_CALLED);
         for (String bad : new String[] {null, "", "   "}) {
             assertThatThrownBy(() -> v.validate(bad)).isInstanceOf(ResponseStatusException.class);
-            assertThatThrownBy(() -> v.validateForScrape(bad)).isInstanceOf(ResponseStatusException.class);
         }
     }
 
+    // --- isUnsupportedHost predicate (the scheduler's pre-skip; DNS-free, non-throwing) ---
+
     @Test
-    void validateForScrape_skipsUnsupportedSiteBlocklist() {
-        // amazon.com is blocklisted for user input, but a legacy stored row must still refresh.
-        UrlValidator v = validatorWith(PUBLIC, AMAZON_PATTERN);
-        assertThatThrownBy(() -> v.validate("https://www.amazon.com/dp/x")).isInstanceOf(ResponseStatusException.class);
-        assertThatCode(() -> v.validateForScrape("https://www.amazon.com/dp/x")).doesNotThrowAnyException();
+    void isUnsupportedHost_blocklistedHost_true() {
+        UrlValidator v = validatorWith(FAIL_IF_CALLED, AMAZON_PATTERN); // must not resolve — predicate is DNS-free
+        assertThat(v.isUnsupportedHost("https://www.amazon.com/dp/x")).isTrue();
     }
 
     @Test
-    void validateForScrape_stillRejectsInternalHost() {
-        UrlValidator v = validatorWith(resolverReturning(addr("169.254.169.254")), AMAZON_PATTERN);
-        assertThatThrownBy(() -> v.validateForScrape("https://www.amazon.com/dp/x"))
-                .isInstanceOfSatisfying(ResponseStatusException.class, e -> assertThat(e.getStatusCode())
-                        .isEqualTo(HttpStatus.BAD_REQUEST));
+    void isUnsupportedHost_allowedHost_false() {
+        UrlValidator v = validatorWith(FAIL_IF_CALLED, AMAZON_PATTERN);
+        assertThat(v.isUnsupportedHost("https://www.thomann.de/x")).isFalse();
+    }
+
+    @Test
+    void isUnsupportedHost_blocklistDisabled_false() {
+        UrlValidator v = disabledValidatorWith(AMAZON_PATTERN);
+        assertThat(v.isUnsupportedHost("https://www.amazon.com/dp/x")).isFalse();
+    }
+
+    @Test
+    void isUnsupportedHost_malformedOrNullUrl_false() {
+        UrlValidator v = validatorWith(FAIL_IF_CALLED, AMAZON_PATTERN);
+        assertThat(v.isUnsupportedHost("not a url")).isFalse();
+        assertThat(v.isUnsupportedHost("mailto:x@amazon.com")).isFalse(); // no host component
+        assertThat(v.isUnsupportedHost(null)).isFalse();
+    }
+
+    @Test
+    void validate_appliesUnsupportedSiteBlocklist_beforeDns() {
+        // The blocklist is now enforced on every path (safety control) — and cheaply, before DNS: the
+        // FAIL_IF_CALLED resolver proves a blocklisted host 400s without a lookup.
+        UrlValidator v = validatorWith(FAIL_IF_CALLED, AMAZON_PATTERN);
+        assertThatThrownBy(() -> v.validate("https://www.amazon.com/dp/x"))
+                .isInstanceOfSatisfying(ResponseStatusException.class, e -> {
+                    assertThat(e.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(e.getReason()).contains("not currently supported");
+                });
     }
 
     // --- helpers ---

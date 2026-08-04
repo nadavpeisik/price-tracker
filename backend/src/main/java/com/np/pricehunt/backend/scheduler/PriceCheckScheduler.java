@@ -8,6 +8,7 @@ import com.np.pricehunt.backend.repository.TrackedItemRepository;
 import com.np.pricehunt.backend.service.ProductTrackingService;
 import com.np.pricehunt.backend.util.Throwables;
 import com.np.pricehunt.backend.util.Timing;
+import com.np.pricehunt.backend.validator.UrlValidator;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -30,6 +31,7 @@ public class PriceCheckScheduler {
     private final TrackedItemRepository trackedItemRepository;
     private final JobRunRecorder jobRunRecorder;
     private final PriceSchedulerProperties schedulerProperties;
+    private final UrlValidator urlValidator;
 
     // Placeholders share PriceSchedulerProperties' default constants so the @Scheduled cadence and
     // the bound fixedDelay (reused as the stale cutoff below) can never resolve to different defaults.
@@ -50,12 +52,22 @@ public class PriceCheckScheduler {
 
             int success = 0;
             int failed = 0;
+            int skipped = 0;
             Exception loopException = null;
             try {
                 Instant cutoff = Instant.now().minus(schedulerProperties.fixedDelay());
-                List<TrackedItemRefreshView> items = trackedItemRepository.findStaleItems(cutoff);
-                log.info("Scheduled refresh starting for {} stale items", items.size());
-                for (TrackedItemRefreshView item : items) {
+                List<TrackedItemRefreshView> staleItems = trackedItemRepository.findStaleItems(cutoff);
+                log.info("Scheduled refresh starting for {} stale items", staleItems.size());
+                for (TrackedItemRefreshView item : staleItems) {
+                    // Skip blocklisted hosts (anti-bot safety): never send them a request, and don't count
+                    // them as processed/FAILED. Cheap, DNS-free host match. These items never update
+                    // lastChecked, so they recur every run — hence a bounded INFO summary (below) with the
+                    // per-URL detail at DEBUG, rather than a per-item INFO line that would spam every run.
+                    if (urlValidator.isUnsupportedHost(item.url())) {
+                        skipped++;
+                        log.debug("Skipping blocklisted item — no request sent: {}", item.url());
+                        continue;
+                    }
                     long startNanos = System.nanoTime();
                     JobStatus itemStatus;
                     String itemError = null;
@@ -80,6 +92,9 @@ public class PriceCheckScheduler {
                     } catch (Exception e) {
                         log.warn("Failed to record item for url={}: {}", item.url(), e.getMessage());
                     }
+                }
+                if (skipped > 0) {
+                    log.info("Scheduled refresh skipped {} blocklisted item(s) — no request sent", skipped);
                 }
                 log.info("Scheduled refresh done: {} success, {} failed", success, failed);
             } catch (Exception e) {

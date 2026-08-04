@@ -73,8 +73,14 @@ public class ProductTrackingService {
         if (request == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Request body is required");
         }
-        // Full user-input validation (SSRF + parser-differential + UX blocklist) BEFORE storing a row,
-        // so a bad URL 400s without persisting a junk TrackedItem.
+        // Cheap existence check BEFORE the DNS-based validation, so a request for a non-existent product
+        // 404s without consuming a bounded DNS-resolver slot or paying resolution latency (the txn below
+        // re-checks under the managed entity).
+        if (!productRepository.existsById(productId)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found");
+        }
+        // Full validation (blocklist + SSRF + parser-differential) BEFORE storing a row, so a bad URL
+        // 400s without persisting a junk TrackedItem.
         urlValidator.validate(request.url());
         ItemSnapshot snapshot = transactionTemplate.execute(status -> {
             Product product = productRepository
@@ -184,12 +190,13 @@ public class ProductTrackingService {
     // never held across that I/O. Shop-name resolution is committed before price extraction, so a
     // price failure never loses the name.
     private TrackResponse trackAndPersist(Long itemId, String url, boolean revalidate) {
-        // Step 0 — pre-scrape SSRF chokepoint (refresh / scheduler paths). Rejects an internal /
-        // parser-differential stored URL BEFORE any downstream work (shop-name resolution, scrape,
-        // persistence). Outside any transaction — no DB connection is held across the DNS lookup. The
-        // track path already ran the full validate() before storing the row, so it passes revalidate=false.
+        // Step 0 — pre-scrape validation chokepoint (refresh / scheduler paths). Rejects a blocklisted /
+        // internal / parser-differential stored URL BEFORE any downstream work (shop-name resolution,
+        // scrape, persistence). Outside any transaction — no DB connection is held across the DNS lookup.
+        // The track path already ran validate() before storing the row, so it passes revalidate=false.
+        // (The scheduler pre-skips blocklisted items, so this normally rejects only newly-internal URLs.)
         if (revalidate) {
-            urlValidator.validateForScrape(url);
+            urlValidator.validate(url);
         }
 
         // Step 1 — pre-scrape tx: ensure a name floor (host only fills a blank) and detect whether

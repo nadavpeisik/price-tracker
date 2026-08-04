@@ -2,7 +2,6 @@ package com.np.pricehunt.backend.service;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
@@ -35,10 +34,10 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
 /**
- * Verifies the #139 SSRF chokepoint wiring in {@link ProductTrackingService}: refresh + scheduled paths
- * validate the stored URL via {@code validateForScrape} (SSRF-only, skips the UX blocklist) BEFORE any
- * downstream work, the track path uses the full {@code validate} exactly once (no chokepoint re-check),
- * and a rejection short-circuits before scrape/shop-name/persistence while still consuming the cooldown.
+ * Verifies the #139 validation chokepoint wiring in {@link ProductTrackingService}: refresh + scheduled
+ * paths validate the stored URL via {@code validate} BEFORE any downstream work; the track path checks
+ * product existence, then validates once (no chokepoint re-check); and a rejection short-circuits before
+ * scrape/shop-name/persistence while still consuming the cooldown.
  */
 @ExtendWith(MockitoExtension.class)
 class ProductTrackingServiceSsrfChokepointTest {
@@ -114,58 +113,57 @@ class ProductTrackingServiceSsrfChokepointTest {
     }
 
     @Test
-    void refreshTrackedItem_validatesForScrape_beforeAnyDownstreamWork() {
+    void refreshTrackedItem_validates_beforeAnyDownstreamWork() {
         runCallbacksInline();
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
         when(cooldownLimiter.tryAcquire(1L)).thenReturn(true);
         doThrow(new ResponseStatusException(HttpStatus.BAD_REQUEST, "URL host is not allowed"))
                 .when(urlValidator)
-                .validateForScrape(URL);
+                .validate(URL);
 
         assertThatThrownBy(() -> service.refreshTrackedItem(1L, 1L)).isInstanceOf(ResponseStatusException.class);
 
         // Rejected at the chokepoint → no scrape, no shop-name resolution, no persistence.
-        verify(urlValidator).validateForScrape(URL);
-        verify(urlValidator, never()).validate(anyString());
+        verify(urlValidator).validate(URL);
         verify(scraperClient, never()).scrape(any());
         verify(shopNameResolver, never()).resolve(any(), any());
         verify(priceRecordRepository, never()).save(any());
     }
 
     @Test
-    void refreshTrackedItem_ssrfRejection_stillConsumesCooldown() {
+    void refreshTrackedItem_rejection_stillConsumesCooldown() {
         runCallbacksInline();
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
         when(cooldownLimiter.tryAcquire(1L)).thenReturn(true);
         doThrow(new ResponseStatusException(HttpStatus.BAD_REQUEST, "URL host is not allowed"))
                 .when(urlValidator)
-                .validateForScrape(URL);
+                .validate(URL);
 
         assertThatThrownBy(() -> service.refreshTrackedItem(1L, 1L)).isInstanceOf(ResponseStatusException.class);
 
-        // Intentional ordering: the volatile cooldown is consumed BEFORE the SSRF check, so a blocked
+        // Intentional ordering: the volatile cooldown is consumed BEFORE the chokepoint check, so a blocked
         // refresh still burns the window (locks the ordering against a future reorder).
         verify(cooldownLimiter).tryAcquire(1L);
     }
 
     @Test
-    void scheduledRefresh_validatesForScrape_beforeScrape() {
+    void scheduledRefresh_validates_beforeScrape() {
         runCallbacksInline();
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
         doThrow(new ResponseStatusException(HttpStatus.BAD_REQUEST, "URL host is not allowed"))
                 .when(urlValidator)
-                .validateForScrape(URL);
+                .validate(URL);
 
         assertThatThrownBy(() -> service.scheduledRefresh(1L)).isInstanceOf(ResponseStatusException.class);
 
-        verify(urlValidator).validateForScrape(URL);
-        verify(urlValidator, never()).validate(anyString());
+        verify(urlValidator).validate(URL);
         verify(scraperClient, never()).scrape(any());
     }
 
     @Test
-    void trackUrl_usesValidate_neverValidateForScrape() {
+    void trackUrl_validatesExactlyOnce() {
         runCallbacksInline();
+        when(productRepository.existsById(1L)).thenReturn(true);
         when(productRepository.findById(1L)).thenReturn(Optional.of(product));
         when(trackedItemRepository.findByUrl(URL)).thenReturn(Optional.of(item));
         when(shopNameResolver.resolve(eq(URL), any()))
@@ -177,10 +175,24 @@ class ProductTrackingServiceSsrfChokepointTest {
 
         service.trackUrl(1L, new TrackRequest(URL));
 
-        // Track path validates once with the full validate() before storing; the chokepoint re-check is
-        // skipped (revalidate=false) so there is no second (validateForScrape) lookup.
+        // validate() runs once, before storing the row; the chokepoint re-check is skipped
+        // (revalidate=false) so there is no second lookup on the track path.
         verify(urlValidator).validate(URL);
-        verify(urlValidator, never()).validateForScrape(anyString());
+    }
+
+    @Test
+    void trackUrl_nonexistentProduct_returns404_withoutValidating() {
+        // Qodo #2: the cheap existence check runs BEFORE DNS-based validation, so a bad product id 404s
+        // without consuming a resolver slot.
+        when(productRepository.existsById(999L)).thenReturn(false);
+
+        assertThatThrownBy(() -> service.trackUrl(999L, new TrackRequest(URL)))
+                .isInstanceOfSatisfying(ResponseStatusException.class, e -> org.assertj.core.api.Assertions.assertThat(
+                                e.getStatusCode())
+                        .isEqualTo(HttpStatus.NOT_FOUND));
+
+        verify(urlValidator, never()).validate(any());
+        verify(scraperClient, never()).scrape(any());
     }
 
     @Test
