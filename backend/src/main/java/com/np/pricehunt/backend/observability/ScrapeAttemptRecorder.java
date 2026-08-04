@@ -104,12 +104,13 @@ public class ScrapeAttemptRecorder {
             String detail,
             ScrapeResponse scraped,
             LlmAttribution attribution) {
-        // SECURITY (Phase 1.7 / #139 prerequisite): llmInput is the raw scraped page text. UrlValidator
-        // does not yet block private-IP / cloud-metadata hosts, so until Phase 1.7 SSRF hardening lands a
-        // failed scrape of an internal URL could persist (and dev-export) an internal response body for
-        // the retention window. This is the pre-existing SSRF gap amplified into storage — Phase 1.7
-        // must precede any cloud / multi-user deploy of this audit (the dev export is already
-        // disabled-by-default + dev-profile-gated as a partial mitigation).
+        // SECURITY (Phase 1.7 / #139): llmInput is the raw scraped page text. UrlValidator now resolves
+        // the host and blocks private-IP / cloud-metadata targets at the user-input + pre-scrape
+        // chokepoint (a static internal URL no longer reaches the scraper). This is best-effort
+        // defense-in-depth: the scraper re-resolves DNS and follows redirects, so DNS-rebinding /
+        // redirect-into-internal can still land an internal body here until the authoritative scraper-side
+        // connect-time enforcement lands (filed follow-up) — required before any cloud / multi-user deploy
+        // of this audit (the dev export is already disabled-by-default + dev-profile-gated).
         String llmInput = llmInputResolver.resolve(scraped);
         Instant now = Instant.now(clock);
         ScrapeAttempt attempt = ScrapeAttempt.builder()

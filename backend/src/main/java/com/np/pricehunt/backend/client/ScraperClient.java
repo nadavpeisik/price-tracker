@@ -29,6 +29,13 @@ public class ScraperClient {
                 .build();
     }
 
+    /**
+     * Sends {@code url} to the scraper service. <b>SSRF precondition (#139):</b> callers MUST first run
+     * the URL through {@link com.np.pricehunt.backend.validator.UrlValidator#validate(String)} — this
+     * method performs no host validation. Enforced today at the shared pre-scrape chokepoint in
+     * {@code ProductTrackingService.trackAndPersist} (the sole caller); making the sink self-validating is
+     * a filed follow-up.
+     */
     public ScrapeResponse scrape(String url) {
         String correlationId = MDC.get(CorrelationIdFilter.MDC_KEY);
         return restClient

@@ -103,6 +103,7 @@ class ProductTrackingServiceShopNameTest {
         // Universal: every test runs the gating tx + the lifecycle's execute-based steps.
         when(transactionTemplate.execute(any()))
                 .thenAnswer(inv -> ((TransactionCallback<?>) inv.getArgument(0)).doInTransaction(null));
+        when(productRepository.existsById(1L)).thenReturn(true);
         when(productRepository.findById(1L)).thenReturn(Optional.of(product));
         when(trackedItemRepository.findByUrl(any())).thenReturn(Optional.of(item));
     }
