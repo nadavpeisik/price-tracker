@@ -1,111 +1,277 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+/*
+  PriceHunt theme — ported from design/mockup.html (see design/tokens.md).
+
+  Layering:
+    1. Mockup tokens (--bg, --ink, --good, …) hold the actual values:
+       light in :root, dark overrides in .dark.
+    2. shadcn semantic variables (--background, --card, …) alias onto them,
+       so every shadcn component picks up the palette automatically.
+    3. The @theme inline block registers both sets as Tailwind utilities
+       (bg-surface-2, text-ink-muted, bg-good-soft, font-display, …).
+*/
+
+/* Self-hosted rounded display face (#144) — ui-rounded is Apple-only, so the
+   webfont is primary and ui-rounded only a fallback. License + provenance in
+   public/fonts/README.md. */
+@font-face {
+  font-family: 'Nunito Sans Variable';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 200 1000;
+  src: url('/fonts/nunito-sans-latin-wght-normal.woff2') format('woff2-variations');
+}
+
+@custom-variant dark (&:is(.dark *));
+
 :root {
-  --text: #6b6375;
-  --text-h: #08060d;
-  --bg: #fff;
-  --border: #e5e4e7;
-  --code-bg: #f4f3ec;
-  --accent: #aa3bff;
-  --accent-bg: rgba(170, 59, 255, 0.1);
-  --accent-border: rgba(170, 59, 255, 0.5);
-  --social-bg: rgba(244, 243, 236, 0.5);
-  --shadow:
-    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+  /* ── mockup tokens · light ─────────────────────────────────────────── */
+  --bg: #F1EDE7;
+  --surface: #FFFFFF;
+  --surface-2: #FAF7F2;
+  --line: #E7E0D5;
+  --line-strong: #D8CFC0;
+  --ink: #201D19;
+  --ink-muted: #6C655B;
+  --ink-faint: #98907F;
+  --iris: #5A57D6;
+  --iris-strong: #4A46C7;
+  --iris-soft: #ECEBFB;
+  --good: #0C9B50;
+  --good-soft: #E1F4E9;
+  --good-strong: #0A7E41;
+  --bad: #E23B44;
+  --bad-soft: #FBE6E7;
+  --warn: #C67F09;
+  --warn-soft: #F7EDD6;
+  --glow-1: #8155E6; /* top-left bloom */
+  --glow-2: #D63C93; /* top-right bloom */
+  --glow-3: #2F6FE0; /* bottom-right bloom */
+  --glow-4: #0C9B50; /* bottom-left bloom */
+  --shadow-card: 0 1px 2px rgba(32, 29, 25, 0.04), 0 6px 20px -8px rgba(32, 29, 25, 0.13);
+  --shadow-card-hover: 0 2px 4px rgba(32, 29, 25, 0.05), 0 18px 36px -12px rgba(32, 29, 25, 0.2);
 
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, Consolas, monospace;
+  /* ── shadcn semantic aliases ───────────────────────────────────────── */
+  --background: var(--bg);
+  --foreground: var(--ink);
+  --card: var(--surface);
+  --card-foreground: var(--ink);
+  --popover: var(--surface);
+  --popover-foreground: var(--ink);
+  --primary: var(--iris);
+  --primary-foreground: #ffffff;
+  --secondary: var(--surface-2);
+  --secondary-foreground: var(--ink);
+  --muted: var(--surface-2);
+  --muted-foreground: var(--ink-muted);
+  --accent: var(--iris-soft);
+  --accent-foreground: var(--ink);
+  --destructive: var(--bad);
+  --border: var(--line);
+  --input: var(--line-strong);
+  --ring: var(--iris);
+  --chart-1: #0FA097;
+  --chart-2: #8155E6;
+  --chart-3: #2F6FE0;
+  --chart-4: #D63C93;
+  --chart-5: #C67F09;
+  --radius: 16px;
+  --sidebar: var(--surface-2);
+  --sidebar-foreground: var(--ink);
+  --sidebar-primary: var(--iris);
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: var(--iris-soft);
+  --sidebar-accent-foreground: var(--ink);
+  --sidebar-border: var(--line);
+  --sidebar-ring: var(--iris);
+}
 
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
-  color-scheme: light dark;
-  color: var(--text);
-  background: var(--bg);
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+.dark {
+  /* ── mockup tokens · dark ──────────────────────────────────────────── */
+  --bg: #14120D;
+  --surface: #201C15;
+  --surface-2: #1A1710;
+  --line: #2F2A20;
+  --line-strong: #3B3526;
+  --ink: #F3EFE6;
+  --ink-muted: #A69E8F;
+  --ink-faint: #766F5E;
+  --iris: #908DFF;
+  --iris-strong: #ABA8FF;
+  --iris-soft: #242150;
+  --good: #40CE82;
+  --good-soft: #10331F;
+  --good-strong: #56DC93;
+  --bad: #FF6B6B;
+  --bad-soft: #391C1C;
+  --warn: #ECB44C;
+  --warn-soft: #37280E;
+  --glow-1: #A98BFF;
+  --glow-2: #F063B0;
+  --glow-3: #5D97F2;
+  --glow-4: #40CE82;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px -10px rgba(0, 0, 0, 0.6);
+  --shadow-card-hover: 0 2px 6px rgba(0, 0, 0, 0.35), 0 18px 40px -12px rgba(0, 0, 0, 0.72);
 
-  @media (max-width: 1024px) {
-    font-size: 16px;
+  /* Aliases resolve automatically (they point at the tokens above); only the
+     few with literal values need dark overrides. */
+  --primary-foreground: #1a1849;
+  --chart-1: #2FC6BB;
+  --chart-2: #A98BFF;
+  --chart-3: #5D97F2;
+  --chart-4: #F063B0;
+  --chart-5: #ECB44C;
+  --sidebar-primary-foreground: #1a1849;
+}
+
+@theme inline {
+  /* fonts */
+  --font-display: 'Nunito Sans Variable', ui-rounded, 'SF Pro Rounded', system-ui, sans-serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, system-ui, 'Segoe UI', Roboto, sans-serif;
+  --font-num: ui-monospace, 'SF Mono', Menlo, monospace;
+  --font-heading: var(--font-display);
+
+  /* mockup tokens as utilities (bg-surface-2, text-ink-faint, bg-good-soft, …) */
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+  --color-ink-faint: var(--ink-faint);
+  --color-iris: var(--iris);
+  --color-iris-strong: var(--iris-strong);
+  --color-iris-soft: var(--iris-soft);
+  --color-good: var(--good);
+  --color-good-soft: var(--good-soft);
+  --color-good-strong: var(--good-strong);
+  --color-bad: var(--bad);
+  --color-bad-soft: var(--bad-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+
+  /* card elevation utilities (shadow-card, shadow-card-hover) */
+  --shadow-card: var(--shadow-card);
+  --shadow-card-hover: var(--shadow-card-hover);
+
+  /* shadcn semantic utilities */
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+
+  /* radius scale derived from the mockup's 16px card radius:
+     sm ≈ 10px (buttons/inputs), lg = 16px (cards/list) */
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+@layer components {
+  /* Theme-resolving hook for deterministic shop colors: the six inline CSS
+     vars come from shopColorStyle() (src/lib/shop-colors.ts); this rule
+     picks the light or dark triple. Static class + inline vars — never
+     dynamically built class names (Tailwind's scanner would purge those). */
+  .shop-color {
+    --sc-text: var(--sc-text-l);
+    --sc-bg: var(--sc-bg-l);
+    --sc-dot: var(--sc-dot-l);
+  }
+  .dark .shop-color {
+    --sc-text: var(--sc-text-d);
+    --sc-bg: var(--sc-bg-d);
+    --sc-dot: var(--sc-dot-d);
+  }
+
+  /* Currency-symbol burst particles (src/lib/particles.ts). */
+  .particle {
+    position: fixed;
+    z-index: 60;
+    pointer-events: none;
+    font-weight: 800;
+    will-change: transform, opacity;
+  }
+
+  /* Price-drop celebration row pulse (ProductRow adds .celebrate). */
+  @keyframes ph-pulse-row {
+    0% {
+      box-shadow: inset 0 0 0 0 var(--good);
+    }
+    30% {
+      box-shadow: inset 3px 0 0 0 var(--good);
+      background-color: var(--good-soft);
+    }
+    100% {
+      box-shadow: inset 0 0 0 0 transparent;
+    }
+  }
+  .celebrate > div:first-child {
+    animation: ph-pulse-row 1.4s ease;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .celebrate > div:first-child {
+      animation: none;
+    }
   }
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #16171d;
-    --border: #2e303a;
-    --code-bg: #1f2028;
-    --accent: #c084fc;
-    --accent-bg: rgba(192, 132, 252, 0.15);
-    --accent-border: rgba(192, 132, 252, 0.5);
-    --social-bg: rgba(47, 48, 58, 0.5);
-    --shadow:
-      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
   }
-
-  #social .button-icon {
-    filter: invert(1) brightness(2);
+  html {
+    @apply font-sans;
   }
-}
-
-#root {
-  width: 1126px;
-  max-width: 100%;
-  margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
-  min-height: 100svh;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
-}
-
-body {
-  margin: 0;
-}
-
-h1,
-h2 {
-  font-family: var(--heading);
-  font-weight: 500;
-  color: var(--text-h);
-}
-
-h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
+  body {
+    @apply bg-background text-foreground antialiased;
   }
-}
-h2 {
-  font-size: 24px;
-  line-height: 118%;
-  letter-spacing: -0.24px;
-  margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
+  /* Warm ambient "glow" — the final background (#144): four soft radial
+     blooms behind all content. Colors flip with the theme via the tokens. */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    opacity: 0.55;
+    background:
+      radial-gradient(38vw 38vw at 10% 3%, color-mix(in srgb, var(--glow-1) 26%, transparent), transparent 60%),
+      radial-gradient(34vw 34vw at 93% 2%, color-mix(in srgb, var(--glow-2) 24%, transparent), transparent 60%),
+      radial-gradient(46vw 42vw at 80% 97%, color-mix(in srgb, var(--glow-3) 22%, transparent), transparent 62%),
+      radial-gradient(30vw 30vw at 3% 94%, color-mix(in srgb, var(--glow-4) 16%, transparent), transparent 60%);
   }
-}
-p {
-  margin: 0;
-}
-
-code,
-.counter {
-  font-family: var(--mono);
-  display: inline-flex;
-  border-radius: 4px;
-  color: var(--text-h);
-}
-
-code {
-  font-size: 15px;
-  line-height: 135%;
-  padding: 4px 8px;
-  background: var(--code-bg);
 }
