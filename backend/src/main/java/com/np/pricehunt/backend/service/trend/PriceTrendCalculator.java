@@ -92,14 +92,14 @@ public class PriceTrendCalculator {
         }
 
         LocalDate today = LocalDate.ofInstant(now, ZoneOffset.UTC);
-        Evaluation evaluation = new Evaluation(displayCurrency, rates, carryForwardDays, new NonPositivePriceFlag());
+        ComputationContext context = new ComputationContext(displayCurrency, rates, carryForwardDays);
 
         // Computed once, used for both today's point and the delta's current side.
-        BestOfferCandidate current = bestOfferAsOf(listings, now, null, evaluation);
+        BestOfferCandidate current = bestOfferAsOf(listings, now, null, context);
 
         Instant baselineInstant = now.minus(DELTA_WINDOW_DAYS, ChronoUnit.DAYS);
-        BestOfferCandidate baseline = bestOfferAsOf(
-                listings, baselineInstant, LocalDate.ofInstant(baselineInstant, ZoneOffset.UTC), evaluation);
+        BestOfferCandidate baseline =
+                bestOfferAsOf(listings, baselineInstant, LocalDate.ofInstant(baselineInstant, ZoneOffset.UTC), context);
 
         List<TrendPoint> points = new ArrayList<>();
         BestOfferCandidate latestEmitted = null;
@@ -107,7 +107,7 @@ public class PriceTrendCalculator {
                 listings.stream().map(ListingHistoryCursor::new).toList();
 
         for (LocalDate day = windowStartDay; !day.isAfter(today); day = day.plusDays(1)) {
-            BestOfferCandidate best = day.equals(today) ? current : bestOfferForCompletedDay(cursors, day, evaluation);
+            BestOfferCandidate best = day.equals(today) ? current : bestOfferForCompletedDay(cursors, day, context);
             if (best != null) {
                 points.add(new TrendPoint(
                         day.atStartOfDay(ZoneOffset.UTC).toInstant(),
@@ -117,7 +117,7 @@ public class PriceTrendCalculator {
             }
         }
 
-        if (evaluation.nonPositivePriceFlag().seen) {
+        if (context.nonPositivePriceSeen()) {
             log.warn("Ignored non-positive price record(s) while computing a price trend; check for manual DB edits");
         }
 
@@ -154,13 +154,16 @@ public class PriceTrendCalculator {
      * a non-null one selects historical per-quote floors at that date.
      */
     private BestOfferCandidate bestOfferAsOf(
-            List<ListingWindow> listings, Instant inclusiveCutoff, LocalDate valuationDate, Evaluation evaluation) {
+            List<ListingWindow> listings,
+            Instant inclusiveCutoff,
+            LocalDate valuationDate,
+            ComputationContext context) {
 
         BestOfferCandidate best = null;
         for (ListingWindow listing : listings) {
             TrendRecordView candidate = latestAtOrBefore(listing.records(), inclusiveCutoff);
             best = chooseBetterOffer(
-                    best, toBestOfferCandidate(listing, candidate, inclusiveCutoff, valuationDate, evaluation));
+                    best, toBestOfferCandidate(listing, candidate, inclusiveCutoff, valuationDate, context));
         }
         return best;
     }
@@ -175,7 +178,7 @@ public class PriceTrendCalculator {
      * whole window O(records + days).
      */
     private BestOfferCandidate bestOfferForCompletedDay(
-            List<ListingHistoryCursor> cursors, LocalDate day, Evaluation evaluation) {
+            List<ListingHistoryCursor> cursors, LocalDate day, ComputationContext context) {
 
         Instant exclusiveEnd = day.plusDays(1).atStartOfDay(ZoneOffset.UTC).toInstant();
         BestOfferCandidate best = null;
@@ -183,7 +186,7 @@ public class PriceTrendCalculator {
         for (ListingHistoryCursor cursor : cursors) {
             TrendRecordView candidate = cursor.advanceAndGetLatestBefore(exclusiveEnd);
             best = chooseBetterOffer(
-                    best, toBestOfferCandidate(cursor.listing(), candidate, exclusiveEnd, day, evaluation));
+                    best, toBestOfferCandidate(cursor.listing(), candidate, exclusiveEnd, day, context));
         }
         return best;
     }
@@ -197,31 +200,31 @@ public class PriceTrendCalculator {
             TrendRecordView candidate,
             Instant eligibilityInstant,
             LocalDate valuationDate,
-            Evaluation evaluation) {
+            ComputationContext context) {
 
         if (candidate == null) {
             return null;
         }
         if (candidate.price() != null && candidate.price().signum() <= 0) {
-            evaluation.nonPositivePriceFlag().seen = true;
+            context.markNonPositivePriceSeen();
         }
         if (!TrendEligibility.isEligible(
                 candidate.timestamp(),
                 candidate.availability(),
                 candidate.price(),
                 eligibilityInstant,
-                evaluation.carryForwardDays())) {
+                context.carryForwardDays())) {
             return null;
         }
 
         ConvertedAmount conversion = valuationDate == null
-                ? priceConverter.convert(candidate.price(), candidate.currency(), evaluation.displayCurrency())
+                ? priceConverter.convert(candidate.price(), candidate.currency(), context.displayCurrency())
                 : priceConverter.convert(
                         candidate.price(),
                         candidate.currency(),
-                        evaluation.displayCurrency(),
+                        context.displayCurrency(),
                         valuationDate,
-                        evaluation.rates());
+                        context.rates());
         if (conversion == null) {
             // Unconvertible (no rate that early, unknown currency) — this listing simply doesn't
             // participate; other listings can still supply the day's price.
@@ -267,17 +270,52 @@ public class PriceTrendCalculator {
     }
 
     /**
-     * Everything that stays fixed for one {@link #compute} call: what to convert into, the rates to
-     * convert with, how long a price carries forward, and the flag collecting corrupt-price sightings.
+     * Everything scoped to one {@link #compute} call: the conversion target, the rates to convert with,
+     * how long a price carries forward, and the single piece of state the computation accumulates —
+     * whether any corrupt price was seen.
      *
      * <p>Grouped so the per-listing helpers take the two things that actually vary — which listing, and
-     * which point in time — instead of re-threading four unchanging arguments through every call.
+     * which point in time — instead of re-threading four unchanging arguments through every call. A
+     * fresh instance per call is also what stops the warning leaking between products in a batch.
+     *
+     * <p>A class rather than a record: three of the four fields are fixed configuration, but the
+     * corrupt-price flag is accumulated as the computation runs, and a record would advertise a
+     * value-like immutability this does not have.
      */
-    private record Evaluation(
-            String displayCurrency,
-            HistoricalRateWindow rates,
-            int carryForwardDays,
-            NonPositivePriceFlag nonPositivePriceFlag) {}
+    private static final class ComputationContext {
+
+        private final String displayCurrency;
+        private final HistoricalRateWindow rates;
+        private final int carryForwardDays;
+        private boolean nonPositivePriceSeen;
+
+        ComputationContext(String displayCurrency, HistoricalRateWindow rates, int carryForwardDays) {
+            this.displayCurrency = displayCurrency;
+            this.rates = rates;
+            this.carryForwardDays = carryForwardDays;
+        }
+
+        String displayCurrency() {
+            return displayCurrency;
+        }
+
+        HistoricalRateWindow rates() {
+            return rates;
+        }
+
+        int carryForwardDays() {
+            return carryForwardDays;
+        }
+
+        /** Latched, not counted: one warn per computation, so corrupt rows can't spam the log. */
+        void markNonPositivePriceSeen() {
+            nonPositivePriceSeen = true;
+        }
+
+        boolean nonPositivePriceSeen() {
+            return nonPositivePriceSeen;
+        }
+    }
 
     /**
      * One listing's offer, comparable against the other listings' — a <em>candidate</em> because it is
@@ -329,10 +367,5 @@ public class PriceTrendCalculator {
             }
             return nextUnpassed == 0 ? null : records.get(nextUnpassed - 1);
         }
-    }
-
-    /** One warn per computation instead of one per day — corrupt rows would otherwise spam the log. */
-    private static final class NonPositivePriceFlag {
-        private boolean seen;
     }
 }
