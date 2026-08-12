@@ -190,8 +190,8 @@ class DevDataSeederIdempotencyTest {
         assertThat(allRecords).extracting(PriceRecord::getCurrency).contains("ILS", "USD");
 
         // A sample stamped exactly seven days back — the inclusive baseline boundary.
-        assertThat(allRecords)
-                .anySatisfy(record -> assertThat(record.getTimestamp()).isEqualTo(NOW.minus(Duration.ofDays(7))));
+        assertThat(allRecords).anySatisfy(observation -> assertThat(observation.getTimestamp())
+                .isEqualTo(NOW.minus(Duration.ofDays(7))));
 
         // A product with no listings, and a listing that was never checked. Map to plain values before
         // asserting: AssertJ renders the entity on failure, and @Data's toString would hydrate the lazy
