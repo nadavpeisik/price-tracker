@@ -180,7 +180,7 @@ public class ProductQueryService {
 
         if (listingsWithConvertedPrices.isEmpty()) {
             log.debug(
-                    "No tracked items listingsWithConvertedPrices to {} for product {}",
+                    "No eligible tracked item could be converted to {} for product {}",
                     displayCurrency,
                     product.getId());
             return emptyBestPriceResponse(product, storeCount, availability, mixedCurrencies);

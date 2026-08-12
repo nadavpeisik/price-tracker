@@ -166,8 +166,8 @@ class PriceTrendServiceTest {
 
         when(priceRecordRepository.findTrendRecords(any(), any(), any()))
                 .thenReturn(List.of(
-                        record(10L, "100", ILS, NOW.minus(2, ChronoUnit.DAYS)),
-                        record(20L, "50", "USD", NOW.minus(1, ChronoUnit.DAYS))));
+                        trendRecord(10L, "100", ILS, NOW.minus(2, ChronoUnit.DAYS)),
+                        trendRecord(20L, "50", "USD", NOW.minus(1, ChronoUnit.DAYS))));
         when(rateWindowLoader.load(any(), any(), any())).thenReturn(HistoricalRateWindow.empty());
         when(calculator.compute(any(), any(), any(), anyString(), any(), anyInt()))
                 .thenReturn(ProductTrend.empty());
@@ -200,7 +200,7 @@ class PriceTrendServiceTest {
     void rateWindowIsLoadedForEveryCurrencySeenPlusTheDisplayCurrency() {
         stubSingleProductWithOneItem();
         when(priceRecordRepository.findTrendRecords(any(), any(), any()))
-                .thenReturn(List.of(record(10L, "50", "USD", NOW.minus(1, ChronoUnit.DAYS))));
+                .thenReturn(List.of(trendRecord(10L, "50", "USD", NOW.minus(1, ChronoUnit.DAYS))));
 
         service.getProductTrend(1L, 30, ILS);
 
@@ -214,7 +214,7 @@ class PriceTrendServiceTest {
     void singleCurrencyProduct_asksForNoRatesSoTheLoaderSkipsTheDatabase() {
         stubSingleProductWithOneItem();
         when(priceRecordRepository.findTrendRecords(any(), any(), any()))
-                .thenReturn(List.of(record(10L, "50", ILS, NOW.minus(1, ChronoUnit.DAYS))));
+                .thenReturn(List.of(trendRecord(10L, "50", ILS, NOW.minus(1, ChronoUnit.DAYS))));
 
         service.getProductTrend(1L, 30, ILS);
 
@@ -280,7 +280,7 @@ class PriceTrendServiceTest {
                 .build();
     }
 
-    private static TrendRecordView record(Long itemId, String price, String currency, Instant at) {
+    private static TrendRecordView trendRecord(Long itemId, String price, String currency, Instant at) {
         return new TrendRecordView(itemId, new BigDecimal(price), currency, AvailabilityStatus.AVAILABLE, at);
     }
 }

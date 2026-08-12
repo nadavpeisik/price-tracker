@@ -146,10 +146,10 @@ public class PriceTrendService {
             return Map.of();
         }
         Map<Long, List<TrendRecordView>> byListingId = new HashMap<>();
-        for (TrendRecordView record : priceRecordRepository.findTrendRecords(listingIds, from, to)) {
+        for (TrendRecordView observation : priceRecordRepository.findTrendRecords(listingIds, from, to)) {
             byListingId
-                    .computeIfAbsent(record.trackedItemId(), k -> new ArrayList<>())
-                    .add(record);
+                    .computeIfAbsent(observation.trackedItemId(), k -> new ArrayList<>())
+                    .add(observation);
         }
         return byListingId;
     }
@@ -172,9 +172,9 @@ public class PriceTrendService {
         Set<String> sourceCurrencies = new HashSet<>();
         recordsByListingId
                 .values()
-                .forEach(records -> records.forEach(record -> {
-                    if (record.currency() != null) {
-                        sourceCurrencies.add(record.currency().toUpperCase(Locale.ROOT));
+                .forEach(records -> records.forEach(observation -> {
+                    if (observation.currency() != null) {
+                        sourceCurrencies.add(observation.currency().toUpperCase(Locale.ROOT));
                     }
                 }));
 

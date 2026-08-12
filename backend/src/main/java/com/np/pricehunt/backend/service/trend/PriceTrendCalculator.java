@@ -296,9 +296,9 @@ public class PriceTrendCalculator {
      */
     private static TrendRecordView latestAtOrBefore(List<TrendRecordView> records, Instant cutoff) {
         for (int i = records.size() - 1; i >= 0; i--) {
-            TrendRecordView record = records.get(i);
-            if (!record.timestamp().isAfter(cutoff)) {
-                return record;
+            TrendRecordView observation = records.get(i);
+            if (!observation.timestamp().isAfter(cutoff)) {
+                return observation;
             }
         }
         return null;

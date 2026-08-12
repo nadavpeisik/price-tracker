@@ -337,8 +337,10 @@ class ProductQueryServiceTest {
     }
 
     @Test
-    void getAllProducts_futureDatedRecordDoesNotShadowTheValidOne() {
-        // The cutoff lives in the query, so a clock-skewed row is never the "latest" the row sees.
+    void getAllProducts_readsLatestPriceThroughTheCutoffAwareFinder() {
+        // With a mocked repository this can only verify that the service delegates with `now` as the
+        // cutoff; that the cutoff actually excludes future-dated rows is enforced by the derived query
+        // and covered in PriceRecordRepositoryTest.cutoffAwareFinder_ignoresFutureDatedRecords.
         PriceRecord valid = priceRecord(itemA, "100", "USD");
         stubProductWithItems(List.of(itemA));
         stubLatestPrices(Map.of(itemA, valid));

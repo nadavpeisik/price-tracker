@@ -16,6 +16,7 @@ import com.np.pricehunt.backend.validator.HostResolver;
 import com.np.pricehunt.backend.validator.UrlValidator;
 import java.math.BigDecimal;
 import java.time.Clock;
+import java.time.DayOfWeek;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -25,6 +26,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
@@ -44,6 +46,7 @@ import org.springframework.transaction.annotation.Transactional;
 @DataJpaTest
 @ActiveProfiles({"test", "seed"})
 @Import({DevDataSeeder.class, DevDataSeederIdempotencyTest.FixedClockConfig.class})
+@EnableConfigurationProperties(UrlValidationProperties.class)
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class DevDataSeederIdempotencyTest {
 
@@ -74,6 +77,10 @@ class DevDataSeederIdempotencyTest {
 
     @Autowired
     private ExchangeRateRepository exchangeRateRepository;
+
+    /** The real, bound blocklist config — so this test breaks if the seed.invalid pattern is removed. */
+    @Autowired
+    private UrlValidationProperties urlValidationProperties;
 
     @BeforeEach
     @AfterEach
@@ -130,16 +137,28 @@ class DevDataSeederIdempotencyTest {
 
     @Test
     void preservesRealExchangeRatesAndOnlyFillsGaps() {
+        // Must be a WEEKDAY the seeder would otherwise write: TODAY is Friday 2026-03-20, so −5 lands on
+        // a Sunday, which the seeder skips — the collision would never occur and this would pass even
+        // with the duplicate check removed. −4 is Monday 2026-03-16, squarely inside the seeded set.
+        LocalDate collidingWeekday = TODAY.minusDays(4);
+        assertThat(collidingWeekday.getDayOfWeek()).isEqualTo(DayOfWeek.MONDAY);
+
         ExchangeRate real = exchangeRateRepository.save(ExchangeRate.builder()
                 .quote("USD")
-                .asOf(TODAY.minusDays(5))
+                .asOf(collidingWeekday)
                 .rate(new BigDecimal("9.99999999"))
                 .build());
 
         seeder.run();
 
+        // The real row survives untouched...
         ExchangeRate reloaded = exchangeRateRepository.findById(real.getId()).orElseThrow();
         assertThat(reloaded.getRate()).isEqualByComparingTo("9.99999999");
+        // ...and the seeder added no second row for that (quote, asOf).
+        assertThat(exchangeRateRepository.findAll().stream()
+                        .filter(rate -> "USD".equals(rate.getQuote()) && collidingWeekday.equals(rate.getAsOf()))
+                        .toList())
+                .hasSize(1);
     }
 
     @Test
@@ -154,8 +173,8 @@ class DevDataSeederIdempotencyTest {
                 .orElseThrow();
         List<PriceRecord> history = priceRecordRepository.findByTrackedItemOrderByTimestampDesc(withHistory);
 
-        assertThat(history)
-                .allSatisfy(record -> assertThat(record.getTimestamp()).isBefore(NOW));
+        assertThat(history).allSatisfy(observation -> assertThat(observation.getTimestamp())
+                .isBefore(NOW));
         assertThat(history.get(history.size() - 1).getTimestamp()).isBefore(NOW.minus(Duration.ofDays(1)));
         assertThat(withHistory.getLastChecked()).isEqualTo(history.get(0).getTimestamp());
     }
@@ -199,14 +218,10 @@ class DevDataSeederIdempotencyTest {
     @Test
     void everySeededUrlIsBlocklistedSoTheSchedulerSkipsIt() {
         seeder.run();
-        UrlValidator validator = new UrlValidator(
-                new UrlValidationProperties(
-                        true,
-                        List.of("(^|\\.)amazon\\.[a-z]{2,3}(\\.[a-z]{2})?$", "(^|\\.)seed\\.invalid$"),
-                        Duration.ofSeconds(2),
-                        8,
-                        16),
-                mockResolver());
+        // Bind the REAL configured patterns rather than a copy: hardcoding them here would keep this
+        // test green even if someone deleted the seed.invalid entry, while the scheduler quietly began
+        // scraping seeded URLs.
+        UrlValidator validator = new UrlValidator(urlValidationProperties, mockResolver());
 
         assertThat(trackedItemRepository.findAll()).isNotEmpty().allSatisfy(item -> assertThat(
                         validator.isUnsupportedHost(item.getUrl()))

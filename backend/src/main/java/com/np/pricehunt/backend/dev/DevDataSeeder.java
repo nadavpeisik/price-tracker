@@ -17,6 +17,7 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -59,6 +60,9 @@ public class DevDataSeeder implements CommandLineRunner {
 
     private static final String ILS = "ILS";
     private static final String USD = "USD";
+    /** ECB publishes on business days only; the resulting gaps exercise nearest-earlier rate lookup. */
+    private static final Set<DayOfWeek> WEEKEND = EnumSet.of(DayOfWeek.SATURDAY, DayOfWeek.SUNDAY);
+
     private static final int FX_HISTORY_DAYS = 35;
     /** Newest seeded FX date, so {@code initialRefreshOnStartup} never sees seeded data as fresh. */
     private static final int FX_LATEST_RATE_DAYS_AGO = 2;
@@ -108,7 +112,7 @@ public class DevDataSeeder implements CommandLineRunner {
 
         List<ExchangeRate> ratesToInsert = new ArrayList<>();
         for (LocalDate day = oldest; !day.isAfter(newest); day = day.plusDays(1)) {
-            if (day.getDayOfWeek() == DayOfWeek.SATURDAY || day.getDayOfWeek() == DayOfWeek.SUNDAY) {
+            if (WEEKEND.contains(day.getDayOfWeek())) {
                 continue;
             }
             // 0 on the oldest seeded day, 1 on the newest, so the rates drift the full start→end range.

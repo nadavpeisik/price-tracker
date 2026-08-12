@@ -178,13 +178,17 @@ class PriceTrendIntegrationTest {
         TrackedItem tms = seedItem(product, "TMS", "tms", 3);
         seedRecord(tms, "8890", ILS, daysAgo(9));
 
-        String todayIso = today.atStartOfDay(ZoneOffset.UTC).toInstant().toString();
+        // The single record is 9 days old, so carry-forward (7d TTL) expires 2 days back: the series
+        // must end on today−3 rather than today. Assert the exact instant — a `not(today)` matcher on a
+        // list path would also pass on an empty sparkline or a wrong-but-not-today last point.
+        String expectedLastPoint =
+                today.minusDays(3).atStartOfDay(ZoneOffset.UTC).toInstant().toString();
 
         mvc.perform(get("/api/products/{id}/price-trend", product.getId())
                         .param("days", "14")
                         .param("displayCurrency", ILS))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.sparkline[-1:].t").value(org.hamcrest.Matchers.not(todayIso)))
+                .andExpect(jsonPath("$.sparkline[-1:].t").value(expectedLastPoint))
                 .andExpect(jsonPath("$.delta7d").doesNotExist());
 
         mvc.perform(get("/api/products").param("displayCurrency", ILS))
