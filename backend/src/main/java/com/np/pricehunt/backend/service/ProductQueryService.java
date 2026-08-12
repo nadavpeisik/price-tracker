@@ -1,6 +1,7 @@
 package com.np.pricehunt.backend.service;
 
 import com.np.pricehunt.backend.config.PriceHistoryProperties;
+import com.np.pricehunt.backend.config.PriceTrendProperties;
 import com.np.pricehunt.backend.domain.AvailabilityStatus;
 import com.np.pricehunt.backend.domain.PriceRecord;
 import com.np.pricehunt.backend.domain.Product;
@@ -11,6 +12,9 @@ import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
 import com.np.pricehunt.backend.service.fx.ConvertedAmount;
 import com.np.pricehunt.backend.service.fx.PriceConverter;
+import com.np.pricehunt.backend.service.trend.TrendEligibility;
+import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Comparator;
@@ -36,18 +40,21 @@ public class ProductQueryService {
     private final PriceRecordRepository priceRecordRepository;
     private final PriceConverter priceConverter;
     private final PriceHistoryProperties historyProperties;
+    private final PriceTrendProperties trendProperties;
+    private final Clock clock;
 
-    private record ItemWithLatestPrice(TrackedItem item, PriceRecord latest) {}
+    private record ListingWithLatestPrice(TrackedItem item, PriceRecord latest) {}
 
-    private record ConvertedItem(ItemWithLatestPrice source, ConvertedAmount converted) {}
+    private record ListingWithConvertedPrice(ListingWithLatestPrice source, ConvertedAmount converted) {}
 
     public Page<ProductSummaryResponse> getAllProducts(Pageable pageable, String displayCurrency) {
         // displayCurrency support is validated in ProductController before this method is called.
         // N+1: O(pageSize × storesPerProduct). Acceptable at current scale; revisit with JPQL fetch join when traffic
         // grows.
+        Instant now = clock.instant();
         return productRepository.findAll(pageable).map(product -> {
-            List<ItemWithLatestPrice> pairs = fetchItemsWithLatestPrices(product);
-            return toSummaryResponse(product, pairs, displayCurrency);
+            List<ListingWithLatestPrice> allListings = fetchItemsWithLatestPricesAsOf(product, now);
+            return toSummaryResponse(product, allListings, displayCurrency, now);
         });
     }
 
@@ -102,9 +109,9 @@ public class ProductQueryService {
         return new PriceHistoryResponse(item.getId(), item.getShopName(), item.getUrl(), history);
     }
 
-    private List<ItemWithLatestPrice> fetchItemsWithLatestPrices(Product product) {
+    private List<ListingWithLatestPrice> fetchItemsWithLatestPrices(Product product) {
         return trackedItemRepository.findByProduct(product).stream()
-                .map(item -> new ItemWithLatestPrice(
+                .map(item -> new ListingWithLatestPrice(
                         item,
                         priceRecordRepository
                                 .findFirstByTrackedItemOrderByTimestampDesc(item)
@@ -112,57 +119,92 @@ public class ProductQueryService {
                 .toList();
     }
 
-    private ProductSummaryResponse toSummaryResponse(
-            Product product, List<ItemWithLatestPrice> pairs, String displayCurrency) {
-        int storeCount = pairs.size();
+    /**
+     * List-only variant that ignores records stamped after {@code asOfInstant}.
+     *
+     * <p>Kept separate from {@link #fetchItemsWithLatestPrices} so the product-detail endpoint keeps
+     * reporting each listing's raw latest observation unchanged: only the summary row's best-price
+     * selection adopts the trend engine's eligibility rules.
+     */
+    private List<ListingWithLatestPrice> fetchItemsWithLatestPricesAsOf(Product product, Instant asOfInstant) {
+        return trackedItemRepository.findByProduct(product).stream()
+                .map(item -> new ListingWithLatestPrice(
+                        item,
+                        priceRecordRepository
+                                .findFirstByTrackedItemAndTimestampLessThanEqualOrderByTimestampDescIdDesc(
+                                        item, asOfInstant)
+                                .orElse(null)))
+                .toList();
+    }
 
-        List<ItemWithLatestPrice> withPrices =
-                pairs.stream().filter(p -> p.latest() != null).toList();
+    private ProductSummaryResponse toSummaryResponse(
+            Product product, List<ListingWithLatestPrice> allListings, String displayCurrency, Instant asOfInstant) {
+        int storeCount = allListings.size();
+
+        List<ListingWithLatestPrice> pricedListings =
+                allListings.stream().filter(p -> p.latest() != null).toList();
 
         // Rollup over ALL trackers (not just priced ones): a never-checked tracker (latest == null)
         // is UNKNOWN, so "one UNAVAILABLE priced + one never-checked" rolls up to UNKNOWN, not UNAVAILABLE.
-        AvailabilityStatus availability = rollUpAvailability(pairs);
-        boolean mixedCurrencies = withPrices.stream()
+        AvailabilityStatus availability = rollUpAvailability(allListings);
+        boolean mixedCurrencies = pricedListings.stream()
                         .map(p -> p.latest().getCurrency())
                         .distinct()
                         .count()
                 > 1;
 
-        if (withPrices.isEmpty()) {
+        // Best price counts only listings the trend engine would also count: in stock (or at least not
+        // known to be out of stock), observed recently enough to still stand, and priced sanely. Sharing
+        // TrendEligibility is what guarantees this row and the trend series' latest point agree.
+        List<ListingWithLatestPrice> eligibleListings = pricedListings.stream()
+                .filter(p -> TrendEligibility.isEligible(
+                        p.latest().getTimestamp(),
+                        p.latest().getAvailability(),
+                        p.latest().getPrice(),
+                        asOfInstant,
+                        trendProperties.carryForwardDays()))
+                .toList();
+
+        if (eligibleListings.isEmpty()) {
             return emptyBestPriceResponse(product, storeCount, availability, mixedCurrencies);
         }
 
-        List<ConvertedItem> convertible = withPrices.stream()
+        List<ListingWithConvertedPrice> listingsWithConvertedPrices = eligibleListings.stream()
                 .map(p -> {
                     ConvertedAmount conv = priceConverter.convert(
                             p.latest().getPrice(), p.latest().getCurrency(), displayCurrency);
-                    return conv == null ? null : new ConvertedItem(p, conv);
+                    return conv == null ? null : new ListingWithConvertedPrice(p, conv);
                 })
                 .filter(Objects::nonNull)
                 .toList();
 
-        if (convertible.isEmpty()) {
-            log.debug("No tracked items convertible to {} for product {}", displayCurrency, product.getId());
+        if (listingsWithConvertedPrices.isEmpty()) {
+            log.debug(
+                    "No eligible tracked item could be converted to {} for product {}",
+                    displayCurrency,
+                    product.getId());
             return emptyBestPriceResponse(product, storeCount, availability, mixedCurrencies);
         }
 
-        ConvertedItem best = convertible.stream()
-                .min(Comparator.comparing(ci -> ci.converted().value()))
+        ListingWithConvertedPrice cheapestListing = listingsWithConvertedPrices.stream()
+                .min(Comparator.<ListingWithConvertedPrice, BigDecimal>comparing(
+                                ci -> ci.converted().value())
+                        .thenComparing(ci -> ci.source().item().getId()))
                 .orElseThrow();
 
-        PriceRecord bestLatest = best.source().latest();
+        PriceRecord bestLatest = cheapestListing.source().latest();
         return new ProductSummaryResponse(
                 product.getId(),
                 product.getName(),
                 product.getDescription(),
                 storeCount,
-                best.converted().value(),
+                cheapestListing.converted().value(),
                 displayCurrency,
                 bestLatest.getPrice(),
                 bestLatest.getCurrency(),
-                best.source().item().getShopName(),
-                best.converted().asOf(),
-                best.converted().stale(),
+                cheapestListing.source().item().getShopName(),
+                cheapestListing.converted().asOf(),
+                cheapestListing.converted().stale(),
                 PriceBasis.AS_LISTED,
                 availability,
                 mixedCurrencies);
@@ -171,10 +213,10 @@ public class ProductQueryService {
     // Product-level availability over all trackers: any AVAILABLE wins; else any UNKNOWN (incl. a
     // never-checked tracker) beats UNAVAILABLE — we never claim "unavailable" while some store is
     // unknown; no trackers at all → UNKNOWN.
-    private static AvailabilityStatus rollUpAvailability(List<ItemWithLatestPrice> pairs) {
+    private static AvailabilityStatus rollUpAvailability(List<ListingWithLatestPrice> allListings) {
         boolean anyTracker = false;
         boolean anyUnknown = false;
-        for (ItemWithLatestPrice p : pairs) {
+        for (ListingWithLatestPrice p : allListings) {
             anyTracker = true;
             AvailabilityStatus status = p.latest() != null ? p.latest().getAvailability() : AvailabilityStatus.UNKNOWN;
             if (status == AvailabilityStatus.AVAILABLE) {

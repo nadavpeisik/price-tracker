@@ -5,6 +5,7 @@ import com.np.pricehunt.backend.dto.*;
 import com.np.pricehunt.backend.service.ProductQueryService;
 import com.np.pricehunt.backend.service.ProductTrackingService;
 import com.np.pricehunt.backend.service.fx.PriceConverter;
+import com.np.pricehunt.backend.service.trend.PriceTrendService;
 import java.time.Instant;
 import java.util.Locale;
 import java.util.regex.Pattern;
@@ -29,6 +30,7 @@ public class ProductController {
 
     private final ProductTrackingService trackingService;
     private final ProductQueryService queryService;
+    private final PriceTrendService trendService;
     private final CurrencyProperties currencyProperties;
     private final PriceConverter priceConverter;
 
@@ -78,6 +80,21 @@ public class ProductController {
     @GetMapping("/{id}")
     public ResponseEntity<ProductDetailResponse> getProduct(@PathVariable Long id) {
         return ResponseEntity.ok(queryService.getProduct(id));
+    }
+
+    /**
+     * FX-normalized daily price series plus the 7-day delta for one product (issue #145).
+     *
+     * <p>{@code days} sizes the series only; the delta is always a 7-day comparison. The window is
+     * range-parameterized from the start so a product-detail chart can ask for 90/180/365 without an
+     * API change.
+     */
+    @GetMapping("/{id}/price-trend")
+    public ResponseEntity<PriceTrendResponse> getPriceTrend(
+            @PathVariable Long id,
+            @RequestParam(required = false) Integer days,
+            @RequestParam(required = false) String displayCurrency) {
+        return ResponseEntity.ok(trendService.getProductTrend(id, days, resolveDisplayCurrency(displayCurrency)));
     }
 
     @PostMapping("/{id}/track")

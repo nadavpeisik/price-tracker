@@ -9,6 +9,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.np.pricehunt.backend.config.PriceHistoryProperties;
+import com.np.pricehunt.backend.config.PriceTrendProperties;
 import com.np.pricehunt.backend.domain.AvailabilityStatus;
 import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.domain.PriceRecord;
@@ -24,8 +25,10 @@ import com.np.pricehunt.backend.repository.TrackedItemRepository;
 import com.np.pricehunt.backend.service.fx.ConvertedAmount;
 import com.np.pricehunt.backend.service.fx.PriceConverter;
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
@@ -46,6 +49,8 @@ import org.springframework.web.server.ResponseStatusException;
 class ProductQueryServiceTest {
 
     private static final LocalDate TODAY = LocalDate.of(2026, 5, 24);
+    private static final Instant NOW = TODAY.atTime(12, 0).toInstant(ZoneOffset.UTC);
+    private static final int CARRY_FORWARD_DAYS = 7;
 
     @Mock
     private ProductRepository productRepository;
@@ -72,7 +77,9 @@ class ProductQueryServiceTest {
                 trackedItemRepository,
                 priceRecordRepository,
                 priceConverter,
-                new PriceHistoryProperties(90));
+                new PriceHistoryProperties(90),
+                new PriceTrendProperties(30, 730, CARRY_FORWARD_DAYS),
+                Clock.fixed(NOW, ZoneOffset.UTC));
         product = Product.builder().id(1L).name("Laptop").build();
         itemA = TrackedItem.builder()
                 .id(1L)
@@ -160,10 +167,8 @@ class ProductQueryServiceTest {
     @Test
     void getAllProducts_noItemsHavePrices_emptyBestPrice() {
         stubProductWithItems(List.of(itemA, itemB));
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(itemA))
-                .thenReturn(Optional.empty());
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(itemB))
-                .thenReturn(Optional.empty());
+        stubNoLatestPrice(itemA);
+        stubNoLatestPrice(itemB);
 
         ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "ILS")
                 .getContent()
@@ -196,32 +201,21 @@ class ProductQueryServiceTest {
 
     @Test
     void getAllProducts_rollup_oneAvailable_isAvailable() {
-        PriceRecord unavailable = PriceRecord.builder()
-                .price(new BigDecimal("50"))
-                .currency("USD")
-                .availability(AvailabilityStatus.UNAVAILABLE)
-                .extractionSource(ExtractionSource.STRUCTURED)
-                .trackedItem(itemA)
-                .build();
-        PriceRecord available = PriceRecord.builder()
-                .price(new BigDecimal("55"))
-                .currency("USD")
-                .availability(AvailabilityStatus.AVAILABLE)
-                .extractionSource(ExtractionSource.STRUCTURED)
-                .trackedItem(itemB)
-                .build();
+        PriceRecord unavailable =
+                priceRecord(itemA, "50", "USD", AvailabilityStatus.UNAVAILABLE, NOW.minusSeconds(3600));
+        PriceRecord available = priceRecord(itemB, "55", "USD");
         stubProductWithItems(List.of(itemA, itemB));
         stubLatestPrices(Map.of(itemA, unavailable, itemB, available));
-        when(priceConverter.convert(new BigDecimal("50"), "USD", "USD"))
-                .thenReturn(new ConvertedAmount(new BigDecimal("50"), null, false));
-        when(priceConverter.convert(new BigDecimal("55"), "USD", "USD"))
-                .thenReturn(new ConvertedAmount(new BigDecimal("55"), null, false));
+        // The cheaper listing is out of stock, so it is never converted — the available one wins.
+        stubIdentityConversion("55", "USD");
 
         ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "USD")
                 .getContent()
                 .get(0);
 
         assertThat(summary.availability()).isEqualTo(AvailabilityStatus.AVAILABLE);
+        assertThat(summary.bestPriceConverted()).isEqualByComparingTo("55");
+        assertThat(summary.bestPriceShop()).isEqualTo("bestbuy.com");
     }
 
     @Test
@@ -230,25 +224,19 @@ class ProductQueryServiceTest {
         // (no latest price → UNKNOWN). It must roll up to UNKNOWN, not UNAVAILABLE — we never claim
         // "unavailable" while a tracked store is still unknown. (Regression guard for the bug where
         // the rollup only considered priced items.)
-        PriceRecord unavailable = PriceRecord.builder()
-                .price(new BigDecimal("50"))
-                .currency("USD")
-                .availability(AvailabilityStatus.UNAVAILABLE)
-                .extractionSource(ExtractionSource.STRUCTURED)
-                .trackedItem(itemA)
-                .build();
+        PriceRecord unavailable =
+                priceRecord(itemA, "50", "USD", AvailabilityStatus.UNAVAILABLE, NOW.minusSeconds(3600));
         stubProductWithItems(List.of(itemA, itemB));
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(itemA))
-                .thenReturn(Optional.of(unavailable));
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(itemB))
-                .thenReturn(Optional.empty());
-        stubIdentityConversion("50", "USD");
+        stubLatestPrices(Map.of(itemA, unavailable));
+        stubNoLatestPrice(itemB);
 
         ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "USD")
                 .getContent()
                 .get(0);
 
         assertThat(summary.availability()).isEqualTo(AvailabilityStatus.UNKNOWN);
+        // The only priced listing is out of stock, so there is no best price to show.
+        assertThat(summary.bestPriceConverted()).isNull();
     }
 
     @Test
@@ -256,10 +244,8 @@ class ProductQueryServiceTest {
         // A product whose tracked stores have never been scraped (no PriceRecord at all) rolls up to
         // UNKNOWN — never UNAVAILABLE.
         stubProductWithItems(List.of(itemA, itemB));
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(itemA))
-                .thenReturn(Optional.empty());
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(itemB))
-                .thenReturn(Optional.empty());
+        stubNoLatestPrice(itemA);
+        stubNoLatestPrice(itemB);
 
         ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "USD")
                 .getContent()
@@ -270,30 +256,100 @@ class ProductQueryServiceTest {
 
     @Test
     void getAllProducts_rollup_allUnavailable_isUnavailable() {
-        PriceRecord a = PriceRecord.builder()
-                .price(new BigDecimal("50"))
-                .currency("USD")
-                .availability(AvailabilityStatus.UNAVAILABLE)
-                .extractionSource(ExtractionSource.STRUCTURED)
-                .trackedItem(itemA)
-                .build();
-        PriceRecord b = PriceRecord.builder()
-                .price(new BigDecimal("55"))
-                .currency("USD")
-                .availability(AvailabilityStatus.UNAVAILABLE)
-                .extractionSource(ExtractionSource.STRUCTURED)
-                .trackedItem(itemB)
-                .build();
+        PriceRecord a = priceRecord(itemA, "50", "USD", AvailabilityStatus.UNAVAILABLE, NOW.minusSeconds(3600));
+        PriceRecord b = priceRecord(itemB, "55", "USD", AvailabilityStatus.UNAVAILABLE, NOW.minusSeconds(3600));
         stubProductWithItems(List.of(itemA, itemB));
         stubLatestPrices(Map.of(itemA, a, itemB, b));
-        stubIdentityConversion("50", "USD");
-        stubIdentityConversion("55", "USD");
 
         ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "USD")
                 .getContent()
                 .get(0);
 
         assertThat(summary.availability()).isEqualTo(AvailabilityStatus.UNAVAILABLE);
+        // Nothing purchasable, so no best price — the row shows the rollup without a number.
+        assertThat(summary.bestPriceConverted()).isNull();
+        assertThat(summary.trackedStoreCount()).isEqualTo(2);
+    }
+
+    // --- Eligibility alignment with the trend engine (#145) ---
+
+    @Test
+    void getAllProducts_latestRecordOlderThanTheTtl_hasNoBestPriceButKeepsRollupAndCount() {
+        PriceRecord stale =
+                priceRecord(itemA, "100", "USD", AvailabilityStatus.AVAILABLE, NOW.minus(8, ChronoUnit.DAYS));
+        stubProductWithItems(List.of(itemA));
+        stubLatestPrices(Map.of(itemA, stale));
+
+        ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "USD")
+                .getContent()
+                .get(0);
+
+        assertThat(summary.bestPriceConverted()).isNull();
+        assertThat(summary.bestPriceShop()).isNull();
+        assertThat(summary.availability()).isEqualTo(AvailabilityStatus.AVAILABLE);
+        assertThat(summary.trackedStoreCount()).isEqualTo(1);
+    }
+
+    @Test
+    void getAllProducts_latestRecordExactlyAtTheTtlBoundary_isStillEligible() {
+        PriceRecord boundary = priceRecord(
+                itemA, "100", "USD", AvailabilityStatus.AVAILABLE, NOW.minus(CARRY_FORWARD_DAYS, ChronoUnit.DAYS));
+        stubProductWithItems(List.of(itemA));
+        stubLatestPrices(Map.of(itemA, boundary));
+        stubIdentityConversion("100", "USD");
+
+        ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "USD")
+                .getContent()
+                .get(0);
+
+        assertThat(summary.bestPriceConverted()).isEqualByComparingTo("100");
+    }
+
+    @Test
+    void getAllProducts_mixedCurrenciesStillTrueWhenTheForeignListingIsIneligible() {
+        // mixedCurrencies describes the tracked set, not just the listings currently in the running.
+        PriceRecord ils = priceRecord(itemA, "300", "ILS");
+        PriceRecord staleUsd =
+                priceRecord(itemB, "50", "USD", AvailabilityStatus.AVAILABLE, NOW.minus(30, ChronoUnit.DAYS));
+        stubProductWithItems(List.of(itemA, itemB));
+        stubLatestPrices(Map.of(itemA, ils, itemB, staleUsd));
+        stubIdentityConversion("300", "ILS");
+
+        ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "ILS")
+                .getContent()
+                .get(0);
+
+        assertThat(summary.mixedCurrencies()).isTrue();
+        assertThat(summary.bestPriceConverted()).isEqualByComparingTo("300");
+    }
+
+    @Test
+    void getAllProducts_equalConvertedPrices_areBrokenByTrackedItemId() {
+        stubProductWithItems(List.of(itemB, itemA));
+        stubLatestPrices(Map.of(itemA, priceRecord(itemA, "100", "USD"), itemB, priceRecord(itemB, "100", "USD")));
+        stubIdentityConversion("100", "USD");
+
+        ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "USD")
+                .getContent()
+                .get(0);
+
+        assertThat(summary.bestPriceShop()).isEqualTo("amazon.com");
+    }
+
+    @Test
+    void getAllProducts_readsLatestPriceThroughTheCutoffAwareFinder() {
+        // With a mocked repository this can only verify that the service delegates with `now` as the
+        // cutoff; that the cutoff actually excludes future-dated rows is enforced by the derived query
+        // and covered in PriceRecordRepositoryTest.cutoffAwareFinder_ignoresFutureDatedRecords.
+        PriceRecord valid = priceRecord(itemA, "100", "USD");
+        stubProductWithItems(List.of(itemA));
+        stubLatestPrices(Map.of(itemA, valid));
+        stubIdentityConversion("100", "USD");
+
+        service.getAllProducts(PageRequest.of(0, 20), "USD");
+
+        verify(priceRecordRepository)
+                .findFirstByTrackedItemAndTimestampLessThanEqualOrderByTimestampDescIdDesc(itemA, NOW);
     }
 
     @Test
@@ -483,9 +539,17 @@ class ProductQueryServiceTest {
         when(trackedItemRepository.findByProduct(product)).thenReturn(items);
     }
 
+    private void stubNoLatestPrice(TrackedItem item) {
+        when(priceRecordRepository.findFirstByTrackedItemAndTimestampLessThanEqualOrderByTimestampDescIdDesc(item, NOW))
+                .thenReturn(Optional.empty());
+    }
+
+    /** The summary row reads through the cutoff-aware finder; the detail endpoint does not. */
     private void stubLatestPrices(Map<TrackedItem, PriceRecord> prices) {
-        prices.forEach((item, price) -> when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
-                .thenReturn(Optional.of(price)));
+        prices.forEach((item, price) ->
+                when(priceRecordRepository.findFirstByTrackedItemAndTimestampLessThanEqualOrderByTimestampDescIdDesc(
+                                item, NOW))
+                        .thenReturn(Optional.of(price)));
     }
 
     private void stubIdentityConversion(String amount, String currency) {
@@ -494,12 +558,18 @@ class ProductQueryServiceTest {
     }
 
     private PriceRecord priceRecord(TrackedItem item, String price, String currency) {
+        return priceRecord(item, price, currency, AvailabilityStatus.AVAILABLE, NOW.minusSeconds(3600));
+    }
+
+    private PriceRecord priceRecord(
+            TrackedItem item, String price, String currency, AvailabilityStatus availability, Instant observedAt) {
         return PriceRecord.builder()
                 .price(new BigDecimal(price))
                 .currency(currency)
-                .availability(AvailabilityStatus.AVAILABLE)
+                .availability(availability)
                 .extractionSource(ExtractionSource.STRUCTURED)
                 .trackedItem(item)
+                .timestamp(observedAt)
                 .build();
     }
 }

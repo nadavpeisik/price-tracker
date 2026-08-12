@@ -191,6 +191,150 @@ class PriceConverterTest {
         assertThat(converter.isSupported("ZZZ")).isTrue();
     }
 
+    // --- Historical overload (#145): nearest-earlier per-quote rates, valued at the point's own day ---
+
+    private static final HistoricalRateWindow WINDOW = HistoricalRateWindow.of(Map.of(
+            "USD", Map.of(TODAY.minusDays(10), new BigDecimal("1.05"), TODAY, new BigDecimal("1.10")),
+            "ILS", Map.of(TODAY.minusDays(10), new BigDecimal("3.90"), TODAY, new BigDecimal("4.00"))));
+
+    @Test
+    void convertAsOf_matchesSnapshotPathWhenRatesMatch() {
+        PriceConverter converter = newConverter("0");
+
+        ConvertedAmount historical = converter.convert(new BigDecimal("100"), "USD", "ILS", TODAY, WINDOW);
+
+        // Same triangulation as the snapshot path's 363.6364 — one shared implementation.
+        assertThat(historical.value()).isEqualByComparingTo("363.6364");
+        assertThat(historical.asOf()).isEqualTo(TODAY);
+        assertThat(historical.stale()).isFalse();
+    }
+
+    @Test
+    void convertAsOf_appliesFxMargin() {
+        PriceConverter converter = newConverter("2.5");
+
+        ConvertedAmount result = converter.convert(new BigDecimal("100"), "USD", "ILS", TODAY, WINDOW);
+
+        assertThat(result.value()).isEqualByComparingTo("372.7273");
+    }
+
+    @Test
+    void convertAsOf_usesNearestEarlierRateOnAGapDay() {
+        PriceConverter converter = newConverter("0");
+
+        // Nothing published on TODAY-5; the 10-days-ago rates still value that day.
+        ConvertedAmount result = converter.convert(new BigDecimal("100"), "USD", "ILS", TODAY.minusDays(5), WINDOW);
+
+        // 100 * (3.90 / 1.05) = 371.4286
+        assertThat(result.value()).isEqualByComparingTo("371.4286");
+        assertThat(result.asOf()).isEqualTo(TODAY.minusDays(10));
+    }
+
+    @Test
+    void convertAsOf_sameCurrency_isIdentityWithoutConsultingRates() {
+        PriceConverter converter = newConverter("5");
+
+        ConvertedAmount result =
+                converter.convert(new BigDecimal("100.00"), "ILS", "ILS", TODAY, HistoricalRateWindow.empty());
+
+        assertThat(result.value()).isEqualByComparingTo("100.00");
+        assertThat(result.asOf()).isNull();
+        assertThat(result.stale()).isFalse();
+    }
+
+    @Test
+    void convertAsOf_unknownCurrency_returnsNull() {
+        PriceConverter converter = newConverter("0");
+
+        assertThat(converter.convert(new BigDecimal("100"), "ZZZ", "ILS", TODAY, WINDOW))
+                .isNull();
+        assertThat(converter.convert(new BigDecimal("100"), "USD", "ZZZ", TODAY, WINDOW))
+                .isNull();
+    }
+
+    @Test
+    void convertAsOf_dayBeforeAnyPublishedRate_returnsNull() {
+        PriceConverter converter = newConverter("0");
+
+        assertThat(converter.convert(new BigDecimal("100"), "USD", "ILS", TODAY.minusDays(30), WINDOW))
+                .isNull();
+    }
+
+    @Test
+    void convertAsOf_eurLegNeedsNoRateOfItsOwn() {
+        PriceConverter converter = newConverter("0");
+
+        ConvertedAmount result = converter.convert(new BigDecimal("100"), "EUR", "USD", TODAY, WINDOW);
+
+        assertThat(result.value()).isEqualByComparingTo("110.0000");
+        assertThat(result.asOf()).isEqualTo(TODAY);
+    }
+
+    @Test
+    void convertAsOf_rateExactlySevenDaysBeforeThePointDay_isNotStale() {
+        PriceConverter converter = newConverter("0");
+        HistoricalRateWindow window = ratesOn(TODAY.minusDays(7));
+
+        ConvertedAmount result = converter.convert(new BigDecimal("100"), "USD", "ILS", TODAY, window);
+
+        assertThat(result.stale()).isFalse();
+    }
+
+    @Test
+    void convertAsOf_rateEightDaysBeforeThePointDay_isStale() {
+        PriceConverter converter = newConverter("0");
+        HistoricalRateWindow window = ratesOn(TODAY.minusDays(8));
+
+        ConvertedAmount result = converter.convert(new BigDecimal("100"), "USD", "ILS", TODAY, window);
+
+        assertThat(result.stale()).isTrue();
+    }
+
+    @Test
+    void convertAsOf_differingLegDates_reportsOlderDateAndIsStaleIfEitherLegIs() {
+        PriceConverter converter = newConverter("0");
+        HistoricalRateWindow window = HistoricalRateWindow.of(Map.of(
+                "USD", Map.of(TODAY, new BigDecimal("1.10")),
+                "ILS", Map.of(TODAY.minusDays(9), new BigDecimal("4.00"))));
+
+        ConvertedAmount result = converter.convert(new BigDecimal("100"), "USD", "ILS", TODAY, window);
+
+        assertThat(result.asOf()).isEqualTo(TODAY.minusDays(9));
+        assertThat(result.stale()).isTrue();
+    }
+
+    @Test
+    void convertAsOf_nonPositiveRate_returnsNullInsteadOfThrowing() {
+        PriceConverter converter = newConverter("0");
+        HistoricalRateWindow zeroFrom = HistoricalRateWindow.of(Map.of(
+                "USD", Map.of(TODAY, BigDecimal.ZERO),
+                "ILS", Map.of(TODAY, new BigDecimal("4.00"))));
+        HistoricalRateWindow negativeTo = HistoricalRateWindow.of(Map.of(
+                "USD", Map.of(TODAY, new BigDecimal("1.10")),
+                "ILS", Map.of(TODAY, new BigDecimal("-4.00"))));
+
+        assertThat(converter.convert(new BigDecimal("100"), "USD", "ILS", TODAY, zeroFrom))
+                .isNull();
+        assertThat(converter.convert(new BigDecimal("100"), "USD", "ILS", TODAY, negativeTo))
+                .isNull();
+    }
+
+    @Test
+    void convert_snapshotWithNonPositiveRate_returnsNullInsteadOfThrowing() {
+        PriceConverter converter = newConverter("0");
+        when(rateService.currentSnapshot())
+                .thenReturn(Optional.of(
+                        new RateSnapshot(TODAY, Map.of("USD", BigDecimal.ZERO, "ILS", new BigDecimal("4.00")))));
+
+        assertThat(converter.convert(new BigDecimal("100"), "USD", "ILS")).isNull();
+    }
+
+    private static HistoricalRateWindow ratesOn(LocalDate asOf) {
+        return HistoricalRateWindow.of(Map.of(
+                "USD", Map.of(asOf, new BigDecimal("1.10")),
+                "ILS", Map.of(asOf, new BigDecimal("4.00"))));
+    }
+
     private PriceConverter newConverter(String marginPercent) {
         CurrencyProperties props = new CurrencyProperties(
                 "ILS",

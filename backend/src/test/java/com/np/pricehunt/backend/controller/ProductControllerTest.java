@@ -15,6 +15,7 @@ import com.np.pricehunt.backend.dto.*;
 import com.np.pricehunt.backend.service.ProductQueryService;
 import com.np.pricehunt.backend.service.ProductTrackingService;
 import com.np.pricehunt.backend.service.fx.PriceConverter;
+import com.np.pricehunt.backend.service.trend.PriceTrendService;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -52,6 +53,9 @@ class ProductControllerTest {
 
     @MockitoBean
     private PriceConverter priceConverter;
+
+    @MockitoBean
+    private PriceTrendService trendService;
 
     @Test
     void getAllProducts_defaultsToConfiguredDisplayCurrency() throws Exception {
@@ -291,6 +295,109 @@ class ProductControllerTest {
                         eq(1L),
                         eq(Instant.parse("2026-01-01T00:00:00Z")),
                         eq(Instant.parse("2026-04-01T00:00:00Z")));
+    }
+
+    // --- GET /{id}/price-trend (#145) ---
+
+    @Test
+    void getPriceTrend_returnsSeriesWithBestOfferProvenance() throws Exception {
+        when(priceConverter.isSupported("ILS")).thenReturn(true);
+        when(trendService.getProductTrend(eq(1L), isNull(), eq("ILS"))).thenReturn(trendFixture());
+
+        mvc.perform(get("/api/products/1/price-trend"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.productId").value(1))
+                .andExpect(jsonPath("$.displayCurrency").value("ILS"))
+                .andExpect(jsonPath("$.delta7d").value(-8.35))
+                .andExpect(jsonPath("$.conversionAsOf").value("2026-05-24"))
+                .andExpect(jsonPath("$.conversionStale").value(false))
+                .andExpect(jsonPath("$.sparkline[0].t").value("2026-05-23T00:00:00Z"))
+                .andExpect(jsonPath("$.sparkline[0].price").value(1299.5000))
+                .andExpect(jsonPath("$.sparkline[0].bestOffer.trackedItemId").value(7))
+                .andExpect(jsonPath("$.sparkline[0].bestOffer.shopName").value("KSP"))
+                .andExpect(jsonPath("$.sparkline[0].bestOffer.observedAt").value("2026-05-22T09:30:00Z"));
+    }
+
+    @Test
+    void getPriceTrend_nullDeltaSerializesAsNull() throws Exception {
+        when(priceConverter.isSupported("ILS")).thenReturn(true);
+        when(trendService.getProductTrend(eq(1L), isNull(), eq("ILS")))
+                .thenReturn(new PriceTrendResponse(1L, "ILS", null, null, false, List.of()));
+
+        mvc.perform(get("/api/products/1/price-trend"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.delta7d").doesNotExist())
+                .andExpect(jsonPath("$.sparkline").isEmpty());
+    }
+
+    @Test
+    void getPriceTrend_passesDaysThrough() throws Exception {
+        when(priceConverter.isSupported("ILS")).thenReturn(true);
+        when(trendService.getProductTrend(eq(1L), eq(90), eq("ILS"))).thenReturn(trendFixture());
+
+        mvc.perform(get("/api/products/1/price-trend").param("days", "90")).andExpect(status().isOk());
+
+        verify(trendService).getProductTrend(1L, 90, "ILS");
+    }
+
+    @Test
+    void getPriceTrend_explicitDisplayCurrencyIsNormalized() throws Exception {
+        when(priceConverter.isSupported("USD")).thenReturn(true);
+        when(trendService.getProductTrend(eq(1L), isNull(), eq("USD"))).thenReturn(trendFixture());
+
+        mvc.perform(get("/api/products/1/price-trend").param("displayCurrency", "usd"))
+                .andExpect(status().isOk());
+
+        verify(trendService).getProductTrend(1L, null, "USD");
+    }
+
+    @Test
+    void getPriceTrend_invalidDisplayCurrencyFormat_returns400WithoutCallingTheService() throws Exception {
+        mvc.perform(get("/api/products/1/price-trend").param("displayCurrency", "ZZZZ"))
+                .andExpect(status().isBadRequest());
+
+        verify(trendService, never()).getProductTrend(anyLong(), any(), anyString());
+    }
+
+    @Test
+    void getPriceTrend_unsupportedDisplayCurrency_returns400WithoutCallingTheService() throws Exception {
+        when(priceConverter.isSupported("ZZZ")).thenReturn(false);
+
+        mvc.perform(get("/api/products/1/price-trend").param("displayCurrency", "ZZZ"))
+                .andExpect(status().isBadRequest());
+
+        verify(trendService, never()).getProductTrend(anyLong(), any(), anyString());
+    }
+
+    @Test
+    void getPriceTrend_unknownProduct_propagates404() throws Exception {
+        when(priceConverter.isSupported("ILS")).thenReturn(true);
+        when(trendService.getProductTrend(eq(99L), isNull(), eq("ILS")))
+                .thenThrow(new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found"));
+
+        mvc.perform(get("/api/products/99/price-trend")).andExpect(status().isNotFound());
+    }
+
+    @Test
+    void getPriceTrend_nonPositiveDays_propagates400() throws Exception {
+        when(priceConverter.isSupported("ILS")).thenReturn(true);
+        when(trendService.getProductTrend(eq(1L), eq(0), eq("ILS")))
+                .thenThrow(new ResponseStatusException(HttpStatus.BAD_REQUEST, "days must be >= 1"));
+
+        mvc.perform(get("/api/products/1/price-trend").param("days", "0")).andExpect(status().isBadRequest());
+    }
+
+    private static PriceTrendResponse trendFixture() {
+        return new PriceTrendResponse(
+                1L,
+                "ILS",
+                new BigDecimal("-8.35"),
+                LocalDate.of(2026, 5, 24),
+                false,
+                List.of(new TrendPointResponse(
+                        Instant.parse("2026-05-23T00:00:00Z"),
+                        new BigDecimal("1299.5000"),
+                        new BestOfferResponse(7L, "KSP", Instant.parse("2026-05-22T09:30:00Z")))));
     }
 
     private static ProductSummaryResponse summaryFixture() {
