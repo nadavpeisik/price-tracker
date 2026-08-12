@@ -67,6 +67,31 @@ public class DevDataSeeder implements CommandLineRunner {
     /** Newest seeded FX date, so {@code initialRefreshOnStartup} never sees seeded data as fresh. */
     private static final int FX_LATEST_RATE_DAYS_AGO = 2;
 
+    /**
+     * The fictional shops the fixtures are spread across. Display name and host always travel together
+     * — pairing them here keeps a listing's URL and its {@code shopName} from drifting apart.
+     */
+    private enum Shop {
+        IVORY("Ivory", "ivory"),
+        KSP("KSP", "ksp"),
+        BUG("Bug", "bug"),
+        TMS("TMS", "tms"),
+        ELECTRA("אלקטרה", "electra"),
+        AMAZON("Amazon", "amazon-seed");
+
+        private final String displayName;
+        private final String host;
+
+        Shop(String displayName, String host) {
+            this.displayName = displayName;
+            this.host = host;
+        }
+
+        String urlFor(int itemNo) {
+            return "https://" + host + ".seed.invalid/item/" + itemNo;
+        }
+    }
+
     private final ProductRepository productRepository;
     private final ExchangeRateRepository exchangeRateRepository;
     private final Clock clock;
@@ -159,8 +184,7 @@ public class DevDataSeeder implements CommandLineRunner {
                 "Sony WH-1000XM5",
                 "Wireless noise-cancelling headphones",
                 listing(
-                        "Ivory",
-                        "ivory",
+                        Shop.IVORY,
                         1001,
                         now,
                         obs(14, "1330"),
@@ -170,15 +194,14 @@ public class DevDataSeeder implements CommandLineRunner {
                         obs(4, "1288"),
                         obs(2, "1282"),
                         obs(0.2, "1279")),
-                listing("KSP", "ksp", 1002, now, obs(13, "1385"), obs(8, "1349"), obs(5, "1320"), obs(1, "1303")),
-                listing("Bug", "bug", 1003, now, obs(12, "1390"), obs(6, "1370"), obs(3, "1360"), obs(0.5, "1349"))));
+                listing(Shop.KSP, 1002, now, obs(13, "1385"), obs(8, "1349"), obs(5, "1320"), obs(1, "1303")),
+                listing(Shop.BUG, 1003, now, obs(12, "1390"), obs(6, "1370"), obs(3, "1360"), obs(0.5, "1349"))));
 
         products.add(product(
                 "Logitech MX Master 3S",
                 "Wireless productivity mouse",
                 listing(
-                        "Bug",
-                        "bug",
+                        Shop.BUG,
                         2001,
                         now,
                         obs(15, "454"),
@@ -187,14 +210,13 @@ public class DevDataSeeder implements CommandLineRunner {
                         obs(6, "419"),
                         obs(3, "405"),
                         obs(0.3, "399")),
-                listing("KSP", "ksp", 2002, now, obs(14, "455"), obs(7, "446"), obs(2, "431"))));
+                listing(Shop.KSP, 2002, now, obs(14, "455"), obs(7, "446"), obs(2, "431"))));
 
         products.add(product(
                 "LG C3 55\" OLED",
                 "4K OLED evo television",
                 listing(
-                        "TMS",
-                        "tms",
+                        Shop.TMS,
                         3001,
                         now,
                         obs(12, "4390"),
@@ -202,29 +224,27 @@ public class DevDataSeeder implements CommandLineRunner {
                         obs(7, "4470"),
                         obs(4, "4530"),
                         obs(1, "4590")),
-                listing("Ivory", "ivory", 3002, now, obs(11, "4500"), obs(5, "4620"), obs(2, "4690"))));
+                listing(Shop.IVORY, 3002, now, obs(11, "4500"), obs(5, "4620"), obs(2, "4690"))));
 
         products.add(product(
                 "Dell U2723QE",
                 "27-inch 4K USB-C monitor",
                 listing(
-                        "Ivory",
-                        "ivory",
+                        Shop.IVORY,
                         4001,
                         now,
                         obs(10, "2150", AvailabilityStatus.UNKNOWN),
                         obs(8, "2150", AvailabilityStatus.UNKNOWN),
                         obs(3, "2150", AvailabilityStatus.UNKNOWN),
                         obs(0.4, "2150", AvailabilityStatus.UNKNOWN)),
-                listing("TMS", "tms", 4002, now, obs(9, "2210"), obs(5, "2205"), obs(1, "2199"))));
+                listing(Shop.TMS, 4002, now, obs(9, "2210"), obs(5, "2205"), obs(1, "2199"))));
 
         products.add(product(
                 "AirPods Pro 2",
                 "Active noise-cancelling earbuds",
-                listing("Bug", "bug", 5001, now, obs(5, "830"), obs(3, "810"), obs(1, "796"), obs(0.1, "789")),
+                listing(Shop.BUG, 5001, now, obs(5, "830"), obs(3, "810"), obs(1, "796"), obs(0.1, "789")),
                 listing(
-                        "KSP",
-                        "ksp",
+                        Shop.KSP,
                         5002,
                         now,
                         obs(4, "869", AvailabilityStatus.UNAVAILABLE),
@@ -235,28 +255,26 @@ public class DevDataSeeder implements CommandLineRunner {
                 "Samsung 990 Pro 2TB",
                 "NVMe Gen4 SSD",
                 // The 7-days-ago sample is stamped exactly at now−7d: the inclusive baseline boundary.
-                listing("KSP", "ksp", 6001, now, obs(10, "735"), obs(7, "730"), obs(4, "737"), obs(0.6, "739")),
-                listing("Bug", "bug", 6002, now, obs(9, "740"), obs(3, "746"), obs(0.8, "749"))));
+                listing(Shop.KSP, 6001, now, obs(10, "735"), obs(7, "730"), obs(4, "737"), obs(0.6, "739")),
+                listing(Shop.BUG, 6002, now, obs(9, "740"), obs(3, "746"), obs(0.8, "749"))));
 
         products.add(product(
                 "מקלדת Keychron K8 Pro",
                 "מקלדת מכנית אלחוטית",
-                listing("אלקטרה", "electra", 7001, now, obs(12, "420"), obs(7, "409"), obs(1, "389"), obs(0.2, "385")),
-                listingIn("Amazon", "amazon-seed", 7002, USD, now, obs(11, "119"), obs(6, "110"), obs(2, "102"))));
+                listing(Shop.ELECTRA, 7001, now, obs(12, "420"), obs(7, "409"), obs(1, "389"), obs(0.2, "385")),
+                listingIn(Shop.AMAZON, 7002, USD, now, obs(11, "119"), obs(6, "110"), obs(2, "102"))));
 
         products.add(product(
                 "Nintendo Switch 2",
                 "Hybrid games console",
                 listing(
-                        "KSP",
-                        "ksp",
+                        Shop.KSP,
                         8001,
                         now,
                         obs(6, "1799", AvailabilityStatus.UNAVAILABLE),
                         obs(2, "1799", AvailabilityStatus.UNAVAILABLE)),
                 listing(
-                        "Bug",
-                        "bug",
+                        Shop.BUG,
                         8002,
                         now,
                         obs(5, "1849", AvailabilityStatus.UNAVAILABLE),
@@ -266,8 +284,8 @@ public class DevDataSeeder implements CommandLineRunner {
         Product framework = product(
                 "Framework Laptop 16",
                 "Modular repairable laptop",
-                listing("TMS", "tms", 9001, now, obs(9, "8890")),
-                neverChecked("Ivory", "ivory", 9002));
+                listing(Shop.TMS, 9001, now, obs(9, "8890")),
+                neverChecked(Shop.IVORY, 9002));
         products.add(framework);
 
         products.add(product("Bambu Lab A1 mini", "Compact 3D printer"));
@@ -288,15 +306,14 @@ public class DevDataSeeder implements CommandLineRunner {
         return product;
     }
 
-    private static TrackedItem listing(String shop, String host, int itemNo, Instant now, Observation... history) {
-        return listingIn(shop, host, itemNo, ILS, now, history);
+    private static TrackedItem listing(Shop shop, int itemNo, Instant now, Observation... history) {
+        return listingIn(shop, itemNo, ILS, now, history);
     }
 
-    private static TrackedItem listingIn(
-            String shop, String host, int itemNo, String currency, Instant now, Observation... history) {
+    private static TrackedItem listingIn(Shop shop, int itemNo, String currency, Instant now, Observation... history) {
         TrackedItem item = TrackedItem.builder()
-                .url("https://" + host + ".seed.invalid/item/" + itemNo)
-                .shopName(shop)
+                .url(shop.urlFor(itemNo))
+                .shopName(shop.displayName)
                 .priceHistory(new ArrayList<>())
                 .build();
 
@@ -322,10 +339,10 @@ public class DevDataSeeder implements CommandLineRunner {
     }
 
     /** A tracked listing that has never produced a price — {@code lastChecked} stays null. */
-    private static TrackedItem neverChecked(String shop, String host, int itemNo) {
+    private static TrackedItem neverChecked(Shop shop, int itemNo) {
         return TrackedItem.builder()
-                .url("https://" + host + ".seed.invalid/item/" + itemNo)
-                .shopName(shop)
+                .url(shop.urlFor(itemNo))
+                .shopName(shop.displayName)
                 .priceHistory(new ArrayList<>())
                 .build();
     }
