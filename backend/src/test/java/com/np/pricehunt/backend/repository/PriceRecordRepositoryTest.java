@@ -7,6 +7,7 @@ import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.domain.PriceRecord;
 import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.domain.TrackedItem;
+import com.np.pricehunt.backend.dto.TrendRecordView;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
@@ -115,6 +116,98 @@ class PriceRecordRepositoryTest {
         assertThat(results).hasSize(2);
         assertThat(results.get(0).getTimestamp()).isEqualTo(t2);
         assertThat(results.get(1).getTimestamp()).isEqualTo(t1);
+    }
+
+    // --- Trend engine queries (#145) ---
+
+    @Test
+    void findTrendRecords_returnsProjectionInAscendingOrder_boundsInclusive() {
+        List<TrendRecordView> results = priceRecordRepository.findTrendRecords(List.of(item.getId()), t1, t3);
+
+        assertThat(results).hasSize(3);
+        assertThat(results).extracting(TrendRecordView::timestamp).containsExactly(t1, t2, t3);
+        TrendRecordView first = results.get(0);
+        assertThat(first.trackedItemId()).isEqualTo(item.getId());
+        assertThat(first.price()).isEqualByComparingTo("100.00");
+        assertThat(first.currency()).isEqualTo("USD");
+        assertThat(first.availability()).isEqualTo(AvailabilityStatus.AVAILABLE);
+    }
+
+    @Test
+    void findTrendRecords_excludesRecordsOutsideTheWindow() {
+        List<TrendRecordView> results =
+                priceRecordRepository.findTrendRecords(List.of(item.getId()), t2, t3.minusSeconds(1));
+
+        assertThat(results).extracting(TrendRecordView::timestamp).containsExactly(t2);
+    }
+
+    @Test
+    void findTrendRecords_onlyReturnsRequestedItems() {
+        Product other = em.persist(Product.builder().name("Other").build());
+        TrackedItem otherItem = em.persist(TrackedItem.builder()
+                .url("https://ksp.co.il/item/9")
+                .shopName("ksp.co.il")
+                .product(other)
+                .build());
+        em.persist(record(otherItem, "55.00", t2));
+        em.flush();
+
+        List<TrendRecordView> results = priceRecordRepository.findTrendRecords(List.of(otherItem.getId()), t1, t3);
+
+        assertThat(results).extracting(TrendRecordView::trackedItemId).containsExactly(otherItem.getId());
+    }
+
+    @Test
+    void findTrendRecords_ordersEqualTimestampsById() {
+        // Deterministic "latest record" selection depends on this tiebreak.
+        PriceRecord sameInstantA = em.persist(record("81.00", t3));
+        PriceRecord sameInstantB = em.persist(record("82.00", t3));
+        em.flush();
+
+        List<TrendRecordView> results = priceRecordRepository.findTrendRecords(List.of(item.getId()), t3, t3);
+
+        assertThat(results).hasSize(3);
+        assertThat(sameInstantA.getId()).isLessThan(sameInstantB.getId());
+        assertThat(results.get(2).price()).isEqualByComparingTo("82.00");
+    }
+
+    @Test
+    void findTrendRecords_emptyWhenNoRecordsInWindow() {
+        assertThat(priceRecordRepository.findTrendRecords(List.of(item.getId()), t3.plusSeconds(1), t3.plusSeconds(2)))
+                .isEmpty();
+    }
+
+    @Test
+    void cutoffAwareFinder_ignoresFutureDatedRecords() {
+        Instant future = t3.plusSeconds(86_400);
+        em.persist(record("1.00", future));
+        em.flush();
+
+        PriceRecord latest = priceRecordRepository
+                .findFirstByTrackedItemAndTimestampLessThanEqualOrderByTimestampDescIdDesc(item, t3)
+                .orElseThrow();
+
+        assertThat(latest.getTimestamp()).isEqualTo(t3);
+        assertThat(latest.getPrice()).isEqualByComparingTo("90.00");
+    }
+
+    @Test
+    void cutoffAwareFinder_breaksTimestampTiesByHighestId() {
+        PriceRecord newest = em.persist(record("77.00", t3));
+        em.flush();
+
+        PriceRecord latest = priceRecordRepository
+                .findFirstByTrackedItemAndTimestampLessThanEqualOrderByTimestampDescIdDesc(item, t3)
+                .orElseThrow();
+
+        assertThat(latest.getId()).isEqualTo(newest.getId());
+    }
+
+    @Test
+    void cutoffAwareFinder_emptyWhenEveryRecordIsAfterTheCutoff() {
+        assertThat(priceRecordRepository.findFirstByTrackedItemAndTimestampLessThanEqualOrderByTimestampDescIdDesc(
+                        item, t1.minusSeconds(1)))
+                .isEmpty();
     }
 
     private PriceRecord record(String price, Instant timestamp) {

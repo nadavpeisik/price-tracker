@@ -1,0 +1,226 @@
+package com.np.pricehunt.backend.service.trend;
+
+import com.np.pricehunt.backend.config.PriceTrendProperties;
+import com.np.pricehunt.backend.domain.Product;
+import com.np.pricehunt.backend.domain.TrackedItem;
+import com.np.pricehunt.backend.dto.BestOfferResponse;
+import com.np.pricehunt.backend.dto.PriceTrendResponse;
+import com.np.pricehunt.backend.dto.TrendPointResponse;
+import com.np.pricehunt.backend.dto.TrendRecordView;
+import com.np.pricehunt.backend.repository.PriceRecordRepository;
+import com.np.pricehunt.backend.repository.ProductRepository;
+import com.np.pricehunt.backend.repository.TrackedItemRepository;
+import com.np.pricehunt.backend.service.fx.HistoricalRateWindow;
+import com.np.pricehunt.backend.service.fx.HistoricalRateWindowLoader;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
+
+/**
+ * Loads what the price-trend engine needs and hands it to {@link PriceTrendCalculator} (issue #145).
+ *
+ * <p>Deliberately batch-first: {@link #computeProductTrends} takes many products and issues <b>one</b>
+ * price query and <b>one</b> rate-window load for the whole set, so the dashboard query endpoint (#146)
+ * can call it per page without an N+1. The single-product endpoint is just a batch of one.
+ */
+@Slf4j
+@Service
+@Transactional(readOnly = true)
+@RequiredArgsConstructor
+public class PriceTrendService {
+
+    private final ProductRepository productRepository;
+    private final TrackedItemRepository trackedItemRepository;
+    private final PriceRecordRepository priceRecordRepository;
+    private final HistoricalRateWindowLoader rateWindowLoader;
+    private final PriceTrendCalculator calculator;
+    private final PriceTrendProperties trendProperties;
+    private final Clock clock;
+
+    /**
+     * @param days sparkline window; null falls back to the configured default
+     * @param displayCurrency must already be validated by the caller (the controller does this)
+     */
+    public PriceTrendResponse getProductTrend(Long productId, Integer days, String displayCurrency) {
+        Product product = productRepository
+                .findById(productId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found"));
+
+        List<TrackedItem> listings = trackedItemRepository.findByProduct(product);
+        ProductTrend trend = computeProductTrends(Map.of(product.getId(), listings), days, displayCurrency)
+                .getOrDefault(product.getId(), ProductTrend.empty());
+
+        return toResponse(product.getId(), displayCurrency, trend);
+    }
+
+    /**
+     * Computes trends for every product in {@code listingsByProductId}.
+     *
+     * <p>The {@code days} resolution lives here rather than in the endpoint because this is the
+     * reusable entry point: every caller gets the same bounds without repeating them.
+     *
+     * <p>Boundedness is the caller's responsibility and is satisfied by paging: a dashboard page of
+     * ~100 products over the default 30-day window projects tens of thousands of rows at worst, far
+     * under any bind-parameter or memory limit. The 730-day ceiling exists for the single-product
+     * detail view, not for batch use.
+     *
+     * @param displayCurrency must already be validated by the caller
+     */
+    public Map<Long, ProductTrend> computeProductTrends(
+            Map<Long, List<TrackedItem>> listingsByProductId, Integer days, String displayCurrency) {
+
+        int trendWindowDays = resolveTrendWindowDays(days);
+        Instant asOfInstant = clock.instant();
+        LocalDate asOfDay = LocalDate.ofInstant(asOfInstant, ZoneOffset.UTC);
+        LocalDate trendWindowStartDay = asOfDay.minusDays(trendWindowDays - 1L);
+
+        // The delta baseline sits at now−7d regardless of the requested window, and carry-forward can
+        // reach a further carryForwardDays back, so the fetch floor is independent of `days`.
+        Instant deltaBaselineInstant = asOfInstant.minus(PriceTrendCalculator.DELTA_WINDOW_DAYS, ChronoUnit.DAYS);
+        Instant trendWindowStartInstant =
+                trendWindowStartDay.atStartOfDay(ZoneOffset.UTC).toInstant();
+        Instant recordFetchStartInstant = (trendWindowStartInstant.isBefore(deltaBaselineInstant)
+                        ? trendWindowStartInstant
+                        : deltaBaselineInstant)
+                .minus(trendProperties.carryForwardDays(), ChronoUnit.DAYS);
+
+        Set<Long> listingIds = listingsByProductId.values().stream()
+                .filter(Objects::nonNull)
+                .flatMap(List::stream)
+                .map(TrackedItem::getId)
+                .collect(Collectors.toSet());
+
+        Map<Long, List<TrendRecordView>> recordsByListingId =
+                fetchTrendRecordsByListingId(listingIds, recordFetchStartInstant, asOfInstant);
+
+        LocalDate rateWindowStartDay =
+                trendWindowStartDay.isBefore(LocalDate.ofInstant(deltaBaselineInstant, ZoneOffset.UTC))
+                        ? trendWindowStartDay
+                        : LocalDate.ofInstant(deltaBaselineInstant, ZoneOffset.UTC);
+        HistoricalRateWindow rateWindow = rateWindowLoader.load(
+                rateWindowStartDay, asOfDay, requiredQuoteCurrencies(recordsByListingId, displayCurrency));
+
+        Map<Long, ProductTrend> trendsByProductId = new LinkedHashMap<>();
+        listingsByProductId.forEach((productId, listings) -> {
+            List<ListingWindow> listingWindows = (listings == null ? List.<TrackedItem>of() : listings)
+                    .stream()
+                            .map(listing -> new ListingWindow(
+                                    listing.getId(),
+                                    listing.getShopName(),
+                                    recordsByListingId.getOrDefault(listing.getId(), List.of())))
+                            .toList();
+            trendsByProductId.put(
+                    productId,
+                    calculator.compute(
+                            listingWindows,
+                            trendWindowStartDay,
+                            asOfInstant,
+                            displayCurrency,
+                            rateWindow,
+                            trendProperties.carryForwardDays()));
+        });
+        return trendsByProductId;
+    }
+
+    private Map<Long, List<TrendRecordView>> fetchTrendRecordsByListingId(
+            Set<Long> listingIds, Instant from, Instant to) {
+        if (listingIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, List<TrendRecordView>> byListingId = new HashMap<>();
+        for (TrendRecordView record : priceRecordRepository.findTrendRecords(listingIds, from, to)) {
+            byListingId
+                    .computeIfAbsent(record.trackedItemId(), k -> new ArrayList<>())
+                    .add(record);
+        }
+        return byListingId;
+    }
+
+    /**
+     * Currencies whose historical rates this batch actually needs.
+     *
+     * <p>Empty when every observation is already priced in the display currency: those conversions
+     * short-circuit to identity and never consult a rate, so loading a rate window would be two
+     * queries nothing reads. Single-currency products are the common case, so this is the difference
+     * between two wasted queries per request and none.
+     *
+     * <p>When at least one observation does need converting, both legs of the triangulation are
+     * required — every source currency and the display currency.
+     */
+    private static Set<String> requiredQuoteCurrencies(
+            Map<Long, List<TrendRecordView>> recordsByListingId, String displayCurrency) {
+        String display = displayCurrency == null ? null : displayCurrency.toUpperCase(Locale.ROOT);
+
+        Set<String> sourceCurrencies = new HashSet<>();
+        recordsByListingId
+                .values()
+                .forEach(records -> records.forEach(record -> {
+                    if (record.currency() != null) {
+                        sourceCurrencies.add(record.currency().toUpperCase(Locale.ROOT));
+                    }
+                }));
+
+        boolean everythingAlreadyInDisplayCurrency =
+                sourceCurrencies.stream().allMatch(currency -> currency.equals(display));
+        if (everythingAlreadyInDisplayCurrency) {
+            return Set.of();
+        }
+
+        if (display != null) {
+            sourceCurrencies.add(display);
+        }
+        return sourceCurrencies;
+    }
+
+    /** Applies the default when unset, rejects nonsense, and clamps to the configured ceiling. */
+    private int resolveTrendWindowDays(Integer days) {
+        if (days == null) {
+            return trendProperties.defaultWindowDays();
+        }
+        if (days < 1) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "days must be >= 1");
+        }
+        if (days > trendProperties.maxWindowDays()) {
+            log.info("Price-trend window clamped from {} to {} days", days, trendProperties.maxWindowDays());
+            return trendProperties.maxWindowDays();
+        }
+        return days;
+    }
+
+    private static PriceTrendResponse toResponse(Long productId, String displayCurrency, ProductTrend trend) {
+        List<TrendPointResponse> sparkline = trend.points().stream()
+                .map(point -> new TrendPointResponse(
+                        point.t(),
+                        point.price(),
+                        new BestOfferResponse(
+                                point.bestOffer().trackedItemId(),
+                                point.bestOffer().shopName(),
+                                point.bestOffer().observedAt())))
+                .toList();
+        return new PriceTrendResponse(
+                productId,
+                displayCurrency,
+                trend.delta7d(),
+                trend.conversionAsOf(),
+                trend.conversionStale(),
+                sparkline);
+    }
+}

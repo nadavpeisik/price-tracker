@@ -271,8 +271,77 @@ class PricePropertiesBindingTest {
                         assertThat(validationFailure(ctx.getStartupFailure())).isNotNull());
     }
 
+    // --- PriceTrendProperties (#145 price-trend engine) ---
+
+    private final ApplicationContextRunner trend =
+            new ApplicationContextRunner().withUserConfiguration(TrendConfig.class);
+
+    @Test
+    void trend_defaultsApply() {
+        trend.run(ctx -> {
+            PriceTrendProperties props = ctx.getBean(PriceTrendProperties.class);
+            assertThat(props.defaultWindowDays()).isEqualTo(30);
+            assertThat(props.maxWindowDays()).isEqualTo(730);
+            assertThat(props.carryForwardDays()).isEqualTo(7);
+        });
+    }
+
+    @Test
+    void trend_bindsExplicitValues() {
+        trend.withPropertyValues(
+                        "price.trend.default-window-days=14",
+                        "price.trend.max-window-days=365",
+                        "price.trend.carry-forward-days=3")
+                .run(ctx -> {
+                    PriceTrendProperties props = ctx.getBean(PriceTrendProperties.class);
+                    assertThat(props.defaultWindowDays()).isEqualTo(14);
+                    assertThat(props.maxWindowDays()).isEqualTo(365);
+                    assertThat(props.carryForwardDays()).isEqualTo(3);
+                });
+    }
+
+    @Test
+    void trend_rejectsNonPositiveWindow() {
+        trend.withPropertyValues("price.trend.default-window-days=0")
+                .run(ctx ->
+                        assertThat(validationFailure(ctx.getStartupFailure())).isNotNull());
+    }
+
+    @Test
+    void trend_rejectsCarryForwardAboveMax() {
+        trend.withPropertyValues("price.trend.carry-forward-days=91")
+                .run(ctx ->
+                        assertThat(validationFailure(ctx.getStartupFailure())).isNotNull());
+    }
+
+    @Test
+    void trend_rejectsMaxWindowAboveTwoYears() {
+        trend.withPropertyValues("price.trend.max-window-days=1000")
+                .run(ctx ->
+                        assertThat(validationFailure(ctx.getStartupFailure())).isNotNull());
+    }
+
+    @Test
+    void trend_rejectsDefaultWindowAboveMaxWindow() {
+        // Cross-field invariant lives in the compact constructor, so this surfaces as an
+        // IllegalArgumentException rather than a bean-validation failure.
+        trend.withPropertyValues("price.trend.default-window-days=100", "price.trend.max-window-days=30")
+                .run(ctx -> assertThat(ctx.getStartupFailure())
+                        .isNotNull()
+                        .hasStackTraceContaining("must be <= price.trend.max-window-days"));
+    }
+
+    @Test
+    void trend_rejectsDefaultWindowAboveMaxWindowOnDirectConstruction() {
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> new PriceTrendProperties(100, 30, 7))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     @EnableConfigurationProperties(PriceHistoryProperties.class)
     static class HistoryConfig {}
+
+    @EnableConfigurationProperties(PriceTrendProperties.class)
+    static class TrendConfig {}
 
     @EnableConfigurationProperties(ScrapeAuditProperties.class)
     static class AuditConfig {}
