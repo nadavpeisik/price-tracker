@@ -106,8 +106,8 @@ longer auto-allowed), so `~/.gemini/antigravity-cli/settings.json` needs:
 Merge the `permissions` key into the existing root object — don't replace the file. Grant
 `read_file` only: `--sandbox` restricts the terminal but does **not** block writes, so
 withholding `command(...)` / `write_file(...)` is the entire read-only guarantee. Both scripts
-retry once, then fail loudly (exit 2) printing agy's stderr, which names any missing rule — an
-empty run can never read as "reviewed, no findings".
+retry once *when stderr names an auto-denied tool*, then fail loudly (exit 2) printing agy's
+stderr, which names any missing rule — an empty run can never read as "reviewed, no findings".
 
 Guardrails (same model as the diff review and issue #81):
 - **Read-only:** `agy-plan-review.sh` runs `agy --sandbox` (it reads the codebase either way — the allow-list, not the sandbox, is what blocks writes); `codex-plan-review.sh` always runs `codex exec --sandbox read-only`, which permits codebase reads while blocking all writes — no toggle needed.

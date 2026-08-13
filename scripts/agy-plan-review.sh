@@ -255,9 +255,11 @@ run_agy
 # shell command (denied by design) on the next, and either way the run dies with zero output and
 # exit 0. Re-run VERBATIM — the retry is a full grounded review, never a degraded file-less one.
 # Bounded at one: a second failure is a real permissions problem, and the guard below explains it.
+did_retry=0
 if [ "$status" -eq 0 ] && [ -z "$(printf '%s' "$OUTPUT" | tr -d '[:space:]')" ] &&
   printf '%s' "$ERR" | grep -q 'permission that headless mode cannot prompt for'; then
   echo "notice: agy aborted on an auto-denied tool call and produced no review — retrying once." >&2
+  did_retry=1
   run_agy
 fi
 
@@ -344,7 +346,16 @@ fi
 if [ -z "$(printf '%s' "$OUTPUT" | tr -d '[:space:]')" ]; then
   {
     echo "============== PLAN REVIEW FAILED (no output) =============="
-    echo "agy exited $status but produced no review text, twice (the retry failed too)."
+    # State what actually happened. The retry only fires when stderr names an auto-denied tool,
+    # so claiming two attempts unconditionally would be the same kind of lie this guard exists
+    # to prevent — and it would send anyone debugging a different silent failure down the
+    # permissions path for no reason.
+    if [ "$did_retry" -eq 1 ]; then
+      echo "agy exited $status but produced no review text — twice; the verbatim retry failed too."
+    else
+      echo "agy exited $status but produced no review text (no retry: stderr did not name an"
+      echo "auto-denied tool, so this is a different silent failure)."
+    fi
     echo "--- stderr ---"
     printf '%s\n' "$ERR"
     echo "============================================================"
