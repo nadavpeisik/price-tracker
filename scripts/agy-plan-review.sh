@@ -16,7 +16,7 @@ set -euo pipefail
 
 MODEL="${AGY_REVIEW_MODEL:-Gemini 3.6 Flash (High)}"
 TIMEOUT="${AGY_REVIEW_TIMEOUT:-240s}"
-SANDBOX="${AGY_REVIEW_SANDBOX:-1}" # sandbox ON unless explicitly "0" (fail-safe); 0 = allow agy command/file access
+SANDBOX="${AGY_REVIEW_SANDBOX:-1}" # sandbox ON unless explicitly "0" (fail-safe); restricts the terminal, NOT file access (see usage)
 PLAN_DIR="${AGY_PLAN_DIR:-$HOME/.claude/plans}"
 PLAN_DIR="${PLAN_DIR/#\~/$HOME}" # expand a leading ~ if AGY_PLAN_DIR was set with a literal/quoted tilde
 
@@ -39,12 +39,15 @@ Environment:
                       "Gemini 3.1 Pro (High)" when off the free tier). Shared with
                       agy-review.sh so both tools use one set of dials.
   AGY_REVIEW_TIMEOUT  agy --print-timeout value (default: 240s).
-  AGY_REVIEW_SANDBOX  On by default — runs agy with --sandbox so it cannot run commands or
-                      edit files (defends against prompt injection in the plan). ONLY the
-                      value 0 disables it (fail-safe: a typo can't silently turn off the
-                      sandbox). Setting 0 lets agy read the codebase for extra context — more
-                      useful here than for a diff review, since a plan is abstract and the
-                      surrounding code sharpens the critique.
+  AGY_REVIEW_SANDBOX  On by default — runs agy with --sandbox ("terminal restrictions"),
+                      which defends against prompt injection in the plan. ONLY the value 0
+                      disables it (fail-safe: a typo can't silently turn off the sandbox).
+                      It does NOT gate file access either way: agy reads the codebase fine
+                      under --sandbox (wanted — a plan is abstract and the surrounding code
+                      sharpens the critique), and --sandbox does NOT block writes. What keeps
+                      this run read-only is permissions.allow in agy's settings.json granting
+                      read_file(...) but never write_file(...) or command(...), backed by the
+                      working-tree before/after check below.
   AGY_REVIEW_MAX_PROMPT_BYTES
                       Hard ceiling on the prompt (default: 768000 = 750 KiB). The
                       prompt is passed in argv, which the OS bounds by ARG_MAX (1MB
@@ -132,7 +135,8 @@ if [ "$plan_bytes" -gt 200000 ]; then
   echo "warning: large plan (~${plan_bytes} chars) — consider trimming it." >&2
 fi
 
-cd -- "$(git rev-parse --show-toplevel)"
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd -- "$REPO_ROOT"
 
 # --- build the prompt (lean & un-prescriptive: agy reviews with its own judgment) ---
 read -r -d '' INSTRUCTIONS <<'PROMPT_EOF' || true
@@ -156,7 +160,27 @@ Output format:
   as-is or needs revision (and the blockers if so).
 PROMPT_EOF
 
+# A plan is abstract, so agy grounds its critique by opening repo files on its own — which is
+# what we want, and also exactly where agy 1.1.12 kills the run. Headless mode cannot prompt for
+# permission, so every tool call must match a rule in permissions.allow (see the setup block in
+# CLAUDE.md): `read_file(<abs dir>)` is granted, `write_file`/`command` deliberately are not —
+# that asymmetry is what makes agy a reader and not an editor here. The catch is that a
+# read_file call carrying a RELATIVE path matches no rule, gets auto-denied, and agy then gives
+# up with ZERO stdout and exit 0 — the review is lost, not degraded. Verified 2026-08-13: the
+# identical prompt dies on `backend/pom.xml` and succeeds on the absolute form; the real 38 KB
+# plan that failed repeatedly reviewed cleanly once this note was prepended. Naming shell
+# commands as denied matters too — asked for a relative path, agy fell back to `command`, which
+# is denied by design and kills the run the same way. Interpolated rather than folded into the
+# quoted heredoc so the root is this clone's, not a hardcoded path.
+FILE_ACCESS_NOTE="This repository is checked out at $REPO_ROOT, and you are encouraged to open
+files under it to ground your critique in the real code. Always pass an ABSOLUTE path (e.g.
+$REPO_ROOT/backend/pom.xml) to the read_file tool: a relative path is auto-denied in this
+headless run and aborts the whole review, returning nothing at all. Read files via read_file
+only — shell commands are denied, as is editing anything."
+
 PROMPT="$INSTRUCTIONS
+
+$FILE_ACCESS_NOTE
 
 === IMPLEMENTATION PLAN (source: $PLAN_DESC) ===
 $PLAN"
@@ -216,11 +240,28 @@ if [ "$SANDBOX" != "0" ]; then
   agy_args=(--sandbox "${agy_args[@]}")
 fi
 
-set +e
-OUTPUT="$(agy "${agy_args[@]}" 2>"$errfile")"
-status=$?
-set -e
-ERR="$(cat "$errfile")"
+run_agy() {
+  set +e
+  OUTPUT="$(agy "${agy_args[@]}" 2>"$errfile")"
+  status=$?
+  set -e
+  ERR="$(cat "$errfile")"
+}
+
+run_agy
+
+# One retry when agy aborted on an auto-denied tool call. Which tool it reaches for is not
+# deterministic: the same prompt can be served entirely by read_file on one run and reach for a
+# shell command (denied by design) on the next, and either way the run dies with zero output and
+# exit 0. Re-run VERBATIM — the retry is a full grounded review, never a degraded file-less one.
+# Bounded at one: a second failure is a real permissions problem, and the guard below explains it.
+did_retry=0
+if [ "$status" -eq 0 ] && [ -z "$(printf '%s' "$OUTPUT" | tr -d '[:space:]')" ] &&
+  printf '%s' "$ERR" | grep -q 'permission that headless mode cannot prompt for'; then
+  echo "notice: agy aborted on an auto-denied tool call and produced no review — retrying once." >&2
+  did_retry=1
+  run_agy
+fi
 
 after="$(git status --porcelain -uno && git diff)"
 
@@ -297,21 +338,34 @@ fi
 # prompt), and when that happens it emits ZERO bytes on stdout and still exits 0 — the
 # reason lands on stderr, which a status-0 run would otherwise discard. Without this
 # guard the script prints its header and nothing else, which reads as "reviewed, found
-# nothing". This bit plan reviews specifically: plans live outside the workspace, so
-# reading one needs read_file(~/.claude/plans) in ~/.gemini/antigravity-cli/settings.json
-# (workspace files are auto-allowed). agy's stderr names the exact rule — surface it.
+# nothing". As of agy 1.1.12 permissions.allow gates BOTH sides of a plan review: the
+# plan itself (plans live outside the workspace) and the repo files agy opens to ground
+# its critique — workspace reads are NOT auto-allowed, so settings.json needs a read_file
+# rule for the plan dir AND one for the checkout root. Reaching here means the verbatim
+# retry above also failed. agy's stderr names the exact rule — surface it.
 if [ -z "$(printf '%s' "$OUTPUT" | tr -d '[:space:]')" ]; then
   {
     echo "============== PLAN REVIEW FAILED (no output) =============="
-    echo "agy exited $status but produced no review text."
+    # State what actually happened. The retry only fires when stderr names an auto-denied tool,
+    # so claiming two attempts unconditionally would be the same kind of lie this guard exists
+    # to prevent — and it would send anyone debugging a different silent failure down the
+    # permissions path for no reason.
+    if [ "$did_retry" -eq 1 ]; then
+      echo "agy exited $status but produced no review text — twice; the verbatim retry failed too."
+    else
+      echo "agy exited $status but produced no review text (no retry: stderr did not name an"
+      echo "auto-denied tool, so this is a different silent failure)."
+    fi
     echo "--- stderr ---"
     printf '%s\n' "$ERR"
     echo "============================================================"
-    echo "This is NOT a plan review. If stderr names an auto-denied read_file OUTSIDE the"
-    echo "workspace (plans live in ~/.claude/plans), add that read_file rule to"
-    echo "permissions.allow in ~/.gemini/antigravity-cli/settings.json. Never grant"
-    echo "command(...) or write_file(...) to silence this — a reviewer that can run commands"
-    echo "or edit files is no longer read-only. Any other denied tool: just re-run."
+    echo "This is NOT a plan review. If stderr names an auto-denied read_file, add that"
+    echo "rule to permissions.allow in ~/.gemini/antigravity-cli/settings.json. As of agy"
+    echo "1.1.12 you need BOTH read_file(<plan dir>) and read_file($REPO_ROOT) — workspace"
+    echo "reads are not auto-allowed — and the path agy passes must be ABSOLUTE, since a"
+    echo "relative path matches no rule. Never grant command(...) or write_file(...) to"
+    echo "silence this: reading the repo is wanted, editing it is not, and that allow-list"
+    echo "asymmetry is the only thing enforcing it (--sandbox does NOT block writes)."
   } >&2
   exit 2
 fi

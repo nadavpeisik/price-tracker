@@ -87,27 +87,30 @@ Workflow: **write plan → print the full plan to the user → run BOTH `scripts
 
 Both produce findings grouped **HIGH / MEDIUM / LOW**, ending with `VERDICT:`.
 
-**One-time agy setup (per machine).** agy auto-allows reads *inside* the trusted workspace,
-but plans live in `~/.claude/plans` — outside it. Since agy 1.1.3 a headless (`-p`) run
-cannot prompt for permission, so it **soft-denies** the read, emits **zero bytes, and still
-exits 0**. `~/.gemini/antigravity-cli/settings.json` therefore needs:
+**One-time agy setup (per machine).** A headless (`-p`) run can't prompt, so any tool call not
+matching `permissions.allow` is soft-denied — agy then emits **zero bytes and exits 0**. As of
+**agy 1.1.12** both the plan dir and the repo need an explicit rule (workspace reads are no
+longer auto-allowed), so `~/.gemini/antigravity-cli/settings.json` needs:
 
 ```json
 {
-  "permissions": { "allow": ["read_file(/Users/<your-username>/.claude/plans)"] }
+  "permissions": {
+    "allow": [
+      "read_file(/Users/<your-username>/.claude/plans)",
+      "read_file(/Users/<your-username>/price-tracker)"
+    ]
+  }
 }
 ```
 
-Merge the `permissions` key into the existing root object — don't replace the file.
-
-Both agy scripts now treat empty output as a hard failure (exit 2) and print agy's stderr,
-which names the exact allow-rule required — an empty run can never read as "reviewed, no
-findings". A tool other than `read_file` (e.g. `command`) is still soft-denied by design;
-that's a loud failure to re-run, **not** something to fix by granting `command`, which would
-break the read-only guarantee below.
+Merge the `permissions` key into the existing root object — don't replace the file. Grant
+`read_file` only: `--sandbox` restricts the terminal but does **not** block writes, so
+withholding `command(...)` / `write_file(...)` is the entire read-only guarantee. Both scripts
+retry once *when stderr names an auto-denied tool*, then fail loudly (exit 2) printing agy's
+stderr, which names any missing rule — an empty run can never read as "reviewed, no findings".
 
 Guardrails (same model as the diff review and issue #81):
-- **Read-only:** `agy-plan-review.sh` runs `agy --sandbox` (set `AGY_REVIEW_SANDBOX=0` for codebase access); `codex-plan-review.sh` always runs `codex exec --sandbox read-only`, which permits codebase reads while blocking all writes — no toggle needed.
+- **Read-only:** `agy-plan-review.sh` runs `agy --sandbox` (it reads the codebase either way — the allow-list, not the sandbox, is what blocks writes); `codex-plan-review.sh` always runs `codex exec --sandbox read-only`, which permits codebase reads while blocking all writes — no toggle needed.
 - **Surface BOTH raw reviews** to the user every time; **the human breaks ties** when Gemini and Codex disagree with Claude or with each other.
 - **Bounded rounds:** stop re-reviewing once a round yields no accepted findings from either tool (don't ping-pong).
 - **Advisory, not a gate** — the human approves the plan via `ExitPlanMode`, not Gemini or Codex.

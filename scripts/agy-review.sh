@@ -38,10 +38,14 @@ Environment:
   AGY_REVIEW_MODEL    Model (default: "Gemini 3.6 Flash (High)"; switch to
                       "Gemini 3.1 Pro (High)" when off the free tier).
   AGY_REVIEW_TIMEOUT  agy --print-timeout value (default: 240s).
-  AGY_REVIEW_SANDBOX  On by default — runs agy with --sandbox so it cannot run commands
-                      or edit files (defends against prompt injection in the diff).
-                      ONLY the value 0 disables it (fail-safe: a typo can't silently
-                      turn off the sandbox); set 0 to let agy explore for extra context.
+  AGY_REVIEW_SANDBOX  On by default — runs agy with --sandbox ("terminal restrictions"),
+                      which defends against prompt injection in the diff. ONLY the value
+                      0 disables it (fail-safe: a typo can't silently turn off the
+                      sandbox). It does NOT gate file access either way: agy reads the
+                      repo fine under --sandbox, and --sandbox does NOT block writes.
+                      What keeps this run read-only is permissions.allow in agy's
+                      settings.json granting read_file(...) but never write_file(...)
+                      or command(...), backed by the tree before/after check below.
   AGY_REVIEW_MAX_PROMPT_BYTES
                       Hard ceiling on the prompt (default: 768000 = 750 KiB). The
                       prompt is passed in argv, which the OS bounds by ARG_MAX (1MB
@@ -86,7 +90,8 @@ git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
   exit 1
 }
 
-cd -- "$(git rev-parse --show-toplevel)"
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd -- "$REPO_ROOT"
 
 # --- compute the diff --------------------------------------------------------
 # Delegates to get-review-diff.sh so every reviewer (agy, codex, ...) sees the exact
@@ -131,7 +136,23 @@ Output format:
   or has blockers.
 PROMPT_EOF
 
+# The diff carries its own context, but agy still opens repo files to see what a hunk touches —
+# which is wanted. Under agy 1.1.12, headless mode cannot prompt, so every tool call must match
+# a permissions.allow rule: read_file(<abs dir>) is granted, write_file/command are not, and that
+# asymmetry is what makes agy a reader here rather than an editor. A read_file call with a
+# RELATIVE path matches no rule, is auto-denied, and agy then gives up with ZERO stdout and exit
+# 0 — losing the review, not degrading it. Verified 2026-08-13 against the plan-review sibling,
+# where this bit repeatedly; the same note prevents it here. Interpolated rather than folded into
+# the quoted heredoc so the root is this clone's, not a hardcoded path.
+FILE_ACCESS_NOTE="This repository is checked out at $REPO_ROOT, and you may open files under it
+to see more than the diff shows. Always pass an ABSOLUTE path (e.g. $REPO_ROOT/backend/pom.xml)
+to the read_file tool: a relative path is auto-denied in this headless run and aborts the whole
+review, returning nothing at all. Read files via read_file only — shell commands are denied, as
+is editing anything."
+
 PROMPT="$INSTRUCTIONS
+
+$FILE_ACCESS_NOTE
 
 === DIFF (range: $RANGE_DESC) ===
 $DIFF"
@@ -220,11 +241,28 @@ if [ "$SANDBOX" != "0" ]; then
   agy_args=(--sandbox "${agy_args[@]}")
 fi
 
-set +e
-OUTPUT="$(agy "${agy_args[@]}" 2>"$errfile")"
-status=$?
-set -e
-ERR="$(cat "$errfile")"
+run_agy() {
+  set +e
+  OUTPUT="$(agy "${agy_args[@]}" 2>"$errfile")"
+  status=$?
+  set -e
+  ERR="$(cat "$errfile")"
+}
+
+run_agy
+
+# One retry when agy aborted on an auto-denied tool call. Which tool it reaches for is not
+# deterministic: the same prompt can be served entirely by read_file on one run and reach for a
+# shell command (denied by design) on the next, and either way the run dies with zero output and
+# exit 0. Re-run VERBATIM — the retry is a full review, never a degraded one. Bounded at one: a
+# second failure is a real permissions problem, and the guard below explains it.
+did_retry=0
+if [ "$status" -eq 0 ] && [ -z "$(printf '%s' "$OUTPUT" | tr -d '[:space:]')" ] &&
+  printf '%s' "$ERR" | grep -q 'permission that headless mode cannot prompt for'; then
+  echo "notice: agy aborted on an auto-denied tool call and produced no review — retrying once." >&2
+  did_retry=1
+  run_agy
+fi
 
 after="$(snapshot_state)"
 
@@ -301,21 +339,33 @@ fi
 # prompt), and when that happens it emits ZERO bytes on stdout and still exits 0 — the
 # reason lands on stderr, which a status-0 run would otherwise discard. Without this
 # guard the script prints its header and nothing else, which reads as "reviewed, found
-# nothing". Files inside the workspace are auto-allowed; reads outside it (and commands)
-# need an allow-rule in ~/.gemini/antigravity-cli/settings.json — agy's stderr names the
-# exact rule, so surface it verbatim.
+# nothing". As of agy 1.1.12 workspace files are NOT auto-allowed: every read needs a
+# read_file(<absolute dir>) rule in ~/.gemini/antigravity-cli/settings.json, and the path agy
+# passes must be absolute to match one. Reaching here means the verbatim retry above also
+# failed. agy's stderr names the exact rule, so surface it verbatim.
 if [ -z "$(printf '%s' "$OUTPUT" | tr -d '[:space:]')" ]; then
   {
     echo "================ REVIEW FAILED (no output) =================="
-    echo "agy exited $status but produced no review text."
+    # State what actually happened. The retry only fires when stderr names an auto-denied tool,
+    # so claiming two attempts unconditionally would be the same kind of lie this guard exists
+    # to prevent — and it would send anyone debugging a different silent failure down the
+    # permissions path for no reason.
+    if [ "$did_retry" -eq 1 ]; then
+      echo "agy exited $status but produced no review text — twice; the verbatim retry failed too."
+    else
+      echo "agy exited $status but produced no review text (no retry: stderr did not name an"
+      echo "auto-denied tool, so this is a different silent failure)."
+    fi
     echo "--- stderr ---"
     printf '%s\n' "$ERR"
     echo "============================================================"
-    echo "This is NOT a code review. If stderr names an auto-denied read_file OUTSIDE the"
-    echo "workspace, add that read_file rule to permissions.allow in"
-    echo "~/.gemini/antigravity-cli/settings.json. Never grant command(...) or write_file(...)"
-    echo "to silence this — a reviewer that can run commands or edit files is no longer"
-    echo "read-only. For any other denied tool, just re-run: what agy reaches for varies."
+    echo "This is NOT a code review. If stderr names an auto-denied read_file, add that rule"
+    echo "to permissions.allow in ~/.gemini/antigravity-cli/settings.json — as of agy 1.1.12"
+    echo "even workspace reads need read_file($REPO_ROOT), and the path agy passes must be"
+    echo "ABSOLUTE, since a relative path matches no rule. Never grant command(...) or"
+    echo "write_file(...) to silence this: reading the repo is wanted, editing it is not, and"
+    echo "that allow-list asymmetry is the only thing enforcing it (--sandbox does NOT block"
+    echo "writes)."
   } >&2
   exit 2
 fi
