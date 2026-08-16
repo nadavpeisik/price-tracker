@@ -123,7 +123,22 @@ class PricePropertiesBindingTest {
             PriceTrackingProperties props = ctx.getBean(PriceTrackingProperties.class);
             assertThat(props.maxDeltaPercent()).isEqualTo(200);
             assertThat(props.minRefreshInterval()).isEqualTo(Duration.ofMinutes(1));
+            assertThat(props.maxListingsPerProduct()).isEqualTo(20);
         });
+    }
+
+    @Test
+    void tracking_bindsExplicitListingsCap() {
+        tracking.withPropertyValues("price.tracking.max-listings-per-product=3").run(ctx -> assertThat(
+                        ctx.getBean(PriceTrackingProperties.class).maxListingsPerProduct())
+                .isEqualTo(3));
+    }
+
+    @Test
+    void tracking_rejectsNonPositiveListingsCap() {
+        tracking.withPropertyValues("price.tracking.max-listings-per-product=0")
+                .run(ctx ->
+                        assertThat(validationFailure(ctx.getStartupFailure())).isNotNull());
     }
 
     @Test
@@ -336,6 +351,41 @@ class PricePropertiesBindingTest {
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> new PriceTrendProperties(100, 30, 7))
                 .isInstanceOf(IllegalArgumentException.class);
     }
+
+    // --- DashboardProperties (#146 dashboard query endpoint) ---
+
+    private final ApplicationContextRunner dashboard =
+            new ApplicationContextRunner().withUserConfiguration(DashboardConfig.class);
+
+    @Test
+    void dashboard_defaultApplies() {
+        dashboard.run(ctx ->
+                assertThat(ctx.getBean(DashboardProperties.class).maxPageSize()).isEqualTo(100));
+    }
+
+    @Test
+    void dashboard_bindsExplicitValue() {
+        dashboard.withPropertyValues("price.dashboard.max-page-size=25").run(ctx -> assertThat(
+                        ctx.getBean(DashboardProperties.class).maxPageSize())
+                .isEqualTo(25));
+    }
+
+    @Test
+    void dashboard_rejectsNonPositivePageSize() {
+        dashboard.withPropertyValues("price.dashboard.max-page-size=0").run(ctx -> assertThat(
+                        validationFailure(ctx.getStartupFailure()))
+                .isNotNull());
+    }
+
+    @Test
+    void dashboard_rejectsPageSizeAboveMax() {
+        dashboard.withPropertyValues("price.dashboard.max-page-size=501").run(ctx -> assertThat(
+                        validationFailure(ctx.getStartupFailure()))
+                .isNotNull());
+    }
+
+    @EnableConfigurationProperties(DashboardProperties.class)
+    static class DashboardConfig {}
 
     @EnableConfigurationProperties(PriceHistoryProperties.class)
     static class HistoryConfig {}

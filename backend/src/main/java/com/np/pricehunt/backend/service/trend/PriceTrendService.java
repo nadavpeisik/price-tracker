@@ -6,10 +6,11 @@ import com.np.pricehunt.backend.domain.TrackedItem;
 import com.np.pricehunt.backend.dto.BestOfferResponse;
 import com.np.pricehunt.backend.dto.PriceTrendResponse;
 import com.np.pricehunt.backend.dto.TrendPointResponse;
-import com.np.pricehunt.backend.dto.TrendRecordView;
 import com.np.pricehunt.backend.repository.PriceRecordRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
+import com.np.pricehunt.backend.repository.projection.TrendRecordView;
+import com.np.pricehunt.backend.service.fx.HistoricalRateRequirements;
 import com.np.pricehunt.backend.service.fx.HistoricalRateWindow;
 import com.np.pricehunt.backend.service.fx.HistoricalRateWindowLoader;
 import java.time.Clock;
@@ -19,10 +20,8 @@ import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -86,9 +85,26 @@ public class PriceTrendService {
      */
     public Map<Long, ProductTrend> computeProductTrends(
             Map<Long, List<TrackedItem>> listingsByProductId, Integer days, String displayCurrency) {
+        return computeProductTrendsAsOf(listingsByProductId, days, displayCurrency, clock.instant());
+    }
+
+    /**
+     * As above, but evaluated at an instant the <em>caller</em> owns rather than the clock.
+     *
+     * <p>For a request that computes in more than one pass — the dashboard runs a whole-set pass and
+     * then the page's sparklines — reading the clock twice lets the passes straddle a second, or at a
+     * UTC midnight a day, and report a headline price and a series that disagree about when "now" was.
+     *
+     * @param asOfInstant evaluation instant; callers with a single pass want {@link
+     *     #computeProductTrends(Map, Integer, String)} instead
+     */
+    public Map<Long, ProductTrend> computeProductTrendsAsOf(
+            Map<Long, List<TrackedItem>> listingsByProductId,
+            Integer days,
+            String displayCurrency,
+            Instant asOfInstant) {
 
         int trendWindowDays = resolveTrendWindowDays(days);
-        Instant asOfInstant = clock.instant();
         LocalDate asOfDay = LocalDate.ofInstant(asOfInstant, ZoneOffset.UTC);
         LocalDate trendWindowStartDay = asOfDay.minusDays(trendWindowDays - 1L);
 
@@ -115,8 +131,14 @@ public class PriceTrendService {
                 trendWindowStartDay.isBefore(LocalDate.ofInstant(deltaBaselineInstant, ZoneOffset.UTC))
                         ? trendWindowStartDay
                         : LocalDate.ofInstant(deltaBaselineInstant, ZoneOffset.UTC);
+        List<String> observedCurrencies = recordsByListingId.values().stream()
+                .flatMap(List::stream)
+                .map(TrendRecordView::currency)
+                .toList();
         HistoricalRateWindow rateWindow = rateWindowLoader.load(
-                rateWindowStartDay, asOfDay, requiredQuoteCurrencies(recordsByListingId, displayCurrency));
+                rateWindowStartDay,
+                asOfDay,
+                HistoricalRateRequirements.forConversion(observedCurrencies, displayCurrency));
 
         Map<Long, ProductTrend> trendsByProductId = new LinkedHashMap<>();
         listingsByProductId.forEach((productId, listings) -> {
@@ -152,42 +174,6 @@ public class PriceTrendService {
                     .add(observation);
         }
         return byListingId;
-    }
-
-    /**
-     * Currencies whose historical rates this batch actually needs.
-     *
-     * <p>Empty when every observation is already priced in the display currency: those conversions
-     * short-circuit to identity and never consult a rate, so loading a rate window would be two
-     * queries nothing reads. Single-currency products are the common case, so this is the difference
-     * between two wasted queries per request and none.
-     *
-     * <p>When at least one observation does need converting, both legs of the triangulation are
-     * required — every source currency and the display currency.
-     */
-    private static Set<String> requiredQuoteCurrencies(
-            Map<Long, List<TrendRecordView>> recordsByListingId, String displayCurrency) {
-        String display = displayCurrency == null ? null : displayCurrency.toUpperCase(Locale.ROOT);
-
-        Set<String> sourceCurrencies = new HashSet<>();
-        recordsByListingId
-                .values()
-                .forEach(records -> records.forEach(observation -> {
-                    if (observation.currency() != null) {
-                        sourceCurrencies.add(observation.currency().toUpperCase(Locale.ROOT));
-                    }
-                }));
-
-        boolean everythingAlreadyInDisplayCurrency =
-                sourceCurrencies.stream().allMatch(currency -> currency.equals(display));
-        if (everythingAlreadyInDisplayCurrency) {
-            return Set.of();
-        }
-
-        if (display != null) {
-            sourceCurrencies.add(display);
-        }
-        return sourceCurrencies;
     }
 
     /** Applies the default when unset, rejects nonsense, and clamps to the configured ceiling. */

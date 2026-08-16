@@ -3,15 +3,16 @@ import { toBackendParams } from '@/lib/api-client'
 import type { DashboardQuery } from '@/lib/types'
 
 /**
- * The adapter owns the UI↔backend translation (#144): 1-based UI page →
- * Spring's 0-based Pageable, repeated shops, trimmed search, param names.
+ * The adapter owns the UI↔backend serialization (#144): repeated shops,
+ * trimmed search, param names. Pagination is 1-based end to end (#146), so
+ * `page` passes through untouched — the absence of arithmetic is the point.
  */
 describe('toBackendParams', () => {
   const base: DashboardQuery = { sort: 'biggest7dDrop', page: 1, size: 20 }
 
-  it('translates the 1-based UI page to a 0-based backend page', () => {
-    expect(toBackendParams({ ...base, page: 1 }).get('page')).toBe('0')
-    expect(toBackendParams({ ...base, page: 3 }).get('page')).toBe('2')
+  it('sends the UI page unchanged — pagination is 1-based on both sides', () => {
+    expect(toBackendParams({ ...base, page: 1 }).get('page')).toBe('1')
+    expect(toBackendParams({ ...base, page: 3 }).get('page')).toBe('3')
   })
 
   it('serializes shops as repeated params', () => {

@@ -42,6 +42,9 @@ import org.springframework.web.server.ResponseStatusException;
 @ExtendWith(MockitoExtension.class)
 class ProductTrackingServiceSsrfChokepointTest {
 
+    private static final PriceTrackingProperties TRACKING_PROPERTIES =
+            new PriceTrackingProperties(200, Duration.ofMinutes(1), 20);
+
     private static final String URL = "https://example.com/item";
 
     @Mock
@@ -89,12 +92,12 @@ class ProductTrackingServiceSsrfChokepointTest {
                 scraperClient,
                 transactionTemplate,
                 urlValidator,
-                new PriceTrackingProperties(200, Duration.ofMinutes(1)),
+                TRACKING_PROPERTIES,
                 shopNameResolver,
                 cooldownLimiter,
                 Clock.systemUTC(),
                 scrapeAttemptRecorder,
-                new PriceValidator(new PriceTrackingProperties(200, Duration.ofMinutes(1))));
+                new PriceValidator(TRACKING_PROPERTIES));
 
         product = Product.builder().id(1L).name("Test Product").build();
         item = TrackedItem.builder()
@@ -164,7 +167,7 @@ class ProductTrackingServiceSsrfChokepointTest {
     void trackUrl_validatesExactlyOnce() {
         runCallbacksInline();
         when(productRepository.existsById(1L)).thenReturn(true);
-        when(productRepository.findById(1L)).thenReturn(Optional.of(product));
+        when(productRepository.findForUpdateById(1L)).thenReturn(Optional.of(product));
         when(trackedItemRepository.findByUrl(URL)).thenReturn(Optional.of(item));
         when(shopNameResolver.resolve(eq(URL), any()))
                 .thenReturn(new ShopNameResolver.Resolved("example.com", ShopNameSource.HOST_FALLBACK, null));

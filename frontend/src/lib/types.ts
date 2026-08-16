@@ -105,7 +105,11 @@ export interface DashboardQuery {
   /** Multi-select; matched against facets.shops. */
   shops?: string[]
   sort: DashboardSort
-  /** UI is 1-BASED; the API client translates to Spring's 0-based Pageable. */
+  /**
+   * 1-BASED, and stays that way on the wire (#146) — the backend rejects
+   * `?page=0` and echoes the requested page back in `page.number`, so any
+   * page number the client receives is one it can send.
+   */
   page: number
   size: number
 }

@@ -10,7 +10,13 @@ import lombok.NoArgsConstructor;
 
 @Entity
 // `timestamp DESC` honored by Hibernate 6+ on Postgres; older providers ignore the column order silently.
-@Table(indexes = {@Index(name = "idx_price_record_item_timestamp", columnList = "tracked_item_id, timestamp DESC")})
+// The bare `timestamp` index (V10) serves the dashboard's two-cutoff query, whose predicates are
+// timestamp-only across the whole tracked set — the composite's leading column is absent there.
+@Table(
+        indexes = {
+            @Index(name = "idx_price_record_item_timestamp", columnList = "tracked_item_id, timestamp DESC"),
+            @Index(name = "idx_price_record_timestamp", columnList = "timestamp")
+        })
 @Data
 @Builder
 @NoArgsConstructor

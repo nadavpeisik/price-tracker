@@ -1,10 +1,13 @@
 package com.np.pricehunt.backend.repository;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 
 import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.domain.ShopNameSource;
 import com.np.pricehunt.backend.domain.TrackedItem;
+import com.np.pricehunt.backend.repository.projection.DashboardListingRef;
+import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -122,5 +125,56 @@ class TrackedItemRepositoryTest {
         assertThat(repo.applyShopName(id, "New Detected", ShopNameSource.DETECTED))
                 .isTrue();
         assertThat(reload(id).getShopName()).isEqualTo("New Detected");
+    }
+
+    // --- dashboard projections (#146) ---
+
+    @Test
+    void findAllForDashboard_projectsEveryListingWithItsProduct() {
+        Product other = em.persist(Product.builder().name("Other").build());
+        Long mine = persistItem("Amazon", ShopNameSource.MAPPING);
+        Long theirs = persistItemFor(other, "KSP", ShopNameSource.MAPPING);
+
+        assertThat(repo.findAllForDashboard())
+                .extracting(
+                        DashboardListingRef::trackedItemId,
+                        DashboardListingRef::productId,
+                        DashboardListingRef::shopName)
+                .containsExactly(tuple(mine, product.getId(), "Amazon"), tuple(theirs, other.getId(), "KSP"));
+    }
+
+    @Test
+    void findAllForDashboard_keepsListingsWithNoShopName() {
+        // shop_name is nullable and blank rows exist; the projection must surface them rather than
+        // filter them out, so the facet fold sees them and decides (it excludes them from the chips).
+        Long unnamed = persistItem(null, null);
+        Long blank = persistItem("   ", ShopNameSource.HOST_FALLBACK);
+
+        assertThat(repo.findAllForDashboard())
+                .extracting(DashboardListingRef::trackedItemId, DashboardListingRef::shopName)
+                .containsExactly(tuple(unnamed, null), tuple(blank, "   "));
+    }
+
+    @Test
+    void findByProductIdIn_returnsOnlyTheRequestedProductsListings() {
+        Product other = em.persist(Product.builder().name("Other").build());
+        Long mine = persistItem("Amazon", ShopNameSource.MAPPING);
+        persistItemFor(other, "KSP", ShopNameSource.MAPPING);
+
+        assertThat(repo.findByProductIdIn(List.of(product.getId())))
+                .extracting(TrackedItem::getId)
+                .containsExactly(mine);
+    }
+
+    private Long persistItemFor(Product owner, String shopName, ShopNameSource source) {
+        TrackedItem item = TrackedItem.builder()
+                .url("https://example.com/" + System.nanoTime())
+                .shopName(shopName)
+                .shopNameSource(source)
+                .product(owner)
+                .build();
+        em.persist(item);
+        em.flush();
+        return item.getId();
     }
 }

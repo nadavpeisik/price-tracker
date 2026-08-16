@@ -17,11 +17,19 @@ import org.springframework.validation.annotation.Validated;
  *
  * <p>{@code maxDeltaPercent} caps how far a newly-scraped price may move from the previous one (in
  * the same currency) before the record is rejected as implausible. {@code minRefreshInterval} is
- * the per-process rate-limit window for user-initiated refreshes. Both are validated so a
+ * the per-process rate-limit window for user-initiated refreshes. All are validated so a
  * nonsensical value fails the boot rather than silently corrupting validation/rate-limiting.
+ *
+ * <p>{@code maxListingsPerProduct} bounds how many shop URLs one product may carry. It describes the
+ * shape of a <em>product</em>, not an entitlement of whoever tracked it — a product with hundreds of
+ * listings is a matching bug (the wrong product, or a discovery pass gone wrong), and that stays true
+ * however many users the app has. Enforced exactly rather than softly: the count and the insert both
+ * run under the parent product's write lock, so concurrent admissions to the same product serialize.
+ * Writers below the service layer ({@code DevDataSeeder}) are exempt by design.
  */
 @Validated
 @ConfigurationProperties("price.tracking")
 public record PriceTrackingProperties(
         @DefaultValue("200") @Positive int maxDeltaPercent,
-        @DefaultValue("1m") @DurationMin(millis = 1) Duration minRefreshInterval) {}
+        @DefaultValue("1m") @DurationMin(millis = 1) Duration minRefreshInterval,
+        @DefaultValue("20") @Positive int maxListingsPerProduct) {}

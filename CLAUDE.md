@@ -127,7 +127,7 @@ Guardrails (same model as the diff review and issue #81):
    - Calls `ScraperClient` → `POST http://localhost:8001/scrape` → Python Playwright scraper returns `ScrapeResponse`
    - Calls `PriceExtractionService` → `PriceExtractionOrchestrator` routes based on `extractionSource` (see waterfall below)
    - Validates the extracted `PriceInfo` before saving (non-zero, delta check, currency consistency)
-   - Upserts `Product` and `TrackedItem` (by URL) in Postgres
+   - Resolves the `TrackedItem` by URL (reusing it, or admitting a new one) under the parent `Product`'s write lock; the product itself must already exist — `trackUrl` 404s otherwise, it never creates one
    - Appends a new `PriceRecord` with the extracted price, timestamp, and `extractionSource`
 
 **Price extraction waterfall** (each tier attempted in order; first success short-circuits):
@@ -206,6 +206,7 @@ New scheduler? Wire the recorder the same way `PriceCheckScheduler.refreshAll()`
 - Lombok `@Data` / `@Builder` / `@NoArgsConstructor` / `@AllArgsConstructor` on domain entities
 - Repositories extend `JpaRepository`. **Prefer derived (method-name) queries** for simple lookups and filters — they're concise, property-aware, and validated against the entity model. **`@Query` is allowed** where a derived name can't express the intent or would be a downgrade: DTO/constructor-expression projections, complex joins, aggregates, bulk ops, locking, or vendor-specific SQL. A domain-meaningful name + explicit JPQL (e.g. `findStaleItems` projecting into `TrackedItemRefreshView`) beats a verbose `findByLastCheckedIsNullOrLastCheckedBefore` that leaks the predicate into the signature and makes the projection implicit. Don't use `@Query` to restate a query a derived name already covers (e.g. `WHERE t.url = :url`).
 - Monetary values use `BigDecimal` (precision 19, scale 4)
+- **HTTP pagination is 1-based**, request and response — `?page=1` is the first page, and a response's page number is always a valid request value. Spring Data's 0-based `Page` is that library's internal convention and must not reach the wire.
 - The single existing test class is `@Disabled` — tests are not yet implemented
 
 ## Database migrations

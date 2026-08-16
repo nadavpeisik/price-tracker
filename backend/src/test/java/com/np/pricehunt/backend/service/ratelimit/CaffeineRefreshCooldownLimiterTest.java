@@ -22,7 +22,7 @@ class CaffeineRefreshCooldownLimiterTest {
 
     @BeforeEach
     void setUp() {
-        limiter = new CaffeineRefreshCooldownLimiter(new PriceTrackingProperties(200, COOLDOWN), ticker);
+        limiter = new CaffeineRefreshCooldownLimiter(new PriceTrackingProperties(200, COOLDOWN, 20), ticker);
     }
 
     private void advance(Duration d) {

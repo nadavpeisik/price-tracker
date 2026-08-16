@@ -98,12 +98,20 @@ curl -X POST http://localhost:8080/api/products/1/track \
 
 ## API
 
+### Dashboard
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/tracked-products` | The dashboard in one call: a page of products with best price, availability rollup, 7-day delta and sparkline, plus global shop facets and summary tiles. Query params: `?search`, repeated `?shops=`, `?sort=` (`name` \| `lowestCurrentPrice` \| `biggest7dDrop`), `?page` (**1-based**), `?size`, `?displayCurrency` |
+
+### Products
+
 Base path: `/api/products`
 
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/` | Create a product |
-| `GET` | `/` | List products (paginated; `?page`, `?size`, `?sort`) |
+| `GET` | `/` | **Deprecated** — list products (paginated; `?page`, `?size`, `?sort`). Superseded by `GET /api/tracked-products`; removed once the frontend cuts over. |
 | `GET` | `/{id}` | Get product detail with tracked items |
 | `PATCH` | `/{id}` | Update product fields |
 | `DELETE` | `/{id}` | Delete a product and all its tracked items |

@@ -47,6 +47,13 @@ public class ProductQueryService {
 
     private record ListingWithConvertedPrice(ListingWithLatestPrice source, ConvertedAmount converted) {}
 
+    /**
+     * @deprecated superseded by {@code DashboardQueryService} (issue #146), which computes the same
+     *     headline values for the whole catalogue in one bounded query instead of the per-listing N+1
+     *     below. Kept only until #157 exercises the replacement against a real database; the removal
+     *     issue names every deletion target.
+     */
+    @Deprecated(forRemoval = true)
     public Page<ProductSummaryResponse> getAllProducts(Pageable pageable, String displayCurrency) {
         // displayCurrency support is validated in ProductController before this method is called.
         // N+1: O(pageSize × storesPerProduct). Acceptable at current scale; revisit with JPQL fetch join when traffic

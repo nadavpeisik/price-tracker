@@ -45,6 +45,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 @ExtendWith(MockitoExtension.class)
 class ProductTrackingServiceShopNameTest {
 
+    private static final PriceTrackingProperties TRACKING_PROPERTIES =
+            new PriceTrackingProperties(200, Duration.ofMinutes(1), 20);
+
     private static final String URL = "https://thomannmusic.com/x.htm";
 
     @Mock
@@ -90,12 +93,12 @@ class ProductTrackingServiceShopNameTest {
                 scraperClient,
                 transactionTemplate,
                 urlValidator,
-                new PriceTrackingProperties(200, Duration.ofMinutes(1)),
+                TRACKING_PROPERTIES,
                 shopNameResolver,
                 cooldownLimiter,
                 Clock.systemUTC(),
                 scrapeAttemptRecorder,
-                new PriceValidator(new PriceTrackingProperties(200, Duration.ofMinutes(1))));
+                new PriceValidator(TRACKING_PROPERTIES));
 
         Product product = Product.builder().id(1L).name("P").build();
         item = TrackedItem.builder().id(1L).url(URL).product(product).build();
@@ -104,7 +107,7 @@ class ProductTrackingServiceShopNameTest {
         when(transactionTemplate.execute(any()))
                 .thenAnswer(inv -> ((TransactionCallback<?>) inv.getArgument(0)).doInTransaction(null));
         when(productRepository.existsById(1L)).thenReturn(true);
-        when(productRepository.findById(1L)).thenReturn(Optional.of(product));
+        when(productRepository.findForUpdateById(1L)).thenReturn(Optional.of(product));
         when(trackedItemRepository.findByUrl(any())).thenReturn(Optional.of(item));
     }
 

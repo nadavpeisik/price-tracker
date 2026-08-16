@@ -20,7 +20,7 @@ class PriceValidatorTest {
 
     // maxDeltaPercent=200 → accepted band is [prior/3, prior*3].
     private final PriceValidator validator =
-            new PriceValidator(new PriceTrackingProperties(200, Duration.ofMinutes(1)));
+            new PriceValidator(new PriceTrackingProperties(200, Duration.ofMinutes(1), 20));
 
     private static PriceInfo info(String price, String currency) {
         return new PriceInfo(

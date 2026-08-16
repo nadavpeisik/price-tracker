@@ -1,6 +1,6 @@
 package com.np.pricehunt.backend.service.trend;
 
-import com.np.pricehunt.backend.dto.TrendRecordView;
+import com.np.pricehunt.backend.repository.projection.TrendRecordView;
 import com.np.pricehunt.backend.service.fx.ConvertedAmount;
 import com.np.pricehunt.backend.service.fx.HistoricalRateWindow;
 import com.np.pricehunt.backend.service.fx.PriceConverter;
@@ -61,8 +61,13 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class PriceTrendCalculator {
 
-    /** Not configurable: "7-day delta" is the feature's semantics, not a tuning knob. */
-    static final int DELTA_WINDOW_DAYS = 7;
+    /**
+     * Not configurable: "7-day delta" is the feature's semantics, not a tuning knob.
+     *
+     * <p>Public because the dashboard's two-cutoff query has to derive the same baseline instant in
+     * SQL; a second literal 7 there would be a silent way for the two paths to drift apart.
+     */
+    public static final int DELTA_WINDOW_DAYS = 7;
 
     private static final int DELTA_INTERMEDIATE_SCALE = 12;
     private static final int DELTA_OUTPUT_SCALE = 2;
@@ -152,6 +157,10 @@ public class PriceTrendCalculator {
      * Cheapest eligible listing as of an exact instant — each listing's latest record at or before
      * {@code inclusiveCutoff}. A null {@code valuationDate} selects the live-snapshot conversion path;
      * a non-null one selects historical per-quote floors at that date.
+     *
+     * <p>Taking exactly <b>one</b> record per cutoff is mirrored in SQL by {@code
+     * PriceRecordRepository.findCutoffObservations}. Adding a fallback past an ineligible record would
+     * make that query silently under-fetch for the dashboard.
      */
     private BestOfferCandidate bestOfferAsOf(
             List<ListingWindow> listings,

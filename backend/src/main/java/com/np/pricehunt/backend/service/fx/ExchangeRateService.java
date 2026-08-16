@@ -8,6 +8,7 @@ import java.time.Clock;
 import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -22,6 +23,12 @@ import org.springframework.stereotype.Service;
 @Service
 @RequiredArgsConstructor
 public class ExchangeRateService {
+
+    /**
+     * The implicit base of every rate we hold: the provider is queried with {@code ?base=EUR}, so EUR
+     * never appears in {@link RateSnapshot#rates()} — its rate is 1 by definition.
+     */
+    public static final String BASE_CURRENCY = "EUR";
 
     private final ExchangeRateRepository repository;
     private final FrankfurterRateProvider provider;
@@ -103,6 +110,23 @@ public class ExchangeRateService {
 
     public Optional<RateSnapshot> currentSnapshot() {
         return Optional.ofNullable(snapshot);
+    }
+
+    /**
+     * True only when a loaded snapshot proves the currency is unsupported. False means either
+     * supported <em>or</em> not currently known.
+     */
+    public boolean isDefinitelyUnsupported(String currency) {
+        if (currency == null) {
+            return true;
+        }
+        String upper = currency.toUpperCase(Locale.ROOT);
+        if (BASE_CURRENCY.equals(upper)) {
+            return false;
+        }
+        // One volatile read: a concurrent refresh must not let the null check and the lookup disagree.
+        RateSnapshot current = this.snapshot;
+        return current != null && !current.rates().containsKey(upper);
     }
 
     private void persist(RateSnapshot fresh) {

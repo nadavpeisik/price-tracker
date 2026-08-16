@@ -5,7 +5,7 @@ import static org.mockito.Mockito.when;
 
 import com.np.pricehunt.backend.config.CurrencyProperties;
 import com.np.pricehunt.backend.domain.AvailabilityStatus;
-import com.np.pricehunt.backend.dto.TrendRecordView;
+import com.np.pricehunt.backend.repository.projection.TrendRecordView;
 import com.np.pricehunt.backend.service.fx.ExchangeRateService;
 import com.np.pricehunt.backend.service.fx.HistoricalRateWindow;
 import com.np.pricehunt.backend.service.fx.PriceConverter;
@@ -532,6 +532,73 @@ class PriceTrendCalculatorTest {
     }
 
     // --- helpers ---
+
+    // --- single-day window: how the dashboard calls this (#146) ---
+
+    @Test
+    void singleDayWindow_matchesTheFullWindowsCurrentPointAndDelta() {
+        // The dashboard asks for windowStartDay = today over a two-record-per-listing input, and must
+        // land on the same headline and delta a full-window call produces from the whole history.
+        ListingWindow ksp =
+                listing(1, "KSP", rec(daysAgo(8), "100", ILS), rec(daysAgo(3), "88", ILS), rec(daysAgo(1), "80", ILS));
+        ListingWindow bug = listing(2, "Bug", rec(daysAgo(8), "120", ILS), rec(daysAgo(1), "95", ILS));
+        // What the two-cutoff query would return: the latest at each cutoff, nothing in between.
+        ListingWindow leanKsp = listing(1, "KSP", rec(daysAgo(8), "100", ILS), rec(daysAgo(1), "80", ILS));
+        ListingWindow leanBug = listing(2, "Bug", rec(daysAgo(8), "120", ILS), rec(daysAgo(1), "95", ILS));
+
+        ProductTrend full = compute(List.of(ksp, bug), 10, HistoricalRateWindow.empty());
+        ProductTrend lean = computeToday(List.of(leanKsp, leanBug));
+
+        assertThat(lean.points()).singleElement().satisfies(point -> {
+            assertThat(point.t()).isEqualTo(midnight(0));
+            assertThat(point.price()).isEqualByComparingTo(lastPoint(full).price());
+            assertThat(point.bestOffer().trackedItemId())
+                    .isEqualTo(lastPoint(full).bestOffer().trackedItemId());
+            assertThat(point.bestOffer().shopName()).isEqualTo("KSP");
+        });
+        assertThat(lean.delta7d()).isEqualByComparingTo("-20.00").isEqualByComparingTo(full.delta7d());
+        assertThat(lean.conversionAsOf()).isEqualTo(full.conversionAsOf());
+        assertThat(lean.conversionStale()).isEqualTo(full.conversionStale());
+    }
+
+    @Test
+    void singleDayWindow_withoutABaseline_stillEmitsTodaysPoint() {
+        // "Less than a week of history" — the row shows a price with a "New" tag, not nothing.
+        ProductTrend trend = computeToday(List.of(listing(1, "KSP", rec(daysAgo(2), "90", ILS))));
+
+        assertThat(trend.points()).singleElement().satisfies(point -> assertThat(point.price())
+                .isEqualByComparingTo("90"));
+        assertThat(trend.delta7d()).isNull();
+    }
+
+    @Test
+    void singleDayWindow_withNoEligibleCurrentOffer_emitsNothing() {
+        // Latest observation is past the TTL, so nothing carries forward to today.
+        ProductTrend trend = computeToday(List.of(listing(1, "KSP", rec(daysAgo(9), "100", ILS))));
+
+        assertThat(trend.points()).isEmpty();
+        assertThat(trend.delta7d()).isNull();
+        assertThat(trend.conversionAsOf()).isNull();
+        assertThat(trend.conversionStale()).isFalse();
+    }
+
+    @Test
+    void singleDayWindow_crossCurrency_carriesTheWinningConversionMetadata() {
+        snapshotOn(TODAY);
+        ListingWindow amazon = listing(1, "Amazon", rec(daysAgo(1), "100", USD));
+
+        ProductTrend trend = calculator.compute(List.of(amazon), TODAY, NOW, ILS, ratesOn(TODAY.minusDays(7)), TTL);
+
+        // 100 USD -> ILS at 4.00/1.10.
+        assertThat(lastPoint(trend).price()).isEqualByComparingTo("363.6364");
+        assertThat(trend.conversionAsOf()).isEqualTo(TODAY);
+        assertThat(trend.conversionStale()).isFalse();
+    }
+
+    /** The dashboard's call shape: today-only window, empty historical rates. */
+    private ProductTrend computeToday(List<ListingWindow> listings) {
+        return calculator.compute(listings, TODAY, NOW, ILS, HistoricalRateWindow.empty(), TTL);
+    }
 
     private ProductTrend compute(List<ListingWindow> listings, int windowDays, HistoricalRateWindow rates) {
         return calculator.compute(listings, TODAY.minusDays(windowDays - 1L), NOW, ILS, rates, TTL);

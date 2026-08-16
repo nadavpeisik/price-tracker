@@ -3,10 +3,13 @@
  *
  * - Base path centralized (default '/api', dev-proxied to Spring) so a
  *   future non-proxied deployment is a one-line change.
- * - Owns the UI ↔ backend translation: the UI/URL contract is 1-BASED
- *   `page` and repeated `shop` params; Spring's Pageable is 0-based and
- *   #146's param names may differ — the adapter (toBackendParams) is the
- *   only place that knows, and it is unit-tested.
+ * - Owns the UI ↔ backend serialization: the adapter (toBackendParams) is
+ *   the only place that knows the wire param names, and it is unit-tested.
+ *   Pagination needs NO translation — #146 settled on 1-based `page` at the
+ *   HTTP boundary in both directions, so the UI page, the URL, the request
+ *   and the response all say the same number. (Spring Data's 0-based
+ *   Pageable convention is internal to that library; the dashboard endpoint
+ *   deliberately does not expose it, and `?page=0` is a 400.)
  * - Mock mode: `import.meta.env.DEV && VITE_USE_MOCK` routes to the mock
  *   client through a STATIC-PATH dynamic import inside a DEV-gated branch,
  *   which Rollup dead-code-eliminates from production bundles (never a
@@ -33,14 +36,14 @@ const DASHBOARD_PATH = `${API_BASE}/tracked-products`
 export const isMockMode = (): boolean =>
   import.meta.env.DEV && import.meta.env.VITE_USE_MOCK === 'true'
 
-/** UI query (1-based page, UI param names) → backend query string. */
+/** UI query → backend query string; `page` is 1-based on both sides. */
 export function toBackendParams(query: DashboardQuery): URLSearchParams {
   const params = new URLSearchParams()
   const search = query.search?.trim()
   if (search) params.set('search', search)
   for (const shop of query.shops ?? []) params.append('shops', shop)
   params.set('sort', query.sort)
-  params.set('page', String(query.page - 1)) // Spring Pageable is 0-based
+  params.set('page', String(query.page))
   params.set('size', String(query.size))
   return params
 }

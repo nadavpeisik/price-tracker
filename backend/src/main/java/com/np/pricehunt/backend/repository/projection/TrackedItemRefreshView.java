@@ -1,4 +1,4 @@
-package com.np.pricehunt.backend.dto;
+package com.np.pricehunt.backend.repository.projection;
 
 import java.time.Instant;
 

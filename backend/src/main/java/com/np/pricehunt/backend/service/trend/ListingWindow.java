@@ -1,6 +1,6 @@
 package com.np.pricehunt.backend.service.trend;
 
-import com.np.pricehunt.backend.dto.TrendRecordView;
+import com.np.pricehunt.backend.repository.projection.TrendRecordView;
 import java.util.List;
 
 /**

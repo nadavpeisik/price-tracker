@@ -82,9 +82,12 @@ public class ProductTrackingService {
         // Full validation (blocklist + SSRF + parser-differential) BEFORE storing a row, so a bad URL
         // 400s without persisting a junk TrackedItem.
         urlValidator.validate(request.url());
+        // Listing admission, serialized per product: the parent is loaded write-locked and the lock is
+        // held across the existing-URL lookup, the cap count and the insert — all DB-only work, all
+        // released before the scrape below. It replaces the plain findById rather than adding a query.
         ItemSnapshot snapshot = transactionTemplate.execute(status -> {
             Product product = productRepository
-                    .findById(productId)
+                    .findForUpdateById(productId)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found"));
             TrackedItem item = resolveTrackedItem(product, request);
             return new ItemSnapshot(item.getId(), item.getUrl());
@@ -300,7 +303,7 @@ public class ProductTrackingService {
             // null to UNKNOWN before the NOT NULL write rather than relying on an upstream guarantee.
             AvailabilityStatus availability =
                     info.availability() != null ? info.availability() : AvailabilityStatus.UNKNOWN;
-            PriceRecord record = priceRecordRepository.save(PriceRecord.builder()
+            PriceRecord saved = priceRecordRepository.save(PriceRecord.builder()
                     .price(info.price())
                     .currency(info.currency().trim().toUpperCase(Locale.ROOT))
                     .availability(availability)
@@ -308,7 +311,7 @@ public class ProductTrackingService {
                     .trackedItem(item)
                     .build());
 
-            item.setLastChecked(record.getTimestamp());
+            item.setLastChecked(saved.getTimestamp());
 
             log.info(
                     "Tracked itemId={} url={} source={} price={} {} availability={}",
@@ -319,10 +322,19 @@ public class ProductTrackingService {
                     info.currency(),
                     availability);
 
-            return new TrackPersistenceResult(buildTrackResponse(item.getProduct(), item, record), null);
+            return new TrackPersistenceResult(buildTrackResponse(item.getProduct(), item, saved), null);
         });
     }
 
+    /**
+     * The only request path that creates {@link TrackedItem} rows, which is why the per-product
+     * listing cap lives here — {@code DevDataSeeder} persists them directly and is deliberately
+     * outside it. Re-tracking a URL the product already has is never blocked — the cap governs
+     * admission of a <em>new</em> listing, not refreshes of an existing one.
+     *
+     * <p>Callers must hold the parent product's write lock (see {@code findForUpdateById}); without it
+     * the count and the insert are not serialized against a concurrent admission.
+     */
     private TrackedItem resolveTrackedItem(Product product, TrackRequest request) {
         return trackedItemRepository
                 .findByUrl(request.url())
@@ -335,10 +347,19 @@ public class ProductTrackingService {
                     }
                     return existing;
                 })
-                .orElseGet(() -> trackedItemRepository.save(TrackedItem.builder()
-                        .url(request.url())
-                        .product(product)
-                        .build()));
+                .orElseGet(() -> {
+                    long listings = trackedItemRepository.countByProduct(product);
+                    if (listings >= trackingProperties.maxListingsPerProduct()) {
+                        throw new ResponseStatusException(
+                                HttpStatus.CONFLICT,
+                                "Listings-per-product limit reached (" + trackingProperties.maxListingsPerProduct()
+                                        + ")");
+                    }
+                    return trackedItemRepository.save(TrackedItem.builder()
+                            .url(request.url())
+                            .product(product)
+                            .build());
+                });
     }
 
     private void safeRecordExtractionFailure(Long itemId, String url, ScrapeResponse scraped, RuntimeException cause) {
@@ -364,7 +385,7 @@ public class ProductTrackingService {
         }
     }
 
-    private TrackResponse buildTrackResponse(Product product, TrackedItem item, PriceRecord record) {
+    private TrackResponse buildTrackResponse(Product product, TrackedItem item, PriceRecord latest) {
         return new TrackResponse(
                 product.getId(),
                 product.getName(),
@@ -372,10 +393,10 @@ public class ProductTrackingService {
                 item.getUrl(),
                 item.getShopName(),
                 item.getShopNameSource(),
-                record != null ? record.getPrice() : null,
-                record != null ? record.getCurrency() : null,
-                record != null ? record.getAvailability() : AvailabilityStatus.UNKNOWN,
-                record != null ? record.getTimestamp() : null,
-                record != null ? record.getExtractionSource() : null);
+                latest != null ? latest.getPrice() : null,
+                latest != null ? latest.getCurrency() : null,
+                latest != null ? latest.getAvailability() : AvailabilityStatus.UNKNOWN,
+                latest != null ? latest.getTimestamp() : null,
+                latest != null ? latest.getExtractionSource() : null);
     }
 }
