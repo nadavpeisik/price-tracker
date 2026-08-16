@@ -50,7 +50,7 @@ public class HistoricalRateWindowLoader {
                 continue;
             }
             String normalizedQuote = quote.toUpperCase(Locale.ROOT);
-            if (!PriceConverter.EUR.equals(normalizedQuote)) {
+            if (!ExchangeRateService.BASE_CURRENCY.equals(normalizedQuote)) {
                 requiredQuotes.add(normalizedQuote);
             }
         }

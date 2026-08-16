@@ -197,6 +197,40 @@ class PriceTrendServiceTest {
     }
 
     @Test
+    void asOfOverload_evaluatesAtTheSuppliedInstant_notTheClock() {
+        // The dashboard pins one instant across its lean pass and its sparkline pass; if this
+        // overload silently re-read the clock, a request straddling UTC midnight could report a
+        // headline price and a series that disagree about which day "today" is.
+        stubBatchOnly();
+        Instant pinned = NOW.minus(3, ChronoUnit.DAYS);
+
+        service.computeProductTrendsAsOf(oneProductWithOneListing(), 30, ILS, pinned);
+
+        verify(calculator).compute(any(), eq(TODAY.minusDays(32)), eq(pinned), anyString(), any(), anyInt());
+    }
+
+    @Test
+    void batchWithoutAnAsOf_readsTheClock() {
+        stubBatchOnly();
+
+        service.computeProductTrends(oneProductWithOneListing(), 30, ILS);
+
+        verify(calculator).compute(any(), eq(TODAY.minusDays(29)), eq(NOW), anyString(), any(), anyInt());
+    }
+
+    private void stubBatchOnly() {
+        when(priceRecordRepository.findTrendRecords(any(), any(), any())).thenReturn(List.of());
+        when(rateWindowLoader.load(any(), any(), any())).thenReturn(HistoricalRateWindow.empty());
+        when(calculator.compute(any(), any(), any(), anyString(), any(), anyInt()))
+                .thenReturn(ProductTrend.empty());
+    }
+
+    private static Map<Long, List<TrackedItem>> oneProductWithOneListing() {
+        Product product = product(1L);
+        return Map.of(1L, List.of(item(10L, "KSP", product)));
+    }
+
+    @Test
     void rateWindowIsLoadedForEveryCurrencySeenPlusTheDisplayCurrency() {
         stubSingleProductWithOneItem();
         when(priceRecordRepository.findTrendRecords(any(), any(), any()))

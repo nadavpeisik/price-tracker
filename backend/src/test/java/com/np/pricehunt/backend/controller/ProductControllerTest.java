@@ -14,7 +14,7 @@ import com.np.pricehunt.backend.domain.ShopNameSource;
 import com.np.pricehunt.backend.dto.*;
 import com.np.pricehunt.backend.service.ProductQueryService;
 import com.np.pricehunt.backend.service.ProductTrackingService;
-import com.np.pricehunt.backend.service.fx.PriceConverter;
+import com.np.pricehunt.backend.service.fx.ExchangeRateService;
 import com.np.pricehunt.backend.service.trend.PriceTrendService;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -36,7 +36,7 @@ import org.springframework.web.client.RestClientException;
 import org.springframework.web.server.ResponseStatusException;
 
 @WebMvcTest(ProductController.class)
-@Import(WebPaginationConfig.class)
+@Import({WebPaginationConfig.class, DisplayCurrencyResolver.class})
 @EnableConfigurationProperties(CurrencyProperties.class)
 class ProductControllerTest {
 
@@ -52,7 +52,7 @@ class ProductControllerTest {
     private ProductQueryService queryService;
 
     @MockitoBean
-    private PriceConverter priceConverter;
+    private ExchangeRateService rateService;
 
     @MockitoBean
     private PriceTrendService trendService;
@@ -60,7 +60,7 @@ class ProductControllerTest {
     @Test
     void getAllProducts_defaultsToConfiguredDisplayCurrency() throws Exception {
         ProductSummaryResponse summary = summaryFixture();
-        when(priceConverter.isSupported("ILS")).thenReturn(true);
+        when(rateService.isDefinitelyUnsupported("ILS")).thenReturn(false);
         when(queryService.getAllProducts(any(Pageable.class), anyString()))
                 .thenReturn(new PageImpl<>(List.of(summary)));
 
@@ -85,7 +85,7 @@ class ProductControllerTest {
 
     @Test
     void getAllProducts_explicitDisplayCurrency_passedToService() throws Exception {
-        when(priceConverter.isSupported("USD")).thenReturn(true);
+        when(rateService.isDefinitelyUnsupported("USD")).thenReturn(false);
         when(queryService.getAllProducts(any(Pageable.class), anyString())).thenReturn(new PageImpl<>(List.of()));
 
         mvc.perform(get("/api/products").param("displayCurrency", "USD")).andExpect(status().isOk());
@@ -95,7 +95,7 @@ class ProductControllerTest {
 
     @Test
     void getAllProducts_lowercaseDisplayCurrency_normalizedToUpper() throws Exception {
-        when(priceConverter.isSupported("EUR")).thenReturn(true);
+        when(rateService.isDefinitelyUnsupported("EUR")).thenReturn(false);
         when(queryService.getAllProducts(any(Pageable.class), anyString())).thenReturn(new PageImpl<>(List.of()));
 
         mvc.perform(get("/api/products").param("displayCurrency", "eur")).andExpect(status().isOk());
@@ -111,17 +111,27 @@ class ProductControllerTest {
     }
 
     @Test
-    void getAllProducts_unsupportedDisplayCurrency_returns400() throws Exception {
-        when(priceConverter.isSupported("ZZZ")).thenReturn(false);
+    void getAllProducts_currencyTheRateSnapshotCannotPrice_returns400() throws Exception {
+        // A real ISO code, so the rejection comes from the FX side rather than the format gate.
+        when(rateService.isDefinitelyUnsupported("JPY")).thenReturn(true);
 
-        mvc.perform(get("/api/products").param("displayCurrency", "ZZZ")).andExpect(status().isBadRequest());
+        mvc.perform(get("/api/products").param("displayCurrency", "JPY")).andExpect(status().isBadRequest());
 
         verify(queryService, never()).getAllProducts(any(Pageable.class), anyString());
     }
 
     @Test
+    void getAllProducts_codeThatIsNotARealCurrency_returns400WithoutConsultingTheRateService() throws Exception {
+        // ZZZ matches ^[A-Z]{3}$ but is not ISO 4217, and that stays true while FX is unavailable.
+        mvc.perform(get("/api/products").param("displayCurrency", "ZZZ")).andExpect(status().isBadRequest());
+
+        verify(rateService, never()).isDefinitelyUnsupported("ZZZ");
+        verify(queryService, never()).getAllProducts(any(Pageable.class), anyString());
+    }
+
+    @Test
     void getAllProducts_pageParams_passedToService() throws Exception {
-        when(priceConverter.isSupported("ILS")).thenReturn(true);
+        when(rateService.isDefinitelyUnsupported("ILS")).thenReturn(false);
         when(queryService.getAllProducts(any(Pageable.class), anyString())).thenReturn(new PageImpl<>(List.of()));
 
         mvc.perform(get("/api/products").param("page", "2").param("size", "5")).andExpect(status().isOk());
@@ -131,7 +141,7 @@ class ProductControllerTest {
 
     @Test
     void getAllProducts_userSortWithoutId_appendsIdTiebreaker() throws Exception {
-        when(priceConverter.isSupported("ILS")).thenReturn(true);
+        when(rateService.isDefinitelyUnsupported("ILS")).thenReturn(false);
         when(queryService.getAllProducts(any(Pageable.class), anyString())).thenReturn(new PageImpl<>(List.of()));
 
         mvc.perform(get("/api/products").param("sort", "name,asc")).andExpect(status().isOk());
@@ -301,7 +311,7 @@ class ProductControllerTest {
 
     @Test
     void getPriceTrend_returnsSeriesWithBestOfferProvenance() throws Exception {
-        when(priceConverter.isSupported("ILS")).thenReturn(true);
+        when(rateService.isDefinitelyUnsupported("ILS")).thenReturn(false);
         when(trendService.getProductTrend(eq(1L), isNull(), eq("ILS"))).thenReturn(trendFixture());
 
         mvc.perform(get("/api/products/1/price-trend"))
@@ -320,7 +330,7 @@ class ProductControllerTest {
 
     @Test
     void getPriceTrend_nullDeltaSerializesAsNull() throws Exception {
-        when(priceConverter.isSupported("ILS")).thenReturn(true);
+        when(rateService.isDefinitelyUnsupported("ILS")).thenReturn(false);
         when(trendService.getProductTrend(eq(1L), isNull(), eq("ILS")))
                 .thenReturn(new PriceTrendResponse(1L, "ILS", null, null, false, List.of()));
 
@@ -332,7 +342,7 @@ class ProductControllerTest {
 
     @Test
     void getPriceTrend_passesDaysThrough() throws Exception {
-        when(priceConverter.isSupported("ILS")).thenReturn(true);
+        when(rateService.isDefinitelyUnsupported("ILS")).thenReturn(false);
         when(trendService.getProductTrend(eq(1L), eq(90), eq("ILS"))).thenReturn(trendFixture());
 
         mvc.perform(get("/api/products/1/price-trend").param("days", "90")).andExpect(status().isOk());
@@ -342,7 +352,7 @@ class ProductControllerTest {
 
     @Test
     void getPriceTrend_explicitDisplayCurrencyIsNormalized() throws Exception {
-        when(priceConverter.isSupported("USD")).thenReturn(true);
+        when(rateService.isDefinitelyUnsupported("USD")).thenReturn(false);
         when(trendService.getProductTrend(eq(1L), isNull(), eq("USD"))).thenReturn(trendFixture());
 
         mvc.perform(get("/api/products/1/price-trend").param("displayCurrency", "usd"))
@@ -361,9 +371,9 @@ class ProductControllerTest {
 
     @Test
     void getPriceTrend_unsupportedDisplayCurrency_returns400WithoutCallingTheService() throws Exception {
-        when(priceConverter.isSupported("ZZZ")).thenReturn(false);
+        when(rateService.isDefinitelyUnsupported("JPY")).thenReturn(true);
 
-        mvc.perform(get("/api/products/1/price-trend").param("displayCurrency", "ZZZ"))
+        mvc.perform(get("/api/products/1/price-trend").param("displayCurrency", "JPY"))
                 .andExpect(status().isBadRequest());
 
         verify(trendService, never()).getProductTrend(anyLong(), any(), anyString());
@@ -371,7 +381,7 @@ class ProductControllerTest {
 
     @Test
     void getPriceTrend_unknownProduct_propagates404() throws Exception {
-        when(priceConverter.isSupported("ILS")).thenReturn(true);
+        when(rateService.isDefinitelyUnsupported("ILS")).thenReturn(false);
         when(trendService.getProductTrend(eq(99L), isNull(), eq("ILS")))
                 .thenThrow(new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found"));
 
@@ -380,7 +390,7 @@ class ProductControllerTest {
 
     @Test
     void getPriceTrend_nonPositiveDays_propagates400() throws Exception {
-        when(priceConverter.isSupported("ILS")).thenReturn(true);
+        when(rateService.isDefinitelyUnsupported("ILS")).thenReturn(false);
         when(trendService.getProductTrend(eq(1L), eq(0), eq("ILS")))
                 .thenThrow(new ResponseStatusException(HttpStatus.BAD_REQUEST, "days must be >= 1"));
 

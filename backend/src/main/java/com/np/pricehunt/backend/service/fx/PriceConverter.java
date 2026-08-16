@@ -13,7 +13,6 @@ import org.springframework.stereotype.Service;
 @Service
 public class PriceConverter {
 
-    static final String EUR = "EUR";
     static final int OUTPUT_SCALE = 4;
     private static final int INTERMEDIATE_SCALE = 12;
     static final long STALENESS_THRESHOLD_DAYS = 7;
@@ -111,8 +110,8 @@ public class PriceConverter {
 
     private static HistoricalRateWindow.DatedRate historicalRateOf(
             HistoricalRateWindow window, String currency, LocalDate day) {
-        // EUR is the implicit base — rate 1, contributing no publication date of its own.
-        return EUR.equals(currency)
+        // The base currency has rate 1 and contributes no publication date of its own.
+        return ExchangeRateService.BASE_CURRENCY.equals(currency)
                 ? new HistoricalRateWindow.DatedRate(null, BigDecimal.ONE)
                 : window.rateOnOrBefore(currency, day).orElse(null);
     }
@@ -123,21 +122,10 @@ public class PriceConverter {
         return a.isBefore(b) ? a : b;
     }
 
-    public boolean isSupported(String currency) {
-        if (currency == null) return false;
-        String upper = currency.toUpperCase(Locale.ROOT);
-        if (EUR.equals(upper)) return true;
-        // No snapshot loaded yet (cold-start before first refresh): fail open so the API doesn't
-        // 400 every request during the startup window. Conversion will return null per-record,
-        // preserving the existing graceful-degradation contract.
-        return rateService
-                .currentSnapshot()
-                .map(snap -> snap.rates().containsKey(upper))
-                .orElse(true);
-    }
-
     private static BigDecimal rateOf(RateSnapshot snapshot, String currency) {
-        // EUR is the implicit base — its rate is 1 even when absent from the providers' `rates` map.
-        return EUR.equals(currency) ? BigDecimal.ONE : snapshot.rates().get(currency);
+        // The base currency's rate is 1 even though it is absent from the provider's `rates` map.
+        return ExchangeRateService.BASE_CURRENCY.equals(currency)
+                ? BigDecimal.ONE
+                : snapshot.rates().get(currency);
     }
 }

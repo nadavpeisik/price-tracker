@@ -179,6 +179,61 @@ class ExchangeRateServiceTest {
         assertThat(service.currentSnapshot().orElseThrow().rates()).containsEntry("USD", new BigDecimal("1.07"));
     }
 
+    // --- isDefinitelyUnsupported: proof-of-absence, not a support claim ---
+
+    @Test
+    void isDefinitelyUnsupported_quoteInSnapshot_isFalse() {
+        loadSnapshot(Map.of("USD", "1.07", "ILS", "3.95"));
+
+        assertThat(service.isDefinitelyUnsupported("ILS")).isFalse();
+    }
+
+    @Test
+    void isDefinitelyUnsupported_quoteAbsentFromSnapshot_isTrue() {
+        loadSnapshot(Map.of("USD", "1.07"));
+
+        assertThat(service.isDefinitelyUnsupported("ZZZ")).isTrue();
+    }
+
+    @Test
+    void isDefinitelyUnsupported_baseCurrency_isFalseEvenWithoutASnapshot() {
+        // EUR never appears in the rates map — it is the base, with rate 1 by definition.
+        assertThat(service.currentSnapshot()).isEmpty();
+
+        assertThat(service.isDefinitelyUnsupported(ExchangeRateService.BASE_CURRENCY))
+                .isFalse();
+    }
+
+    @Test
+    void isDefinitelyUnsupported_noSnapshot_isFalseBecauseNothingIsProven() {
+        // The whole point of the negative phrasing: with no rates loaded we cannot prove a currency
+        // is unusable, so callers accept. Rejecting here would 400 requests needing no conversion.
+        assertThat(service.currentSnapshot()).isEmpty();
+
+        assertThat(service.isDefinitelyUnsupported("ZZZ")).isFalse();
+        assertThat(service.isDefinitelyUnsupported("USD")).isFalse();
+    }
+
+    @Test
+    void isDefinitelyUnsupported_normalizesCaseBeforeLookup() {
+        loadSnapshot(Map.of("USD", "1.07"));
+
+        assertThat(service.isDefinitelyUnsupported("usd")).isFalse();
+    }
+
+    @Test
+    void isDefinitelyUnsupported_null_isTrue() {
+        assertThat(service.isDefinitelyUnsupported(null)).isTrue();
+    }
+
+    /** Installs a snapshot through the ordinary refresh path, so the field is set the way production sets it. */
+    private void loadSnapshot(Map<String, String> rates) {
+        RateSnapshot fresh = snapshot(TODAY, rates);
+        when(provider.fetchLatest()).thenReturn(fresh);
+        when(repository.findByAsOf(TODAY)).thenReturn(List.of());
+        service.refresh();
+    }
+
     private static RateSnapshot snapshot(LocalDate asOf, Map<String, String> rates) {
         Map<String, BigDecimal> decimal = new HashMap<>();
         rates.forEach((k, v) -> decimal.put(k, new BigDecimal(v)));

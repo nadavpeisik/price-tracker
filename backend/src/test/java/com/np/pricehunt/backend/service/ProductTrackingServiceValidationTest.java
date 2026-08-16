@@ -41,6 +41,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 @ExtendWith(MockitoExtension.class)
 class ProductTrackingServiceValidationTest {
 
+    private static final PriceTrackingProperties TRACKING_PROPERTIES =
+            new PriceTrackingProperties(200, Duration.ofMinutes(1), 20);
+
     @Mock
     private ProductRepository productRepository;
 
@@ -87,12 +90,12 @@ class ProductTrackingServiceValidationTest {
                 scraperClient,
                 transactionTemplate,
                 urlValidator,
-                new PriceTrackingProperties(200, Duration.ofMinutes(1)),
+                TRACKING_PROPERTIES,
                 shopNameResolver,
                 cooldownLimiter,
                 Clock.systemUTC(),
                 scrapeAttemptRecorder,
-                new PriceValidator(new PriceTrackingProperties(200, Duration.ofMinutes(1))));
+                new PriceValidator(TRACKING_PROPERTIES));
 
         product = Product.builder().id(1L).name("Test Product").build();
         item = TrackedItem.builder()
@@ -113,7 +116,7 @@ class ProductTrackingServiceValidationTest {
             return cb.doInTransaction(null);
         });
         when(productRepository.existsById(1L)).thenReturn(true);
-        when(productRepository.findById(1L)).thenReturn(Optional.of(product));
+        when(productRepository.findForUpdateById(1L)).thenReturn(Optional.of(product));
         when(trackedItemRepository.findByUrl(any())).thenReturn(Optional.of(item));
         // findById is hit only inside persistResultInTxn — tests that short-circuit
         // before persistence (e.g. ScrapeBlockedException propagation) skip it.

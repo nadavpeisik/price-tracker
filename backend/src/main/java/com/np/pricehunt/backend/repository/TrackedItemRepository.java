@@ -3,6 +3,7 @@ package com.np.pricehunt.backend.repository;
 import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.domain.ShopNameSource;
 import com.np.pricehunt.backend.domain.TrackedItem;
+import com.np.pricehunt.backend.dto.DashboardListingRef;
 import com.np.pricehunt.backend.dto.TrackedItemRefreshView;
 import java.time.Instant;
 import java.util.Collection;
@@ -29,6 +30,14 @@ public interface TrackedItemRepository extends JpaRepository<TrackedItem, Long> 
     // Essential for "Daily Scraper" logic later.
     List<TrackedItem> findByLastCheckedBefore(Instant threshold);
 
+    /**
+     * How many listings a product already has, for the admission cap (issue #146).
+     *
+     * <p>A count query, never {@code findByProduct(product).size()}: the cap must not hydrate every
+     * sibling entity (and their lazy {@code priceHistory} associations) just to compare a number.
+     */
+    long countByProduct(Product product);
+
     // Narrow projection + DB-side stale filter for the scheduler. Avoids hydrating the LAZY
     // priceHistory collection (the @Data toString/equals/hashCode foot-gun) and keeps freshly-
     // refreshed rows from ever reaching the JVM.
@@ -39,6 +48,33 @@ public interface TrackedItemRepository extends JpaRepository<TrackedItem, Long> 
            WHERE t.lastChecked IS NULL OR t.lastChecked < :cutoff
            """)
     List<TrackedItemRefreshView> findStaleItems(@Param("cutoff") Instant cutoff);
+
+    /**
+     * Every listing in the catalogue, flattened to what the dashboard's whole-set pass reads (issue
+     * #146): one query, no entities, no lazy associations.
+     *
+     * <p>Whole-set rather than filtered because the summary tiles aggregate over everything tracked
+     * regardless of the active search — so the rows are needed in memory anyway, and a second
+     * database round trip to re-filter data already loaded would cost more than it saves.
+     *
+     * <p>Ordered by id so the facet list and any grouping are stable across requests.
+     */
+    @Query(
+            """
+           SELECT new com.np.pricehunt.backend.dto.DashboardListingRef(t.id, t.product.id, t.shopName)
+           FROM TrackedItem t
+           ORDER BY t.id ASC
+           """)
+    List<DashboardListingRef> findAllForDashboard();
+
+    /**
+     * Listings for the products on one dashboard page, as entities.
+     *
+     * <p>Entities specifically because {@code PriceTrendService.computeProductTrends} takes {@code
+     * TrackedItem}s; the light refs above cannot be passed. Bounded by the page size, and callers
+     * must skip the call entirely on an empty page rather than binding an empty {@code IN} list.
+     */
+    List<TrackedItem> findByProductIdIn(Collection<Long> productIds);
 
     /**
      * Atomic compare-and-set of the shop name: overwrites only when {@code newSource} ranks at or

@@ -1,9 +1,11 @@
 package com.np.pricehunt.backend.repository;
 
 import com.np.pricehunt.backend.domain.Product;
+import jakarta.persistence.LockModeType;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.stereotype.Repository;
 
 @Repository
@@ -11,6 +13,16 @@ public interface ProductRepository extends JpaRepository<Product, Long> {
 
     // 1. Find a product by its exact name (Case Insensitive)
     Optional<Product> findByNameIgnoreCase(String name);
+
+    /**
+     * Loads a product under a pessimistic row-level write lock, so listing admission can count and
+     * insert without racing a concurrent admission to the same product.
+     *
+     * <p>A separate method rather than {@code @Lock} on the inherited {@code findById}: that would
+     * take the lock for every caller, and most of them only read.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    Optional<Product> findForUpdateById(Long id);
 
     /**
      * Products written by the dev seeder, identified by a reserved description prefix.

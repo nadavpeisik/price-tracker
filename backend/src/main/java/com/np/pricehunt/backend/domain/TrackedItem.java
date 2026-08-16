@@ -9,6 +9,8 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 @Entity
+// Postgres does not index a foreign key automatically; every product -> listings walk needs this (V10).
+@Table(indexes = {@Index(name = "idx_tracked_item_product", columnList = "product_id")})
 @Data
 @NoArgsConstructor
 @AllArgsConstructor

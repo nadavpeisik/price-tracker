@@ -39,6 +39,9 @@ import org.springframework.web.server.ResponseStatusException;
 @ExtendWith(MockitoExtension.class)
 class ProductTrackingServiceCrudTest {
 
+    private static final PriceTrackingProperties TRACKING_PROPERTIES =
+            new PriceTrackingProperties(200, Duration.ofMinutes(1), 20);
+
     @Mock
     private ProductRepository productRepository;
 
@@ -84,12 +87,12 @@ class ProductTrackingServiceCrudTest {
                 scraperClient,
                 transactionTemplate,
                 urlValidator,
-                new PriceTrackingProperties(200, Duration.ofMinutes(1)),
+                TRACKING_PROPERTIES,
                 shopNameResolver,
                 cooldownLimiter,
                 Clock.systemUTC(),
                 scrapeAttemptRecorder,
-                new PriceValidator(new PriceTrackingProperties(200, Duration.ofMinutes(1))));
+                new PriceValidator(TRACKING_PROPERTIES));
         // Run transactionTemplate callbacks inline so phase splits are exercised end-to-end.
         lenient().when(transactionTemplate.execute(any())).thenAnswer(inv -> {
             TransactionCallback<?> cb = inv.getArgument(0);
@@ -102,6 +105,76 @@ class ProductTrackingServiceCrudTest {
                 .shopName("amazon.com")
                 .product(product)
                 .build();
+    }
+
+    // --- listing admission (#146) ---
+
+    @Test
+    void createProduct_savesWithoutCountingTheCatalogue() {
+        // No global product cap: the catalogue is a shared canonical set, so its size is a capacity
+        // question for whoever operates the system, not something to reject a create over (#172).
+        when(productRepository.save(any()))
+                .thenReturn(Product.builder().id(2L).name("Laptop").build());
+
+        assertThat(service.createProduct(new CreateProductRequest("Laptop")).id())
+                .isEqualTo(2L);
+
+        verify(productRepository, never()).count();
+    }
+
+    @Test
+    void trackUrl_newUrlAtListingCap_returns409_withoutScraping() {
+        when(productRepository.existsById(1L)).thenReturn(true);
+        when(productRepository.findForUpdateById(1L)).thenReturn(Optional.of(product));
+        when(trackedItemRepository.findByUrl("https://amazon.com/dp/2")).thenReturn(Optional.empty());
+        when(trackedItemRepository.countByProduct(product)).thenReturn(20L);
+
+        assertThatThrownBy(() -> service.trackUrl(1L, new TrackRequest("https://amazon.com/dp/2")))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(e -> ((ResponseStatusException) e).getStatusCode())
+                .isEqualTo(HttpStatus.CONFLICT);
+
+        verify(trackedItemRepository, never()).save(any());
+        verify(scraperClient, never()).scrape(any());
+    }
+
+    @Test
+    void trackUrl_existingUrlAtListingCap_isUnaffected() {
+        // Re-tracking a URL the product already has admits no new listing, so the cap must not fire.
+        when(productRepository.existsById(1L)).thenReturn(true);
+        when(productRepository.findForUpdateById(1L)).thenReturn(Optional.of(product));
+        when(trackedItemRepository.findByUrl(item.getUrl())).thenReturn(Optional.of(item));
+        when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
+        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
+                .thenReturn(Optional.empty());
+        when(scraperClient.scrape(item.getUrl())).thenReturn(null);
+        when(shopNameResolver.resolve(any(), any()))
+                .thenReturn(new ShopNameResolver.Resolved("amazon.com", ShopNameSource.HOST_FALLBACK, null));
+
+        service.trackUrl(1L, new TrackRequest(item.getUrl()));
+
+        verify(trackedItemRepository, never()).countByProduct(any());
+        verify(scraperClient).scrape(item.getUrl());
+    }
+
+    @Test
+    void trackUrl_loadsParentWithTheWriteLock_notThePlainFinder() {
+        // The lock is what serializes admission; a plain findById would leave the count-then-insert
+        // racing a concurrent track of the same product.
+        when(productRepository.existsById(1L)).thenReturn(true);
+        when(productRepository.findForUpdateById(1L)).thenReturn(Optional.of(product));
+        when(trackedItemRepository.findByUrl(item.getUrl())).thenReturn(Optional.of(item));
+        when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
+        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
+                .thenReturn(Optional.empty());
+        when(scraperClient.scrape(item.getUrl())).thenReturn(null);
+        when(shopNameResolver.resolve(any(), any()))
+                .thenReturn(new ShopNameResolver.Resolved("amazon.com", ShopNameSource.HOST_FALLBACK, null));
+
+        service.trackUrl(1L, new TrackRequest(item.getUrl()));
+
+        verify(productRepository).findForUpdateById(1L);
+        verify(productRepository, never()).findById(1L);
     }
 
     // --- deleteProduct ---

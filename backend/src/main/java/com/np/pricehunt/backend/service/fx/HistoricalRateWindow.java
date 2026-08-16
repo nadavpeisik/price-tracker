@@ -19,7 +19,7 @@ import java.util.TreeMap;
  * date-keyed snapshot would then let a partial date shadow an older, still-valid rate for the
  * currencies missing from it. Per-quote floors make each currency's calendar independent.
  *
- * <p>EUR is not stored — it is the implicit base with rate 1, exactly as in {@link PriceConverter}.
+ * <p>EUR is not stored — it is {@link ExchangeRateService#BASE_CURRENCY}, with rate 1 by definition.
  */
 public final class HistoricalRateWindow {
 
