@@ -303,7 +303,7 @@ public class ProductTrackingService {
             // null to UNKNOWN before the NOT NULL write rather than relying on an upstream guarantee.
             AvailabilityStatus availability =
                     info.availability() != null ? info.availability() : AvailabilityStatus.UNKNOWN;
-            PriceRecord record = priceRecordRepository.save(PriceRecord.builder()
+            PriceRecord saved = priceRecordRepository.save(PriceRecord.builder()
                     .price(info.price())
                     .currency(info.currency().trim().toUpperCase(Locale.ROOT))
                     .availability(availability)
@@ -311,7 +311,7 @@ public class ProductTrackingService {
                     .trackedItem(item)
                     .build());
 
-            item.setLastChecked(record.getTimestamp());
+            item.setLastChecked(saved.getTimestamp());
 
             log.info(
                     "Tracked itemId={} url={} source={} price={} {} availability={}",
@@ -322,7 +322,7 @@ public class ProductTrackingService {
                     info.currency(),
                     availability);
 
-            return new TrackPersistenceResult(buildTrackResponse(item.getProduct(), item, record), null);
+            return new TrackPersistenceResult(buildTrackResponse(item.getProduct(), item, saved), null);
         });
     }
 
@@ -384,7 +384,7 @@ public class ProductTrackingService {
         }
     }
 
-    private TrackResponse buildTrackResponse(Product product, TrackedItem item, PriceRecord record) {
+    private TrackResponse buildTrackResponse(Product product, TrackedItem item, PriceRecord reported) {
         return new TrackResponse(
                 product.getId(),
                 product.getName(),
@@ -392,10 +392,10 @@ public class ProductTrackingService {
                 item.getUrl(),
                 item.getShopName(),
                 item.getShopNameSource(),
-                record != null ? record.getPrice() : null,
-                record != null ? record.getCurrency() : null,
-                record != null ? record.getAvailability() : AvailabilityStatus.UNKNOWN,
-                record != null ? record.getTimestamp() : null,
-                record != null ? record.getExtractionSource() : null);
+                reported != null ? reported.getPrice() : null,
+                reported != null ? reported.getCurrency() : null,
+                reported != null ? reported.getAvailability() : AvailabilityStatus.UNKNOWN,
+                reported != null ? reported.getTimestamp() : null,
+                reported != null ? reported.getExtractionSource() : null);
     }
 }
