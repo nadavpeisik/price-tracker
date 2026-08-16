@@ -428,7 +428,7 @@ class ProductTrackingServiceCrudTest {
         TrackResponse response = service.refreshTrackedItem(1L, 1L);
 
         verify(scraperClient).scrape(item.getUrl());
-        assertThat(response.currentPrice()).isEqualByComparingTo("899.99");
+        assertThat(response.currentPrice()).isEqualTo("899.9900");
     }
 
     @Test
@@ -489,7 +489,7 @@ class ProductTrackingServiceCrudTest {
 
         verify(scraperClient).scrape(recentItem.getUrl());
         verify(priceRecordRepository).save(any());
-        assertThat(response.currentPrice()).isEqualByComparingTo("899.99");
+        assertThat(response.currentPrice()).isEqualTo("899.9900");
         // scheduledRefresh is system-initiated and bypasses the user cooldown entirely.
         verifyNoInteractions(cooldownLimiter);
     }

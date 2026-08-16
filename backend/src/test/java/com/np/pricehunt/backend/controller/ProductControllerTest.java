@@ -7,7 +7,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.np.pricehunt.backend.config.CurrencyProperties;
-import com.np.pricehunt.backend.config.WebPaginationConfig;
 import com.np.pricehunt.backend.domain.AvailabilityStatus;
 import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.domain.ShopNameSource;
@@ -25,9 +24,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
-import org.springframework.data.domain.PageImpl;
-import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -36,7 +32,7 @@ import org.springframework.web.client.RestClientException;
 import org.springframework.web.server.ResponseStatusException;
 
 @WebMvcTest(ProductController.class)
-@Import({WebPaginationConfig.class, DisplayCurrencyResolver.class})
+@Import(DisplayCurrencyResolver.class)
 @EnableConfigurationProperties(CurrencyProperties.class)
 class ProductControllerTest {
 
@@ -58,101 +54,10 @@ class ProductControllerTest {
     private PriceTrendService trendService;
 
     @Test
-    void getAllProducts_defaultsToConfiguredDisplayCurrency() throws Exception {
-        ProductSummaryResponse summary = summaryFixture();
-        when(rateService.isDefinitelyUnsupported("ILS")).thenReturn(false);
-        when(queryService.getAllProducts(any(Pageable.class), anyString()))
-                .thenReturn(new PageImpl<>(List.of(summary)));
-
-        mvc.perform(get("/api/products"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.content[0].id").value(1))
-                .andExpect(jsonPath("$.content[0].name").value("Laptop"))
-                .andExpect(jsonPath("$.content[0].bestPriceConverted").value(363.6364))
-                .andExpect(jsonPath("$.content[0].bestPriceConvertedCurrency").value("ILS"))
-                .andExpect(jsonPath("$.content[0].bestPriceOriginal").value(100))
-                .andExpect(jsonPath("$.content[0].bestPriceOriginalCurrency").value("USD"))
-                .andExpect(jsonPath("$.content[0].bestPriceShop").value("amazon.com"))
-                .andExpect(jsonPath("$.content[0].conversionAsOf").value("2026-05-24"))
-                .andExpect(jsonPath("$.content[0].conversionStale").value(false))
-                .andExpect(jsonPath("$.content[0].priceBasis").value("AS_LISTED"))
-                .andExpect(jsonPath("$.content[0].availability").value("AVAILABLE"))
-                .andExpect(jsonPath("$.content[0].mixedCurrencies").value(true))
-                .andExpect(jsonPath("$.page.totalElements").value(1));
-
-        verify(queryService).getAllProducts(any(Pageable.class), eq("ILS"));
-    }
-
-    @Test
-    void getAllProducts_explicitDisplayCurrency_passedToService() throws Exception {
-        when(rateService.isDefinitelyUnsupported("USD")).thenReturn(false);
-        when(queryService.getAllProducts(any(Pageable.class), anyString())).thenReturn(new PageImpl<>(List.of()));
-
-        mvc.perform(get("/api/products").param("displayCurrency", "USD")).andExpect(status().isOk());
-
-        verify(queryService).getAllProducts(any(Pageable.class), eq("USD"));
-    }
-
-    @Test
-    void getAllProducts_lowercaseDisplayCurrency_normalizedToUpper() throws Exception {
-        when(rateService.isDefinitelyUnsupported("EUR")).thenReturn(false);
-        when(queryService.getAllProducts(any(Pageable.class), anyString())).thenReturn(new PageImpl<>(List.of()));
-
-        mvc.perform(get("/api/products").param("displayCurrency", "eur")).andExpect(status().isOk());
-
-        verify(queryService).getAllProducts(any(Pageable.class), eq("EUR"));
-    }
-
-    @Test
-    void getAllProducts_invalidDisplayCurrencyFormat_returns400() throws Exception {
-        mvc.perform(get("/api/products").param("displayCurrency", "ZZZZ")).andExpect(status().isBadRequest());
-
-        verify(queryService, never()).getAllProducts(any(Pageable.class), anyString());
-    }
-
-    @Test
-    void getAllProducts_currencyTheRateSnapshotCannotPrice_returns400() throws Exception {
-        // A real ISO code, so the rejection comes from the FX side rather than the format gate.
-        when(rateService.isDefinitelyUnsupported("JPY")).thenReturn(true);
-
-        mvc.perform(get("/api/products").param("displayCurrency", "JPY")).andExpect(status().isBadRequest());
-
-        verify(queryService, never()).getAllProducts(any(Pageable.class), anyString());
-    }
-
-    @Test
-    void getAllProducts_codeThatIsNotARealCurrency_returns400WithoutConsultingTheRateService() throws Exception {
-        // ZZZ matches ^[A-Z]{3}$ but is not ISO 4217, and that stays true while FX is unavailable.
-        mvc.perform(get("/api/products").param("displayCurrency", "ZZZ")).andExpect(status().isBadRequest());
-
-        verify(rateService, never()).isDefinitelyUnsupported("ZZZ");
-        verify(queryService, never()).getAllProducts(any(Pageable.class), anyString());
-    }
-
-    @Test
-    void getAllProducts_pageParams_passedToService() throws Exception {
-        when(rateService.isDefinitelyUnsupported("ILS")).thenReturn(false);
-        when(queryService.getAllProducts(any(Pageable.class), anyString())).thenReturn(new PageImpl<>(List.of()));
-
-        mvc.perform(get("/api/products").param("page", "2").param("size", "5")).andExpect(status().isOk());
-
-        verify(queryService).getAllProducts(argThat(p -> p.getPageNumber() == 2 && p.getPageSize() == 5), eq("ILS"));
-    }
-
-    @Test
-    void getAllProducts_userSortWithoutId_appendsIdTiebreaker() throws Exception {
-        when(rateService.isDefinitelyUnsupported("ILS")).thenReturn(false);
-        when(queryService.getAllProducts(any(Pageable.class), anyString())).thenReturn(new PageImpl<>(List.of()));
-
-        mvc.perform(get("/api/products").param("sort", "name,asc")).andExpect(status().isOk());
-
-        verify(queryService)
-                .getAllProducts(
-                        argThat(p -> {
-                            Sort.Order idOrder = p.getSort().getOrderFor("id");
-                            return idOrder != null && p.getSort().getOrderFor("name") != null;
-                        }),
-                        eq("ILS"));
+    void listProducts_isGone_supersededByTheDashboardEndpoint() throws Exception {
+        // 405 rather than 404: @RequestMapping("/api/products") still maps POST for createProduct, so
+        // the path survives its GET handler. Pinned so re-adding the endpoint fails the build (#175).
+        mvc.perform(get("/api/products")).andExpect(status().isMethodNotAllowed());
     }
 
     @Test
@@ -162,7 +67,7 @@ class ProductControllerTest {
                 "https://amazon.com/dp/123",
                 "amazon.com",
                 ShopNameSource.MAPPING,
-                new BigDecimal("999.99"),
+                "999.9900",
                 "USD",
                 AvailabilityStatus.AVAILABLE,
                 Instant.now());
@@ -174,7 +79,7 @@ class ProductControllerTest {
                 .andExpect(jsonPath("$.id").value(1))
                 .andExpect(jsonPath("$.name").value("Laptop"))
                 .andExpect(jsonPath("$.trackedItems[0].shopName").value("amazon.com"))
-                .andExpect(jsonPath("$.trackedItems[0].currentPrice").value(999.99))
+                .andExpect(jsonPath("$.trackedItems[0].currentPrice").value("999.9900"))
                 .andExpect(jsonPath("$.trackedItems[0].availability").value("AVAILABLE"));
     }
 
@@ -237,7 +142,7 @@ class ProductControllerTest {
                 "https://amazon.com/dp/123",
                 "amazon.com",
                 ShopNameSource.MAPPING,
-                new BigDecimal("949.99"),
+                "949.9900",
                 "USD",
                 AvailabilityStatus.AVAILABLE,
                 Instant.now(),
@@ -246,7 +151,7 @@ class ProductControllerTest {
 
         mvc.perform(post("/api/products/1/tracked-items/1/refresh"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.currentPrice").value(949.99))
+                .andExpect(jsonPath("$.currentPrice").value("949.9900"))
                 .andExpect(jsonPath("$.availability").value("AVAILABLE"))
                 .andExpect(jsonPath("$.extractionSource").value("FULLTEXT"));
     }
@@ -260,8 +165,8 @@ class ProductControllerTest {
 
     @Test
     void getPriceHistory_noParams_returnsFullHistory() throws Exception {
-        PricePointResponse point = new PricePointResponse(
-                new BigDecimal("999.99"), "USD", AvailabilityStatus.AVAILABLE, Instant.now(), "STRUCTURED");
+        PricePointResponse point =
+                new PricePointResponse("999.9900", "USD", AvailabilityStatus.AVAILABLE, Instant.now(), "STRUCTURED");
         PriceHistoryResponse history =
                 new PriceHistoryResponse(1L, "amazon.com", "https://amazon.com/dp/123", List.of(point));
         when(queryService.getPriceHistory(eq(1L), eq(1L), isNull(), isNull())).thenReturn(history);
@@ -269,6 +174,7 @@ class ProductControllerTest {
         mvc.perform(get("/api/products/1/tracked-items/1/price-history"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.trackedItemId").value(1))
+                .andExpect(jsonPath("$.history[0].price").value("999.9900"))
                 .andExpect(jsonPath("$.history[0].currency").value("USD"))
                 .andExpect(jsonPath("$.history[0].availability").value("AVAILABLE"))
                 .andExpect(jsonPath("$.history[0].extractionSource").value("STRUCTURED"));
@@ -322,7 +228,7 @@ class ProductControllerTest {
                 .andExpect(jsonPath("$.conversionAsOf").value("2026-05-24"))
                 .andExpect(jsonPath("$.conversionStale").value(false))
                 .andExpect(jsonPath("$.sparkline[0].t").value("2026-05-23T00:00:00Z"))
-                .andExpect(jsonPath("$.sparkline[0].price").value(1299.5000))
+                .andExpect(jsonPath("$.sparkline[0].price").value("1299.5000"))
                 .andExpect(jsonPath("$.sparkline[0].bestOffer.trackedItemId").value(7))
                 .andExpect(jsonPath("$.sparkline[0].bestOffer.shopName").value("KSP"))
                 .andExpect(jsonPath("$.sparkline[0].bestOffer.observedAt").value("2026-05-22T09:30:00Z"));
@@ -406,25 +312,7 @@ class ProductControllerTest {
                 false,
                 List.of(new TrendPointResponse(
                         Instant.parse("2026-05-23T00:00:00Z"),
-                        new BigDecimal("1299.5000"),
+                        "1299.5000",
                         new BestOfferResponse(7L, "KSP", Instant.parse("2026-05-22T09:30:00Z")))));
-    }
-
-    private static ProductSummaryResponse summaryFixture() {
-        return new ProductSummaryResponse(
-                1L,
-                "Laptop",
-                null,
-                2,
-                new BigDecimal("363.6364"),
-                "ILS",
-                new BigDecimal("100"),
-                "USD",
-                "amazon.com",
-                LocalDate.of(2026, 5, 24),
-                false,
-                PriceBasis.AS_LISTED,
-                AvailabilityStatus.AVAILABLE,
-                true);
     }
 }

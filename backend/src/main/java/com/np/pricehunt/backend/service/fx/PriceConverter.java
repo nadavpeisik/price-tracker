@@ -1,6 +1,7 @@
 package com.np.pricehunt.backend.service.fx;
 
 import com.np.pricehunt.backend.config.CurrencyProperties;
+import com.np.pricehunt.backend.money.MoneyPrecision;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Clock;
@@ -13,7 +14,6 @@ import org.springframework.stereotype.Service;
 @Service
 public class PriceConverter {
 
-    static final int OUTPUT_SCALE = 4;
     private static final int INTERMEDIATE_SCALE = 12;
     static final long STALENESS_THRESHOLD_DAYS = 7;
     private static final BigDecimal HUNDRED = new BigDecimal("100");
@@ -83,7 +83,7 @@ public class PriceConverter {
 
     private static ConvertedAmount identity(BigDecimal amount) {
         // No rate consulted, so no as-of date and never stale — matches the row contract.
-        return new ConvertedAmount(amount.setScale(OUTPUT_SCALE, RoundingMode.HALF_UP), null, false);
+        return new ConvertedAmount(MoneyPrecision.normalize(amount), null, false);
     }
 
     /**
@@ -99,10 +99,11 @@ public class PriceConverter {
             return null;
         }
 
-        BigDecimal converted = amount.multiply(toRate)
+        // Carry INTERMEDIATE_SCALE digits through the division, then land on the money scale: the
+        // output is an amount, so it obeys the same precision policy as a stored or rendered price.
+        BigDecimal converted = MoneyPrecision.normalize(amount.multiply(toRate)
                 .divide(fromRate, INTERMEDIATE_SCALE, RoundingMode.HALF_UP)
-                .multiply(fxMarginMultiplier)
-                .setScale(OUTPUT_SCALE, RoundingMode.HALF_UP);
+                .multiply(fxMarginMultiplier));
 
         boolean stale = ChronoUnit.DAYS.between(rateAsOf, referenceDate) > STALENESS_THRESHOLD_DAYS;
         return new ConvertedAmount(converted, rateAsOf, stale);

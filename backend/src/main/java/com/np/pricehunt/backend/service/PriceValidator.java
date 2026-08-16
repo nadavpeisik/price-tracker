@@ -4,8 +4,8 @@ import com.np.pricehunt.backend.config.PriceTrackingProperties;
 import com.np.pricehunt.backend.domain.PriceRecord;
 import com.np.pricehunt.backend.domain.ScrapeFailureCode;
 import com.np.pricehunt.backend.dto.PriceInfo;
+import com.np.pricehunt.backend.money.MoneyPrecision;
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -30,7 +30,13 @@ public class PriceValidator {
     /** A rejected price: the stable {@code code} (grouped/audited on) plus dynamic {@code detail} (nullable). */
     public record Rejection(ScrapeFailureCode code, String detail) {}
 
-    /** Returns a {@link Rejection} when {@code info} is unacceptable, or {@code null} when it passes. */
+    /**
+     * Returns a {@link Rejection} when {@code info} is unacceptable, or {@code null} when it passes.
+     *
+     * <p>Expects {@code info.price()} already normalized to {@link MoneyPrecision#SCALE} by the
+     * persistence boundary, so the value judged here is the one the column will hold. Validating an
+     * un-normalized price is what let {@code 0.00004} pass "price &gt; 0" and then store as zero.
+     */
     public Rejection validate(PriceInfo info, PriceRecord previous) {
         if (info.price() == null) {
             log.warn("Validation failed: extracted price is null");
@@ -46,6 +52,15 @@ public class PriceValidator {
             return new Rejection(ScrapeFailureCode.NULL_CURRENCY, null);
         }
         if (previous == null) return null;
+        // A stored non-positive price is corrupt, not a baseline: max and min both collapse to zero,
+        // which would reject every valid price and freeze the listing permanently. Skipping the delta
+        // check lets the next good scrape become the baseline and heal it (issue #175).
+        if (previous.getPrice() == null || previous.getPrice().signum() <= 0) {
+            log.warn(
+                    "Previous price {} is not a usable baseline - skipping delta check so the listing can recover",
+                    previous.getPrice());
+            return null;
+        }
         // Trim both sides: a trailing-space variant ("USD ") is the SAME currency — it must not skip the
         // delta check by failing equalsIgnoreCase against the stored "USD".
         String previousCurrency =
@@ -55,11 +70,14 @@ public class PriceValidator {
             return null;
         }
 
+        // movePointLeft rather than a scaled divide: the factor is a dimensionless ratio, so it needs
+        // no rounding at all, and picking an arbitrary scale here invited confusion with the money one.
         BigDecimal factor = BigDecimal.valueOf(trackingProperties.maxDeltaPercent())
-                .divide(BigDecimal.valueOf(100), 4, RoundingMode.HALF_UP)
+                .movePointLeft(2)
                 .add(BigDecimal.ONE);
-        BigDecimal max = previous.getPrice().multiply(factor).setScale(4, RoundingMode.HALF_UP);
-        BigDecimal min = previous.getPrice().divide(factor, 4, RoundingMode.HALF_UP);
+        BigDecimal max =
+                previous.getPrice().multiply(factor).setScale(MoneyPrecision.SCALE, MoneyPrecision.ROUNDING_MODE);
+        BigDecimal min = previous.getPrice().divide(factor, MoneyPrecision.SCALE, MoneyPrecision.ROUNDING_MODE);
         if (info.price().compareTo(max) > 0 || info.price().compareTo(min) < 0) {
             log.warn(
                     "Validation failed: price {} is outside {}% delta of previous {} {}",

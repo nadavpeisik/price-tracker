@@ -6,11 +6,6 @@ import com.np.pricehunt.backend.service.ProductTrackingService;
 import com.np.pricehunt.backend.service.trend.PriceTrendService;
 import java.time.Instant;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
-import org.springframework.data.web.PageableDefault;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -30,31 +25,6 @@ public class ProductController {
     public ResponseEntity<CreateProductResponse> createProduct(@RequestBody CreateProductRequest request) {
         CreateProductResponse response = trackingService.createProduct(request);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
-    }
-
-    /**
-     * @deprecated superseded by {@code GET /api/tracked-products} (issue #146), which serves the same
-     *     rows with server-side search, filtering, sorting and summary tiles, and without this
-     *     endpoint's per-listing N+1. It has no runtime consumer — the frontend calls only the
-     *     dashboard endpoint — and is removed once #157 wires that up against a real database.
-     */
-    @Deprecated(forRemoval = true)
-    @GetMapping
-    public ResponseEntity<Page<ProductSummaryResponse>> getAllProducts(
-            @PageableDefault(
-                            size = 20,
-                            sort = {"name", "id"})
-                    Pageable pageable,
-            @RequestParam(required = false) String displayCurrency) {
-        return ResponseEntity.ok(
-                queryService.getAllProducts(withStableSort(pageable), resolveDisplayCurrency(displayCurrency)));
-    }
-
-    // Caller-provided ?sort overrides @PageableDefault entirely; append `id` so pagination stays deterministic.
-    private static Pageable withStableSort(Pageable p) {
-        if (p.getSort().getOrderFor("id") != null) return p;
-        Sort sort = p.getSort().and(Sort.by(Sort.Order.asc("id")));
-        return PageRequest.of(p.getPageNumber(), p.getPageSize(), sort);
     }
 
     private String resolveDisplayCurrency(String requested) {

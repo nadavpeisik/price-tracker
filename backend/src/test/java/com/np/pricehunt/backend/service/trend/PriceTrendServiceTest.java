@@ -90,6 +90,28 @@ class PriceTrendServiceTest {
     }
 
     @Test
+    void getProductTrend_formatsSeriesPricesAsFixedScaleDecimalStrings() {
+        // The calculator emits scale 2 here, so a mapper that merely stringified it would say "199.5" —
+        // this pins that the point goes through WireMoney (#175).
+        Product product = product(1L);
+        TrackedItem item = item(10L, "KSP", product);
+        stubLoad(product, List.of(item));
+        when(calculator.compute(any(), any(), any(), anyString(), any(), anyInt()))
+                .thenReturn(new ProductTrend(
+                        List.of(new TrendPoint(
+                                midnight(1),
+                                new BigDecimal("199.50"),
+                                new BestOffer(10L, "KSP", NOW.minus(2, ChronoUnit.DAYS)))),
+                        null,
+                        TODAY,
+                        false));
+
+        PriceTrendResponse response = service.getProductTrend(1L, null, ILS);
+
+        assertThat(response.sparkline().get(0).price()).isEqualTo("199.5000");
+    }
+
+    @Test
     void getProductTrend_mapsCalculatorOutputOntoTheResponse() {
         Product product = product(1L);
         TrackedItem item = item(10L, "KSP", product);
@@ -111,6 +133,7 @@ class PriceTrendServiceTest {
         assertThat(response.conversionAsOf()).isEqualTo(TODAY);
         assertThat(response.conversionStale()).isFalse();
         assertThat(response.sparkline()).hasSize(1);
+        assertThat(response.sparkline().get(0).price()).isEqualTo("199.0000");
         assertThat(response.sparkline().get(0).bestOffer().trackedItemId()).isEqualTo(10L);
         assertThat(response.sparkline().get(0).bestOffer().shopName()).isEqualTo("KSP");
         assertThat(response.sparkline().get(0).bestOffer().observedAt()).isEqualTo(observed);

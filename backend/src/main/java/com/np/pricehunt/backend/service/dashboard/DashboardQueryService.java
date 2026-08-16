@@ -18,6 +18,7 @@ import com.np.pricehunt.backend.repository.projection.DashboardListingRef;
 import com.np.pricehunt.backend.service.trend.PriceTrendService;
 import com.np.pricehunt.backend.service.trend.ProductTrend;
 import com.np.pricehunt.backend.util.ShopIdentity;
+import com.np.pricehunt.backend.util.WireMoney;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
@@ -347,9 +348,9 @@ public class DashboardQueryService {
                 row.product().getName(),
                 null, // imageUrl — no column yet (#95)
                 null, // category — no column yet
-                toPlainDecimalString(snapshot.bestPriceConverted()),
+                WireMoney.decimalString(snapshot.bestPriceConverted()),
                 hasBestPrice ? displayCurrency : null,
-                toPlainDecimalString(snapshot.bestPriceOriginal()),
+                WireMoney.decimalString(snapshot.bestPriceOriginal()),
                 snapshot.bestPriceOriginalCurrency(),
                 snapshot.bestPriceShop(),
                 snapshot.conversionStale(),
@@ -368,13 +369,8 @@ public class DashboardQueryService {
             return List.of();
         }
         return trend.points().stream()
-                .map(point -> new DashboardPricePointResponse(point.t(), toPlainDecimalString(point.price())))
+                .map(point -> new DashboardPricePointResponse(point.t(), WireMoney.decimalString(point.price())))
                 .toList();
-    }
-
-    /** Money leaves as a decimal string; {@code toPlainString} never emits scientific notation. */
-    private static String toPlainDecimalString(BigDecimal amount) {
-        return amount == null ? null : amount.toPlainString();
     }
 
     /**

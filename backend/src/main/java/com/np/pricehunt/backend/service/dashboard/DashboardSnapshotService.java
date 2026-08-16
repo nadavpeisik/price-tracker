@@ -50,12 +50,11 @@ import org.springframework.stereotype.Service;
  * by construction, which is what {@code DashboardQueryIntegrationTest} pins across the awkward
  * fixtures (UNAVAILABLE latest, TTL-expired, timestamp ties, stale rates).
  *
- * <p><b>Documented divergence from {@code GET /api/products}.</b> That endpoint's rollup reads each
- * listing's raw latest record at any age. Here an observation older than the carry-forward TTL counts
- * as "not checked" and rolls up to UNKNOWN, and {@code mixedCurrencies} sees TTL-windowed records
- * only. This is the more honest answer — a month-old "in stock" is not evidence of anything — and it
- * follows from the TTL-bounded fetch. It is transitional either way: {@code getAllProducts} is
- * deprecated for removal once the frontend cuts over.
+ * <p><b>An observation older than the carry-forward TTL counts as "not checked"</b> and rolls up to
+ * UNKNOWN, and {@code mixedCurrencies} sees TTL-windowed records only. This is the more honest answer
+ * — a month-old "in stock" is not evidence of anything — and it follows from the TTL-bounded fetch.
+ * The superseded {@code GET /api/products} rollup, which read each listing's raw latest record at any
+ * age, was deleted in #175.
  */
 @Service
 @RequiredArgsConstructor

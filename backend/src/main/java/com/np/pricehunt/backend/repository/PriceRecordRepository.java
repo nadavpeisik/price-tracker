@@ -27,17 +27,6 @@ public interface PriceRecordRepository extends JpaRepository<PriceRecord, Long> 
             TrackedItem trackedItem, Instant start, Instant end);
 
     /**
-     * Latest record for a listing at or before {@code cutoff}, ties broken by id.
-     *
-     * <p>The cutoff belongs in the query rather than a post-filter: a future-dated record (clock
-     * skew, a manual insert) must not shadow the valid earlier record that the trend calculator
-     * would select, or the dashboard row and the series would disagree. The id tiebreak makes
-     * "latest" deterministic when two records share a timestamp.
-     */
-    Optional<PriceRecord> findFirstByTrackedItemAndTimestampLessThanEqualOrderByTimestampDescIdDesc(
-            TrackedItem trackedItem, Instant cutoff);
-
-    /**
      * One batched window fetch across many listings for the price-trend engine (issue #145).
      *
      * <p>Constructor projection (not entities) keeps the lazy {@code trackedItem} association out of
