@@ -9,13 +9,13 @@ import static org.mockito.Mockito.when;
 
 import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.dto.AvailabilityRollupStatus;
-import com.np.pricehunt.backend.dto.DashboardListingRef;
 import com.np.pricehunt.backend.dto.DashboardProductResponse;
 import com.np.pricehunt.backend.dto.DashboardQueryRequest;
 import com.np.pricehunt.backend.dto.DashboardResponse;
 import com.np.pricehunt.backend.dto.DashboardSortKey;
 import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
+import com.np.pricehunt.backend.repository.projection.DashboardListingRef;
 import com.np.pricehunt.backend.service.dashboard.ProductDashboardSnapshot.AvailabilitySummary;
 import com.np.pricehunt.backend.service.trend.BestOffer;
 import com.np.pricehunt.backend.service.trend.PriceTrendService;

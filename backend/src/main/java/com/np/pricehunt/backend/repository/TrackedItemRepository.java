@@ -3,8 +3,8 @@ package com.np.pricehunt.backend.repository;
 import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.domain.ShopNameSource;
 import com.np.pricehunt.backend.domain.TrackedItem;
-import com.np.pricehunt.backend.dto.DashboardListingRef;
-import com.np.pricehunt.backend.dto.TrackedItemRefreshView;
+import com.np.pricehunt.backend.repository.projection.DashboardListingRef;
+import com.np.pricehunt.backend.repository.projection.TrackedItemRefreshView;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
@@ -43,7 +43,7 @@ public interface TrackedItemRepository extends JpaRepository<TrackedItem, Long> 
     // refreshed rows from ever reaching the JVM.
     @Query(
             """
-           SELECT new com.np.pricehunt.backend.dto.TrackedItemRefreshView(t.id, t.url, t.lastChecked)
+           SELECT new com.np.pricehunt.backend.repository.projection.TrackedItemRefreshView(t.id, t.url, t.lastChecked)
            FROM TrackedItem t
            WHERE t.lastChecked IS NULL OR t.lastChecked < :cutoff
            """)
@@ -61,7 +61,7 @@ public interface TrackedItemRepository extends JpaRepository<TrackedItem, Long> 
      */
     @Query(
             """
-           SELECT new com.np.pricehunt.backend.dto.DashboardListingRef(t.id, t.product.id, t.shopName)
+           SELECT new com.np.pricehunt.backend.repository.projection.DashboardListingRef(t.id, t.product.id, t.shopName)
            FROM TrackedItem t
            ORDER BY t.id ASC
            """)

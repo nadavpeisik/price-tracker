@@ -7,7 +7,7 @@ import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.domain.PriceRecord;
 import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.domain.TrackedItem;
-import com.np.pricehunt.backend.dto.TrendRecordView;
+import com.np.pricehunt.backend.repository.projection.TrendRecordView;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;

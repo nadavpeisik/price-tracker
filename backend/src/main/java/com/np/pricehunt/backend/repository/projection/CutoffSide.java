@@ -1,4 +1,4 @@
-package com.np.pricehunt.backend.dto;
+package com.np.pricehunt.backend.repository.projection;
 
 /**
  * Which of the dashboard's two evaluation instants a {@link CutoffObservationRow} was selected for

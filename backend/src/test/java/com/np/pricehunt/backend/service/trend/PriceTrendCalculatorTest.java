@@ -5,7 +5,7 @@ import static org.mockito.Mockito.when;
 
 import com.np.pricehunt.backend.config.CurrencyProperties;
 import com.np.pricehunt.backend.domain.AvailabilityStatus;
-import com.np.pricehunt.backend.dto.TrendRecordView;
+import com.np.pricehunt.backend.repository.projection.TrendRecordView;
 import com.np.pricehunt.backend.service.fx.ExchangeRateService;
 import com.np.pricehunt.backend.service.fx.HistoricalRateWindow;
 import com.np.pricehunt.backend.service.fx.PriceConverter;

@@ -2,8 +2,8 @@ package com.np.pricehunt.backend.repository;
 
 import com.np.pricehunt.backend.domain.PriceRecord;
 import com.np.pricehunt.backend.domain.TrackedItem;
-import com.np.pricehunt.backend.dto.CutoffObservationRow;
-import com.np.pricehunt.backend.dto.TrendRecordView;
+import com.np.pricehunt.backend.repository.projection.CutoffObservationRow;
+import com.np.pricehunt.backend.repository.projection.TrendRecordView;
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
@@ -50,7 +50,7 @@ public interface PriceRecordRepository extends JpaRepository<PriceRecord, Long> 
      */
     @Query(
             """
-            SELECT new com.np.pricehunt.backend.dto.TrendRecordView(
+            SELECT new com.np.pricehunt.backend.repository.projection.TrendRecordView(
                 r.trackedItem.id, r.price, r.currency, r.availability, r.timestamp)
             FROM PriceRecord r
             WHERE r.trackedItem.id IN :itemIds AND r.timestamp >= :from AND r.timestamp <= :to

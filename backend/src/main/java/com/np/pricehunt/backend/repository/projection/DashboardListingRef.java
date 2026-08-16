@@ -1,4 +1,4 @@
-package com.np.pricehunt.backend.dto;
+package com.np.pricehunt.backend.repository.projection;
 
 /**
  * The three things the dashboard's whole-set pass needs to know about a listing (issue #146).

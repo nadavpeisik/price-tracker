@@ -1,6 +1,6 @@
 package com.np.pricehunt.backend.service.trend;
 
-import com.np.pricehunt.backend.dto.TrendRecordView;
+import com.np.pricehunt.backend.repository.projection.TrendRecordView;
 import com.np.pricehunt.backend.service.fx.ConvertedAmount;
 import com.np.pricehunt.backend.service.fx.HistoricalRateWindow;
 import com.np.pricehunt.backend.service.fx.PriceConverter;

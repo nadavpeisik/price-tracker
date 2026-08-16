@@ -6,7 +6,7 @@ import static org.assertj.core.api.Assertions.tuple;
 import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.domain.ShopNameSource;
 import com.np.pricehunt.backend.domain.TrackedItem;
-import com.np.pricehunt.backend.dto.DashboardListingRef;
+import com.np.pricehunt.backend.repository.projection.DashboardListingRef;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

@@ -2,9 +2,9 @@ package com.np.pricehunt.backend.scheduler;
 
 import com.np.pricehunt.backend.config.PriceSchedulerProperties;
 import com.np.pricehunt.backend.domain.JobStatus;
-import com.np.pricehunt.backend.dto.TrackedItemRefreshView;
 import com.np.pricehunt.backend.observability.JobRunRecorder;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
+import com.np.pricehunt.backend.repository.projection.TrackedItemRefreshView;
 import com.np.pricehunt.backend.service.ProductTrackingService;
 import com.np.pricehunt.backend.util.Throwables;
 import com.np.pricehunt.backend.util.Timing;
