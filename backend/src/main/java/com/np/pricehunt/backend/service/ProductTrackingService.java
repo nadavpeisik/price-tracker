@@ -327,8 +327,9 @@ public class ProductTrackingService {
     }
 
     /**
-     * The only place {@link TrackedItem} rows are created, which is why the per-product listing cap
-     * lives here. Re-tracking a URL the product already has is never blocked — the cap governs
+     * The only request path that creates {@link TrackedItem} rows, which is why the per-product
+     * listing cap lives here — {@code DevDataSeeder} persists them directly and is deliberately
+     * outside it. Re-tracking a URL the product already has is never blocked — the cap governs
      * admission of a <em>new</em> listing, not refreshes of an existing one.
      *
      * <p>Callers must hold the parent product's write lock (see {@code findForUpdateById}); without it
