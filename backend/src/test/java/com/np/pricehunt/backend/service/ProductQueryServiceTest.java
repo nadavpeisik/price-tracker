@@ -220,12 +220,12 @@ class ProductQueryServiceTest {
 
     @Test
     void getPriceHistory_mapsExtractionSourceAsString() {
-        PriceRecord record = priceRecord(itemA, "100", "USD");
+        PriceRecord observation = priceRecord(itemA, "100", "USD");
         Instant from = Instant.parse("2026-01-01T00:00:00Z");
         Instant to = Instant.parse("2026-04-01T00:00:00Z");
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
         when(priceRecordRepository.findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(itemA, from, to))
-                .thenReturn(List.of(record));
+                .thenReturn(List.of(observation));
 
         PriceHistoryResponse response = service.getPriceHistory(1L, 1L, from, to);
 
@@ -236,12 +236,12 @@ class ProductQueryServiceTest {
     void getPriceHistory_formatsPriceAsAFixedScaleDecimalString() {
         // Seeded at scale 0, so a mapper that merely stringified the BigDecimal would emit "100" —
         // this pins that it goes through WireMoney (#175).
-        PriceRecord record = priceRecord(itemA, "100", "USD");
+        PriceRecord observation = priceRecord(itemA, "100", "USD");
         Instant from = Instant.parse("2026-01-01T00:00:00Z");
         Instant to = Instant.parse("2026-04-01T00:00:00Z");
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
         when(priceRecordRepository.findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(itemA, from, to))
-                .thenReturn(List.of(record));
+                .thenReturn(List.of(observation));
 
         PriceHistoryResponse response = service.getPriceHistory(1L, 1L, from, to);
 

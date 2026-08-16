@@ -202,8 +202,8 @@ class MoneyOnTheWireTest {
                         + " or this guard would silently stop checking whatever it contains.");
     }
 
-    private static void collectRecordComponents(Class<?> record, Set<Type> visited, List<String> found) {
-        for (RecordComponent component : record.getRecordComponents()) {
+    private static void collectRecordComponents(Class<?> recordType, Set<Type> visited, List<String> found) {
+        for (RecordComponent component : recordType.getRecordComponents()) {
             if (isDecimal(component.getType())) {
                 // Keyed here rather than at an unwrapped leaf, which has no declaring record — and
                 // fully qualified, so two same-named records in different packages cannot collide.
