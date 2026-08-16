@@ -5,6 +5,7 @@ import com.np.pricehunt.backend.service.fx.ExchangeRateService;
 import java.util.Currency;
 import java.util.Locale;
 import java.util.regex.Pattern;
+import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ResponseStatusException;
@@ -21,17 +22,13 @@ import org.springframework.web.server.ResponseStatusException;
  * into a {@code @WebMvcTest} slice like any other collaborator.
  */
 @Component
+@RequiredArgsConstructor
 public class DisplayCurrencyResolver {
 
     private static final Pattern ISO_4217_CODE = Pattern.compile("^[A-Z]{3}$");
 
     private final CurrencyProperties currencyProperties;
     private final ExchangeRateService rateService;
-
-    public DisplayCurrencyResolver(CurrencyProperties currencyProperties, ExchangeRateService rateService) {
-        this.currencyProperties = currencyProperties;
-        this.rateService = rateService;
-    }
 
     /**
      * @param requested the raw query parameter; null or blank selects the configured default

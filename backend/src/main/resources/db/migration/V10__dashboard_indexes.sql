@@ -1,6 +1,15 @@
 -- Indexes for the dashboard query endpoint (issue #146).
 --
 -- Two indexes, each earning its place; deliberately no others.
+--
+-- Plain CREATE INDEX, not CONCURRENTLY, and that is a decision rather than an oversight. Flyway runs
+-- during Spring Boot startup — before the servlet container accepts traffic and before any @Scheduled
+-- job fires — on a single instance, so nothing is writing to these tables while the migration holds
+-- its lock. CONCURRENTLY exists to avoid blocking writers that are live during the build; here there
+-- are none. It would also cost the migration its transaction (executeInTransaction=false, so a
+-- failure cannot roll back) and can leave an INVALID index behind for someone to find and drop by
+-- hand. Every other index in this schema is built the same way, including V1's on this same
+-- price_record table. Revisit if deployment ever becomes rolling or multi-instance.
 
 -- 1. The missing foreign-key index.
 --
