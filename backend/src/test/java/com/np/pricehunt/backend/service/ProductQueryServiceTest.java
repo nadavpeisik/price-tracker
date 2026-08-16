@@ -9,29 +9,22 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.np.pricehunt.backend.config.PriceHistoryProperties;
-import com.np.pricehunt.backend.config.PriceTrendProperties;
 import com.np.pricehunt.backend.domain.AvailabilityStatus;
 import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.domain.PriceRecord;
 import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.domain.TrackedItem;
-import com.np.pricehunt.backend.dto.PriceBasis;
 import com.np.pricehunt.backend.dto.PriceHistoryResponse;
 import com.np.pricehunt.backend.dto.ProductDetailResponse;
-import com.np.pricehunt.backend.dto.ProductSummaryResponse;
 import com.np.pricehunt.backend.repository.PriceRecordRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
-import com.np.pricehunt.backend.service.fx.ConvertedAmount;
-import com.np.pricehunt.backend.service.fx.PriceConverter;
 import java.math.BigDecimal;
-import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -39,18 +32,13 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageImpl;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 
 @ExtendWith(MockitoExtension.class)
 class ProductQueryServiceTest {
 
-    private static final LocalDate TODAY = LocalDate.of(2026, 5, 24);
-    private static final Instant NOW = TODAY.atTime(12, 0).toInstant(ZoneOffset.UTC);
-    private static final int CARRY_FORWARD_DAYS = 7;
+    private static final Instant NOW = LocalDate.of(2026, 5, 24).atTime(12, 0).toInstant(ZoneOffset.UTC);
 
     @Mock
     private ProductRepository productRepository;
@@ -61,25 +49,15 @@ class ProductQueryServiceTest {
     @Mock
     private PriceRecordRepository priceRecordRepository;
 
-    @Mock
-    private PriceConverter priceConverter;
-
     private ProductQueryService service;
 
     private Product product;
     private TrackedItem itemA;
-    private TrackedItem itemB;
 
     @BeforeEach
     void setUp() {
         service = new ProductQueryService(
-                productRepository,
-                trackedItemRepository,
-                priceRecordRepository,
-                priceConverter,
-                new PriceHistoryProperties(90),
-                new PriceTrendProperties(30, 730, CARRY_FORWARD_DAYS),
-                Clock.fixed(NOW, ZoneOffset.UTC));
+                productRepository, trackedItemRepository, priceRecordRepository, new PriceHistoryProperties(90));
         product = Product.builder().id(1L).name("Laptop").build();
         itemA = TrackedItem.builder()
                 .id(1L)
@@ -87,285 +65,6 @@ class ProductQueryServiceTest {
                 .shopName("amazon.com")
                 .product(product)
                 .build();
-        itemB = TrackedItem.builder()
-                .id(2L)
-                .url("https://bestbuy.com/p/1")
-                .shopName("bestbuy.com")
-                .product(product)
-                .build();
-    }
-
-    // --- getAllProducts ---
-
-    @Test
-    void getAllProducts_singleCurrency_picksLowestConverted() {
-        PriceRecord cheapest = priceRecord(itemA, "49.99", "USD");
-        PriceRecord pricier = priceRecord(itemB, "59.99", "USD");
-        stubProductWithItems(List.of(itemA, itemB));
-        stubLatestPrices(Map.of(itemA, cheapest, itemB, pricier));
-        stubIdentityConversion("49.99", "USD");
-        stubIdentityConversion("59.99", "USD");
-
-        Page<ProductSummaryResponse> page = service.getAllProducts(PageRequest.of(0, 20), "USD");
-
-        ProductSummaryResponse summary = page.getContent().get(0);
-        assertThat(summary.bestPriceConverted()).isEqualByComparingTo("49.99");
-        assertThat(summary.bestPriceConvertedCurrency()).isEqualTo("USD");
-        assertThat(summary.bestPriceOriginal()).isEqualByComparingTo("49.99");
-        assertThat(summary.bestPriceOriginalCurrency()).isEqualTo("USD");
-        assertThat(summary.bestPriceShop()).isEqualTo("amazon.com");
-        assertThat(summary.mixedCurrencies()).isFalse();
-        assertThat(summary.priceBasis()).isEqualTo(PriceBasis.AS_LISTED);
-        assertThat(summary.trackedStoreCount()).isEqualTo(2);
-    }
-
-    @Test
-    void getAllProducts_mixedCurrencies_picksLowestAfterConversion() {
-        PriceRecord usd = priceRecord(itemA, "100", "USD");
-        PriceRecord ils = priceRecord(itemB, "500", "ILS");
-        stubProductWithItems(List.of(itemA, itemB));
-        stubLatestPrices(Map.of(itemA, usd, itemB, ils));
-        when(priceConverter.convert(new BigDecimal("100"), "USD", "ILS"))
-                .thenReturn(new ConvertedAmount(new BigDecimal("363.6364"), TODAY, false));
-        when(priceConverter.convert(new BigDecimal("500"), "ILS", "ILS"))
-                .thenReturn(new ConvertedAmount(new BigDecimal("500"), null, false));
-
-        ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "ILS")
-                .getContent()
-                .get(0);
-
-        assertThat(summary.bestPriceConverted()).isEqualByComparingTo("363.6364");
-        assertThat(summary.bestPriceConvertedCurrency()).isEqualTo("ILS");
-        assertThat(summary.bestPriceOriginal()).isEqualByComparingTo("100");
-        assertThat(summary.bestPriceOriginalCurrency()).isEqualTo("USD");
-        assertThat(summary.bestPriceShop()).isEqualTo("amazon.com");
-        assertThat(summary.mixedCurrencies()).isTrue();
-        assertThat(summary.conversionAsOf()).isEqualTo(TODAY);
-    }
-
-    @Test
-    void getAllProducts_winnerChosenByConvertedValueNotOriginalOrder() {
-        // itemA priced higher in ILS originally; itemB priced lower in USD originally — after conversion to ILS,
-        // itemA wins. The original currency must not bias the comparison.
-        PriceRecord ilsItem = priceRecord(itemA, "300", "ILS");
-        PriceRecord usdItem = priceRecord(itemB, "100", "USD");
-        stubProductWithItems(List.of(itemA, itemB));
-        stubLatestPrices(Map.of(itemA, ilsItem, itemB, usdItem));
-        when(priceConverter.convert(new BigDecimal("300"), "ILS", "ILS"))
-                .thenReturn(new ConvertedAmount(new BigDecimal("300"), null, false));
-        when(priceConverter.convert(new BigDecimal("100"), "USD", "ILS"))
-                .thenReturn(new ConvertedAmount(new BigDecimal("363.6364"), TODAY, false));
-
-        ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "ILS")
-                .getContent()
-                .get(0);
-
-        assertThat(summary.bestPriceShop()).isEqualTo("amazon.com");
-        assertThat(summary.bestPriceOriginalCurrency()).isEqualTo("ILS");
-    }
-
-    @Test
-    void getAllProducts_noItemsHavePrices_emptyBestPrice() {
-        stubProductWithItems(List.of(itemA, itemB));
-        stubNoLatestPrice(itemA);
-        stubNoLatestPrice(itemB);
-
-        ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "ILS")
-                .getContent()
-                .get(0);
-
-        assertThat(summary.bestPriceConverted()).isNull();
-        assertThat(summary.bestPriceOriginal()).isNull();
-        assertThat(summary.mixedCurrencies()).isFalse();
-        assertThat(summary.priceBasis()).isEqualTo(PriceBasis.AS_LISTED);
-    }
-
-    @Test
-    void getAllProducts_allConversionsFail_emptyBestPricePreservesMixedFlag() {
-        PriceRecord usd = priceRecord(itemA, "100", "USD");
-        PriceRecord eur = priceRecord(itemB, "85", "EUR");
-        stubProductWithItems(List.of(itemA, itemB));
-        stubLatestPrices(Map.of(itemA, usd, itemB, eur));
-        when(priceConverter.convert(new BigDecimal("100"), "USD", "ZZZ")).thenReturn(null);
-        when(priceConverter.convert(new BigDecimal("85"), "EUR", "ZZZ")).thenReturn(null);
-
-        ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "ZZZ")
-                .getContent()
-                .get(0);
-
-        assertThat(summary.bestPriceConverted()).isNull();
-        assertThat(summary.mixedCurrencies()).isTrue();
-        assertThat(summary.availability()).isEqualTo(AvailabilityStatus.AVAILABLE);
-        assertThat(summary.trackedStoreCount()).isEqualTo(2);
-    }
-
-    @Test
-    void getAllProducts_rollup_oneAvailable_isAvailable() {
-        PriceRecord unavailable =
-                priceRecord(itemA, "50", "USD", AvailabilityStatus.UNAVAILABLE, NOW.minusSeconds(3600));
-        PriceRecord available = priceRecord(itemB, "55", "USD");
-        stubProductWithItems(List.of(itemA, itemB));
-        stubLatestPrices(Map.of(itemA, unavailable, itemB, available));
-        // The cheaper listing is out of stock, so it is never converted — the available one wins.
-        stubIdentityConversion("55", "USD");
-
-        ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "USD")
-                .getContent()
-                .get(0);
-
-        assertThat(summary.availability()).isEqualTo(AvailabilityStatus.AVAILABLE);
-        assertThat(summary.bestPriceConverted()).isEqualByComparingTo("55");
-        assertThat(summary.bestPriceShop()).isEqualTo("bestbuy.com");
-    }
-
-    @Test
-    void getAllProducts_rollup_unavailablePlusNeverChecked_isUnknown() {
-        // The rollup spans ALL trackers: itemA is priced+UNAVAILABLE, itemB has never been scraped
-        // (no latest price → UNKNOWN). It must roll up to UNKNOWN, not UNAVAILABLE — we never claim
-        // "unavailable" while a tracked store is still unknown. (Regression guard for the bug where
-        // the rollup only considered priced items.)
-        PriceRecord unavailable =
-                priceRecord(itemA, "50", "USD", AvailabilityStatus.UNAVAILABLE, NOW.minusSeconds(3600));
-        stubProductWithItems(List.of(itemA, itemB));
-        stubLatestPrices(Map.of(itemA, unavailable));
-        stubNoLatestPrice(itemB);
-
-        ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "USD")
-                .getContent()
-                .get(0);
-
-        assertThat(summary.availability()).isEqualTo(AvailabilityStatus.UNKNOWN);
-        // The only priced listing is out of stock, so there is no best price to show.
-        assertThat(summary.bestPriceConverted()).isNull();
-    }
-
-    @Test
-    void getAllProducts_rollup_noHistory_isUnknown() {
-        // A product whose tracked stores have never been scraped (no PriceRecord at all) rolls up to
-        // UNKNOWN — never UNAVAILABLE.
-        stubProductWithItems(List.of(itemA, itemB));
-        stubNoLatestPrice(itemA);
-        stubNoLatestPrice(itemB);
-
-        ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "USD")
-                .getContent()
-                .get(0);
-
-        assertThat(summary.availability()).isEqualTo(AvailabilityStatus.UNKNOWN);
-    }
-
-    @Test
-    void getAllProducts_rollup_allUnavailable_isUnavailable() {
-        PriceRecord a = priceRecord(itemA, "50", "USD", AvailabilityStatus.UNAVAILABLE, NOW.minusSeconds(3600));
-        PriceRecord b = priceRecord(itemB, "55", "USD", AvailabilityStatus.UNAVAILABLE, NOW.minusSeconds(3600));
-        stubProductWithItems(List.of(itemA, itemB));
-        stubLatestPrices(Map.of(itemA, a, itemB, b));
-
-        ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "USD")
-                .getContent()
-                .get(0);
-
-        assertThat(summary.availability()).isEqualTo(AvailabilityStatus.UNAVAILABLE);
-        // Nothing purchasable, so no best price — the row shows the rollup without a number.
-        assertThat(summary.bestPriceConverted()).isNull();
-        assertThat(summary.trackedStoreCount()).isEqualTo(2);
-    }
-
-    // --- Eligibility alignment with the trend engine (#145) ---
-
-    @Test
-    void getAllProducts_latestRecordOlderThanTheTtl_hasNoBestPriceButKeepsRollupAndCount() {
-        PriceRecord stale =
-                priceRecord(itemA, "100", "USD", AvailabilityStatus.AVAILABLE, NOW.minus(8, ChronoUnit.DAYS));
-        stubProductWithItems(List.of(itemA));
-        stubLatestPrices(Map.of(itemA, stale));
-
-        ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "USD")
-                .getContent()
-                .get(0);
-
-        assertThat(summary.bestPriceConverted()).isNull();
-        assertThat(summary.bestPriceShop()).isNull();
-        assertThat(summary.availability()).isEqualTo(AvailabilityStatus.AVAILABLE);
-        assertThat(summary.trackedStoreCount()).isEqualTo(1);
-    }
-
-    @Test
-    void getAllProducts_latestRecordExactlyAtTheTtlBoundary_isStillEligible() {
-        PriceRecord boundary = priceRecord(
-                itemA, "100", "USD", AvailabilityStatus.AVAILABLE, NOW.minus(CARRY_FORWARD_DAYS, ChronoUnit.DAYS));
-        stubProductWithItems(List.of(itemA));
-        stubLatestPrices(Map.of(itemA, boundary));
-        stubIdentityConversion("100", "USD");
-
-        ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "USD")
-                .getContent()
-                .get(0);
-
-        assertThat(summary.bestPriceConverted()).isEqualByComparingTo("100");
-    }
-
-    @Test
-    void getAllProducts_mixedCurrenciesStillTrueWhenTheForeignListingIsIneligible() {
-        // mixedCurrencies describes the tracked set, not just the listings currently in the running.
-        PriceRecord ils = priceRecord(itemA, "300", "ILS");
-        PriceRecord staleUsd =
-                priceRecord(itemB, "50", "USD", AvailabilityStatus.AVAILABLE, NOW.minus(30, ChronoUnit.DAYS));
-        stubProductWithItems(List.of(itemA, itemB));
-        stubLatestPrices(Map.of(itemA, ils, itemB, staleUsd));
-        stubIdentityConversion("300", "ILS");
-
-        ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "ILS")
-                .getContent()
-                .get(0);
-
-        assertThat(summary.mixedCurrencies()).isTrue();
-        assertThat(summary.bestPriceConverted()).isEqualByComparingTo("300");
-    }
-
-    @Test
-    void getAllProducts_equalConvertedPrices_areBrokenByTrackedItemId() {
-        stubProductWithItems(List.of(itemB, itemA));
-        stubLatestPrices(Map.of(itemA, priceRecord(itemA, "100", "USD"), itemB, priceRecord(itemB, "100", "USD")));
-        stubIdentityConversion("100", "USD");
-
-        ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "USD")
-                .getContent()
-                .get(0);
-
-        assertThat(summary.bestPriceShop()).isEqualTo("amazon.com");
-    }
-
-    @Test
-    void getAllProducts_readsLatestPriceThroughTheCutoffAwareFinder() {
-        // With a mocked repository this can only verify that the service delegates with `now` as the
-        // cutoff; that the cutoff actually excludes future-dated rows is enforced by the derived query
-        // and covered in PriceRecordRepositoryTest.cutoffAwareFinder_ignoresFutureDatedRecords.
-        PriceRecord valid = priceRecord(itemA, "100", "USD");
-        stubProductWithItems(List.of(itemA));
-        stubLatestPrices(Map.of(itemA, valid));
-        stubIdentityConversion("100", "USD");
-
-        service.getAllProducts(PageRequest.of(0, 20), "USD");
-
-        verify(priceRecordRepository)
-                .findFirstByTrackedItemAndTimestampLessThanEqualOrderByTimestampDescIdDesc(itemA, NOW);
-    }
-
-    @Test
-    void getAllProducts_propagatesStaleFlagFromConverter() {
-        PriceRecord usd = priceRecord(itemA, "100", "USD");
-        stubProductWithItems(List.of(itemA));
-        stubLatestPrices(Map.of(itemA, usd));
-        when(priceConverter.convert(new BigDecimal("100"), "USD", "ILS"))
-                .thenReturn(new ConvertedAmount(new BigDecimal("363.6364"), TODAY.minusDays(10), true));
-
-        ProductSummaryResponse summary = service.getAllProducts(PageRequest.of(0, 20), "ILS")
-                .getContent()
-                .get(0);
-
-        assertThat(summary.conversionStale()).isTrue();
-        assertThat(summary.conversionAsOf()).isEqualTo(TODAY.minusDays(10));
     }
 
     // --- getProduct ---
@@ -392,7 +91,7 @@ class ProductQueryServiceTest {
 
         assertThat(detail.id()).isEqualTo(1L);
         assertThat(detail.trackedItems()).hasSize(1);
-        assertThat(detail.trackedItems().get(0).currentPrice()).isEqualByComparingTo("999.99");
+        assertThat(detail.trackedItems().get(0).currentPrice()).isEqualTo("999.9900");
         assertThat(detail.trackedItems().get(0).currency()).isEqualTo("USD");
     }
 
@@ -533,28 +232,20 @@ class ProductQueryServiceTest {
         assertThat(response.history().get(0).extractionSource()).isEqualTo("STRUCTURED");
     }
 
-    private void stubProductWithItems(List<TrackedItem> items) {
-        when(productRepository.findAll(any(org.springframework.data.domain.Pageable.class)))
-                .thenReturn(new PageImpl<>(List.of(product)));
-        when(trackedItemRepository.findByProduct(product)).thenReturn(items);
-    }
+    @Test
+    void getPriceHistory_formatsPriceAsAFixedScaleDecimalString() {
+        // Seeded at scale 0, so a mapper that merely stringified the BigDecimal would emit "100" —
+        // this pins that it goes through WireMoney (#175).
+        PriceRecord record = priceRecord(itemA, "100", "USD");
+        Instant from = Instant.parse("2026-01-01T00:00:00Z");
+        Instant to = Instant.parse("2026-04-01T00:00:00Z");
+        when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
+        when(priceRecordRepository.findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(itemA, from, to))
+                .thenReturn(List.of(record));
 
-    private void stubNoLatestPrice(TrackedItem item) {
-        when(priceRecordRepository.findFirstByTrackedItemAndTimestampLessThanEqualOrderByTimestampDescIdDesc(item, NOW))
-                .thenReturn(Optional.empty());
-    }
+        PriceHistoryResponse response = service.getPriceHistory(1L, 1L, from, to);
 
-    /** The summary row reads through the cutoff-aware finder; the detail endpoint does not. */
-    private void stubLatestPrices(Map<TrackedItem, PriceRecord> prices) {
-        prices.forEach((item, price) ->
-                when(priceRecordRepository.findFirstByTrackedItemAndTimestampLessThanEqualOrderByTimestampDescIdDesc(
-                                item, NOW))
-                        .thenReturn(Optional.of(price)));
-    }
-
-    private void stubIdentityConversion(String amount, String currency) {
-        BigDecimal value = new BigDecimal(amount);
-        when(priceConverter.convert(value, currency, currency)).thenReturn(new ConvertedAmount(value, null, false));
+        assertThat(response.history().get(0).price()).isEqualTo("100.0000");
     }
 
     private PriceRecord priceRecord(TrackedItem item, String price, String currency) {

@@ -177,39 +177,6 @@ class PriceRecordRepositoryTest {
                 .isEmpty();
     }
 
-    @Test
-    void cutoffAwareFinder_ignoresFutureDatedRecords() {
-        Instant future = t3.plusSeconds(86_400);
-        em.persist(record("1.00", future));
-        em.flush();
-
-        PriceRecord latest = priceRecordRepository
-                .findFirstByTrackedItemAndTimestampLessThanEqualOrderByTimestampDescIdDesc(item, t3)
-                .orElseThrow();
-
-        assertThat(latest.getTimestamp()).isEqualTo(t3);
-        assertThat(latest.getPrice()).isEqualByComparingTo("90.00");
-    }
-
-    @Test
-    void cutoffAwareFinder_breaksTimestampTiesByHighestId() {
-        PriceRecord newest = em.persist(record("77.00", t3));
-        em.flush();
-
-        PriceRecord latest = priceRecordRepository
-                .findFirstByTrackedItemAndTimestampLessThanEqualOrderByTimestampDescIdDesc(item, t3)
-                .orElseThrow();
-
-        assertThat(latest.getId()).isEqualTo(newest.getId());
-    }
-
-    @Test
-    void cutoffAwareFinder_emptyWhenEveryRecordIsAfterTheCutoff() {
-        assertThat(priceRecordRepository.findFirstByTrackedItemAndTimestampLessThanEqualOrderByTimestampDescIdDesc(
-                        item, t1.minusSeconds(1)))
-                .isEmpty();
-    }
-
     private PriceRecord record(String price, Instant timestamp) {
         return record(item, price, timestamp);
     }

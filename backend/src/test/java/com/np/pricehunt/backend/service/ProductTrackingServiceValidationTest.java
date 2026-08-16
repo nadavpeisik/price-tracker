@@ -141,7 +141,7 @@ class ProductTrackingServiceValidationTest {
 
         TrackResponse response = service.trackUrl(1L, new TrackRequest("https://example.com/item"));
 
-        assertThat(response.currentPrice()).isEqualByComparingTo("100.00");
+        assertThat(response.currentPrice()).isEqualTo("100.0000");
         verify(priceRecordRepository).save(any());
         // trackUrl is first-time tracking, not a refresh — the cooldown limiter must not apply. A
         // successful track must NOT record a scrape_attempt (failure-first; #131).
@@ -183,6 +183,50 @@ class ProductTrackingServiceValidationTest {
         verify(scrapeAttemptRecorder)
                 .recordValidationRejection(
                         eq(1L), any(), eq(scrapeResponse), eq(ScrapeFailureCode.PRICE_NON_POSITIVE), any());
+    }
+
+    @Test
+    void trackUrl_priceThatRoundsToZeroAtTheColumnScale_skipsSave() {
+        // The bug this closes: 0.00004 satisfies "price > 0" as extracted, but numeric(19,4) stores
+        // it as 0.0000 — and that zero then becomes a delta baseline that rejects every later scrape,
+        // freezing the listing for good. Normalizing before validation makes it non-positive (#175).
+        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
+                .thenReturn(Optional.empty());
+        when(extractionService.extractPrice(scrapeResponse))
+                .thenReturn(new PriceInfo(
+                        new BigDecimal("0.00004"), "USD", AvailabilityStatus.AVAILABLE, ExtractionSource.FULLTEXT));
+
+        service.trackUrl(1L, new TrackRequest("https://example.com/item"));
+
+        verify(priceRecordRepository, never()).save(any());
+        verify(scrapeAttemptRecorder)
+                .recordValidationRejection(
+                        eq(1L), any(), eq(scrapeResponse), eq(ScrapeFailureCode.PRICE_NON_POSITIVE), any());
+    }
+
+    @Test
+    void trackUrl_overScalePrice_isStoredRoundedToTheColumnScale() {
+        // The other half of normalizing early: an over-scale price that does NOT round to zero is
+        // persisted as the column would hold it, so the entity and the row never disagree.
+        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
+                .thenReturn(Optional.empty());
+        when(extractionService.extractPrice(scrapeResponse))
+                .thenReturn(new PriceInfo(
+                        new BigDecimal("1234.56785"),
+                        "USD",
+                        AvailabilityStatus.AVAILABLE,
+                        ExtractionSource.STRUCTURED));
+        when(priceRecordRepository.save(any(PriceRecord.class))).thenAnswer(inv -> {
+            PriceRecord r = inv.getArgument(0);
+            ReflectionTestUtils.setField(r, "timestamp", Instant.now());
+            return r;
+        });
+
+        service.trackUrl(1L, new TrackRequest("https://example.com/item"));
+
+        ArgumentCaptor<PriceRecord> captor = ArgumentCaptor.forClass(PriceRecord.class);
+        verify(priceRecordRepository).save(captor.capture());
+        assertThat(captor.getValue().getPrice()).isEqualTo(new BigDecimal("1234.5679"));
     }
 
     @Test
@@ -347,7 +391,7 @@ class ProductTrackingServiceValidationTest {
         TrackResponse response = service.trackUrl(1L, new TrackRequest("https://example.com/item"));
 
         verify(priceRecordRepository, never()).save(any());
-        assertThat(response.currentPrice()).isEqualByComparingTo("99.00");
+        assertThat(response.currentPrice()).isEqualTo("99.0000");
         // A null scrape has no evidence to replay — deliberately NOT recorded (#131).
         verifyNoInteractions(scrapeAttemptRecorder);
     }

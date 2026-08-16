@@ -111,7 +111,6 @@ Base path: `/api/products`
 | Method | Path | Description |
 |---|---|---|
 | `POST` | `/` | Create a product |
-| `GET` | `/` | **Deprecated** — list products (paginated; `?page`, `?size`, `?sort`). Superseded by `GET /api/tracked-products`; removed once the frontend cuts over. |
 | `GET` | `/{id}` | Get product detail with tracked items |
 | `PATCH` | `/{id}` | Update product fields |
 | `DELETE` | `/{id}` | Delete a product and all its tracked items |

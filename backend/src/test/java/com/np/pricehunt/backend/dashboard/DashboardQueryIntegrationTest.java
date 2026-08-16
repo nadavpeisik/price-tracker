@@ -336,7 +336,7 @@ class DashboardQueryIntegrationTest {
                 .andExpect(jsonPath("$.items[0].availability.availableCount").value(1));
 
         mvc.perform(get("/api/products/{id}/price-trend", product.getId()).param("displayCurrency", ILS))
-                .andExpect(jsonPath("$.sparkline[-1:].price").value(1899.0000));
+                .andExpect(jsonPath("$.sparkline[-1:].price").value("1899.0000"));
     }
 
     // --- query behaviour over real data ---

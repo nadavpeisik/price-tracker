@@ -3,11 +3,10 @@
  * dashboard (#144).
  *
  * This is NOT 1:1 with any backend DTO. It is a view model composed from
- * three real backend shapes (paged ProductSummaryResponse, detail
- * TrackedItemSummary listings, per-item PriceHistoryResponse) plus fields
- * only the future dashboard endpoint supplies (#146: availability counts,
- * delta7d, normalized sparkline from #145). The mock client implements this
- * exact contract so live wiring is a URL swap, not a logic rewrite.
+ * the dashboard endpoint (#146: availability counts, delta7d, normalized
+ * sparkline from #145) plus, on row expand, the detail endpoint's
+ * TrackedItemSummary listings. The mock client implements this exact
+ * contract so live wiring is a URL swap, not a logic rewrite.
  *
  * MONEY IS A DECIMAL STRING, never `number` — the backend uses
  * BigDecimal(19,4). The frontend does no money arithmetic; it parses to a

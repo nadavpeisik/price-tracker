@@ -8,11 +8,13 @@ import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.domain.ScrapeFailureCode;
 import com.np.pricehunt.backend.domain.TrackedItem;
 import com.np.pricehunt.backend.dto.*;
+import com.np.pricehunt.backend.money.MoneyPrecision;
 import com.np.pricehunt.backend.observability.ScrapeAttemptRecorder;
 import com.np.pricehunt.backend.repository.PriceRecordRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
 import com.np.pricehunt.backend.service.ratelimit.RefreshCooldownLimiter;
+import com.np.pricehunt.backend.util.WireMoney;
 import com.np.pricehunt.backend.validator.UrlValidator;
 import java.time.Clock;
 import java.time.Instant;
@@ -274,7 +276,17 @@ public class ProductTrackingService {
         return outcome.response();
     }
 
-    private TrackPersistenceResult persistResultInTxn(Long itemId, PriceInfo info) {
+    private TrackPersistenceResult persistResultInTxn(Long itemId, PriceInfo rawInfo) {
+        // Normalize once, here, so validation and persistence judge and store the SAME number. The
+        // column is numeric(19,4) and rounds on insert regardless; doing it before the checks is what
+        // stops a price of 0.00004 satisfying "price > 0" and then landing as 0.0000 (issue #175).
+        PriceInfo info = rawInfo == null
+                ? null
+                : new PriceInfo(
+                        MoneyPrecision.normalize(rawInfo.price()),
+                        rawInfo.currency(),
+                        rawInfo.availability(),
+                        rawInfo.extractionSource());
         return transactionTemplate.execute(status -> {
             TrackedItem item = trackedItemRepository
                     .findById(itemId)
@@ -393,7 +405,7 @@ public class ProductTrackingService {
                 item.getUrl(),
                 item.getShopName(),
                 item.getShopNameSource(),
-                latest != null ? latest.getPrice() : null,
+                latest != null ? WireMoney.decimalString(latest.getPrice()) : null,
                 latest != null ? latest.getCurrency() : null,
                 latest != null ? latest.getAvailability() : AvailabilityStatus.UNKNOWN,
                 latest != null ? latest.getTimestamp() : null,

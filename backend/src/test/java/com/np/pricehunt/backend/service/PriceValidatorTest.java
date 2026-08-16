@@ -55,6 +55,21 @@ class PriceValidatorTest {
     }
 
     @Test
+    void previousPriceOfZero_skipsTheDeltaCheckSoTheListingCanRecover() {
+        // A stored zero collapses the band to [0, 0], which would reject every valid price forever.
+        // Skipping the check lets this scrape land and become the next baseline (issue #175).
+        assertThat(validator.validate(info("49.99", "USD"), previous("0", "USD")))
+                .isNull();
+    }
+
+    @Test
+    void previousPriceOfZero_stillRejectsAnInvalidCandidate() {
+        // Recovery skips only the delta comparison; the candidate's own checks still apply.
+        assertThat(validator.validate(info("0", "USD"), previous("0", "USD")).code())
+                .isEqualTo(ScrapeFailureCode.PRICE_NON_POSITIVE);
+    }
+
+    @Test
     void negativePrice_rejectedAsNonPositive() {
         assertThat(validator.validate(info("-5.00", "USD"), null).code())
                 .isEqualTo(ScrapeFailureCode.PRICE_NON_POSITIVE);

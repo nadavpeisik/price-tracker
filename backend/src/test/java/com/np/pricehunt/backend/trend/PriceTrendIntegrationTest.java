@@ -124,7 +124,7 @@ class PriceTrendIntegrationTest {
     }
 
     @Test
-    void crossCurrencyProduct_seriesIsNormalizedAndRowAgreesWithTodaysPoint() throws Exception {
+    void crossCurrencyProduct_seriesIsFxNormalizedPerDay() throws Exception {
         // Historical rates with a deliberate hole: the most recent historical date carries USD only,
         // so ILS must fall back to its own earlier rate rather than becoming unconvertible.
         seedRate(USD, today.minusDays(6), "1.10");
@@ -149,7 +149,7 @@ class PriceTrendIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.displayCurrency").value(ILS))
                 .andExpect(jsonPath("$.sparkline[-1:].t").value(todayIso))
-                .andExpect(jsonPath("$.sparkline[-1:].price").value(370.9091))
+                .andExpect(jsonPath("$.sparkline[-1:].price").value("370.9091"))
                 .andExpect(jsonPath("$.sparkline[-1:].bestOffer.shopName").value("Amazon"))
                 .andExpect(jsonPath("$.sparkline[-1:].bestOffer.trackedItemId")
                         .value(amazon.getId().intValue()));
@@ -160,20 +160,13 @@ class PriceTrendIntegrationTest {
         mvc.perform(get("/api/products/{id}/price-trend", product.getId())
                         .param("days", "7")
                         .param("displayCurrency", ILS))
-                .andExpect(jsonPath("$.sparkline[0].price").value(420.0))
+                .andExpect(jsonPath("$.sparkline[0].price").value("420.0000"))
                 .andExpect(jsonPath("$.sparkline[0].bestOffer.trackedItemId")
                         .value(electra.getId().intValue()));
-
-        // Cross-endpoint invariant: the row's best price equals today's point.
-        mvc.perform(get("/api/products").param("displayCurrency", ILS))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.content[0].bestPriceConverted").value(370.9091))
-                .andExpect(jsonPath("$.content[0].bestPriceShop").value("Amazon"))
-                .andExpect(jsonPath("$.content[0].mixedCurrencies").value(true));
     }
 
     @Test
-    void noCurrentPrice_meansNoTodayPointAndNoRowBestPrice() throws Exception {
+    void noCurrentPrice_meansNoTodayPoint() throws Exception {
         Product product = seedProduct("Framework Laptop 16");
         TrackedItem tms = seedItem(product, "TMS", "tms", 3);
         seedRecord(tms, "8890", ILS, daysAgo(9));
@@ -190,13 +183,10 @@ class PriceTrendIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.sparkline[-1:].t").value(expectedLastPoint))
                 .andExpect(jsonPath("$.delta7d").doesNotExist());
-
-        mvc.perform(get("/api/products").param("displayCurrency", ILS))
-                .andExpect(jsonPath("$.content[0].bestPriceConverted").doesNotExist());
     }
 
     @Test
-    void unavailableListingIsExcludedFromBestPriceOnBothEndpoints() throws Exception {
+    void unavailableListingIsExcludedFromTheSeriesBestOffer() throws Exception {
         Product product = seedProduct("Nintendo Switch 2");
         TrackedItem ksp = seedItem(product, "KSP", "ksp", 4);
         TrackedItem bug = seedItem(product, "Bug", "bug", 5);
@@ -207,11 +197,8 @@ class PriceTrendIntegrationTest {
                         .param("days", "3")
                         .param("displayCurrency", ILS))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.sparkline[-1:].price").value(1899.0000))
+                .andExpect(jsonPath("$.sparkline[-1:].price").value("1899.0000"))
                 .andExpect(jsonPath("$.sparkline[-1:].bestOffer.shopName").value("Bug"));
-
-        mvc.perform(get("/api/products").param("displayCurrency", ILS))
-                .andExpect(jsonPath("$.content[0].bestPriceConverted").value(1899.0000));
     }
 
     @Test

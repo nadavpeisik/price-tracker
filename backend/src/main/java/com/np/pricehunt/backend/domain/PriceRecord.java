@@ -1,5 +1,6 @@
 package com.np.pricehunt.backend.domain;
 
+import com.np.pricehunt.backend.money.MoneyPrecision;
 import jakarta.persistence.*;
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -27,7 +28,7 @@ public class PriceRecord {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(precision = 19, scale = 4, nullable = false)
+    @Column(precision = 19, scale = MoneyPrecision.SCALE, nullable = false)
     private BigDecimal price;
 
     @Column(nullable = false)

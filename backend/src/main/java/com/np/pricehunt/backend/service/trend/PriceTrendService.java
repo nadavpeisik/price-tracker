@@ -13,6 +13,7 @@ import com.np.pricehunt.backend.repository.projection.TrendRecordView;
 import com.np.pricehunt.backend.service.fx.HistoricalRateRequirements;
 import com.np.pricehunt.backend.service.fx.HistoricalRateWindow;
 import com.np.pricehunt.backend.service.fx.HistoricalRateWindowLoader;
+import com.np.pricehunt.backend.util.WireMoney;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -195,7 +196,7 @@ public class PriceTrendService {
         List<TrendPointResponse> sparkline = trend.points().stream()
                 .map(point -> new TrendPointResponse(
                         point.t(),
-                        point.price(),
+                        WireMoney.decimalString(point.price()),
                         new BestOfferResponse(
                                 point.bestOffer().trackedItemId(),
                                 point.bestOffer().shopName(),

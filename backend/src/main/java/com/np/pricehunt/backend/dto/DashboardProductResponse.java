@@ -10,9 +10,11 @@ import java.util.List;
  * <p><b>Money is a decimal string, and the field types say so.</b> {@code BigDecimal(19,4)} does not
  * survive a round trip through a JSON number — a client parsing 1234.5600 into an IEEE double and
  * formatting it back can shift the last cent. Declaring these fields {@code String} and formatting via
- * {@code toPlainString()} makes that guarantee structural rather than dependent on serializer
- * configuration, which matters here because Spring Boot 4 runs Jackson 3 for the web layer while
- * Spring AI still binds Jackson 2. {@code delta7d} stays a number: it is a ratio, not an amount.
+ * {@link com.np.pricehunt.backend.util.WireMoney} makes that guarantee structural rather than
+ * dependent on serializer configuration, which matters here because Spring Boot 4 runs Jackson 3 for
+ * the web layer while Spring AI still binds Jackson 2. Every endpoint formats at a fixed scale of 4,
+ * so one amount has one spelling wherever it appears (issue #175). {@code delta7d} stays a number: it
+ * is a ratio, not an amount.
  *
  * <p><b>{@code listings} is absent, not empty.</b> Per-shop rows load on expand (#157), and an empty
  * array would be indistinguishable from "this product has no shops". The field simply does not exist
