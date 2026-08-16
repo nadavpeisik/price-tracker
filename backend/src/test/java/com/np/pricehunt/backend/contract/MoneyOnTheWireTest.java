@@ -132,6 +132,17 @@ class MoneyOnTheWireTest {
                 .hasMessageContaining("NotARecord");
     }
 
+    private record BareDecimalList(List<BigDecimal> amounts) {}
+
+    @Test
+    void walkerNamesMoneyEvenWhenItHasNoRecordComponentToPointAt() {
+        // No DTO has this shape today, but if one ever does the failure should say "money", not
+        // "unsupported type" - the guard exists to be actionable when it fires.
+        assertThatThrownBy(() -> componentsOf(BareDecimalList.class))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Money reached the wire as a bare BigDecimal");
+    }
+
     private static List<String> componentsOf(Type type) {
         List<String> found = new ArrayList<>();
         collectDecimalComponents(type, new HashSet<>(), found);
@@ -191,6 +202,14 @@ class MoneyOnTheWireTest {
             }
             if (isScalarLeaf(clazz)) {
                 return;
+            }
+            if (isDecimal(clazz)) {
+                // Reachable only as a bare container element (List<BigDecimal>, Optional<Double>),
+                // where there is no RecordComponent to key a finding to. Still a failure - just say
+                // what it actually is, rather than the generic "extend the walker" below.
+                throw new IllegalStateException("Money reached the wire as a bare " + clazz.getSimpleName()
+                        + " inside a container, with no record component to name it. Wrap it in a record whose"
+                        + " field is formatted by WireMoney (#175).");
             }
             if (clazz.isRecord()) {
                 collectRecordComponents(clazz, visited, found);
