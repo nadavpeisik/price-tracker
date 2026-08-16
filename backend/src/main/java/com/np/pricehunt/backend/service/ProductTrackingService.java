@@ -384,7 +384,7 @@ public class ProductTrackingService {
         }
     }
 
-    private TrackResponse buildTrackResponse(Product product, TrackedItem item, PriceRecord reported) {
+    private TrackResponse buildTrackResponse(Product product, TrackedItem item, PriceRecord latest) {
         return new TrackResponse(
                 product.getId(),
                 product.getName(),
@@ -392,10 +392,10 @@ public class ProductTrackingService {
                 item.getUrl(),
                 item.getShopName(),
                 item.getShopNameSource(),
-                reported != null ? reported.getPrice() : null,
-                reported != null ? reported.getCurrency() : null,
-                reported != null ? reported.getAvailability() : AvailabilityStatus.UNKNOWN,
-                reported != null ? reported.getTimestamp() : null,
-                reported != null ? reported.getExtractionSource() : null);
+                latest != null ? latest.getPrice() : null,
+                latest != null ? latest.getCurrency() : null,
+                latest != null ? latest.getAvailability() : AvailabilityStatus.UNKNOWN,
+                latest != null ? latest.getTimestamp() : null,
+                latest != null ? latest.getExtractionSource() : null);
     }
 }
