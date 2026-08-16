@@ -164,11 +164,11 @@ class PriceRecordDashboardQueryTest {
     void projectionCarriesEveryFieldTheCalculatorNeeds() {
         TrackedItem item = seedItem();
         Instant observedAt = daysBefore(1);
-        PriceRecord record = seedRecord(item, "42.5000", observedAt, "USD", AvailabilityStatus.UNKNOWN);
+        PriceRecord seeded = seedRecord(item, "42.5000", observedAt, "USD", AvailabilityStatus.UNKNOWN);
 
         assertThat(query()).singleElement().satisfies(row -> {
             assertThat(row.getTrackedItemId()).isEqualTo(item.getId());
-            assertThat(row.getRecordId()).isEqualTo(record.getId());
+            assertThat(row.getRecordId()).isEqualTo(seeded.getId());
             assertThat(row.getPrice()).isEqualByComparingTo("42.5");
             assertThat(row.getCurrency()).isEqualTo("USD");
             assertThat(row.getAvailability()).isEqualTo(AvailabilityStatus.UNKNOWN);
@@ -215,7 +215,7 @@ class PriceRecordDashboardQueryTest {
 
     private PriceRecord seedRecord(
             TrackedItem item, String price, Instant at, String currency, AvailabilityStatus availability) {
-        PriceRecord record = em.persist(PriceRecord.builder()
+        PriceRecord seeded = em.persist(PriceRecord.builder()
                 .price(new BigDecimal(price))
                 .currency(currency)
                 .availability(availability)
@@ -224,6 +224,6 @@ class PriceRecordDashboardQueryTest {
                 .timestamp(at)
                 .build());
         em.flush();
-        return record;
+        return seeded;
     }
 }
