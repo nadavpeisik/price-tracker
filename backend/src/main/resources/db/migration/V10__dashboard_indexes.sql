@@ -4,7 +4,7 @@
 --
 -- Plain CREATE INDEX takes ACCESS EXCLUSIVE and blocks writers for the build. Safe only because
 -- Flyway runs at startup on one instance, before traffic and before any scheduler. Rolling or
--- multi-instance deploys break that assumption and need CONCURRENTLY here.
+-- multi-instance deploys break that assumption and need CONCURRENTLY here (#176).
 
 -- 1. The missing foreign-key index.
 --
