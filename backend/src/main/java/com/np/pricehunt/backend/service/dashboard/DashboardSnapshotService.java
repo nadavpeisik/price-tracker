@@ -192,10 +192,9 @@ public class DashboardSnapshotService {
     /**
      * Whether the product's listings span more than one currency.
      *
-     * <p>Computed before eligibility, mirroring {@code ProductQueryService}: the flag describes the
-     * <em>catalogue</em> ("these shops quote in different currencies, we normalized them"), not the
-     * subset that happens to be buyable right now — so an out-of-stock USD listing still makes an
-     * otherwise-ILS product mixed.
+     * <p>Computed before eligibility on purpose: the flag describes the <em>catalogue</em> ("these
+     * shops quote in different currencies, we normalized them"), not the subset that happens to be
+     * buyable right now — so an out-of-stock USD listing still makes an otherwise-ILS product mixed.
      */
     private static boolean hasMixedCurrencies(
             List<DashboardListingRef> listings, Map<Long, ListingCutoffObservations> observationsByListingId) {

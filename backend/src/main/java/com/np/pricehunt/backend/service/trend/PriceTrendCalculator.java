@@ -32,10 +32,10 @@ import org.springframework.stereotype.Component;
  * levels, and would let a day-bucketed baseline absorb prices up to 24 hours newer than the cutoff.
  *
  * <p><b>Why "current" uses the live snapshot.</b> Today's point and the delta's current side convert
- * through the snapshot path that {@code ProductQueryService} uses for the dashboard row, not through
- * historical floors. The snapshot holds a single latest date, so a partially published date could
- * otherwise let per-quote floors resurrect a rate the row's path doesn't have — and the row and the
- * series would silently disagree. They are also computed once and reused, so today's point and the
+ * through the snapshot path that {@code DashboardSnapshotService} uses for the dashboard row, not
+ * through historical floors. The snapshot holds a single latest date, so a partially published date
+ * could otherwise let per-quote floors resurrect a rate the row's path doesn't have — and the row and
+ * the series would silently disagree. They are also computed once and reused, so today's point and the
  * delta's current value cannot diverge within one response.
  *
  * <p><b>Display-currency invariance (for #146) — conditional.</b> Which listing wins a given day is
