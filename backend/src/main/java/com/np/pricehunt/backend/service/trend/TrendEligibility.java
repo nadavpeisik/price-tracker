@@ -8,10 +8,11 @@ import java.time.temporal.ChronoUnit;
 /**
  * The single definition of "this observation may count as a listing's price right now" (issue #145).
  *
- * <p>Shared deliberately between {@link PriceTrendCalculator} and {@link
- * com.np.pricehunt.backend.service.ProductQueryService}: the dashboard row's headline best price and
- * the trend series' latest point must be the same number, and that holds by shared code rather than
- * by two implementations happening to agree.
+ * <p>{@link PriceTrendCalculator} is the only caller, and that is the point: the dashboard row's
+ * headline best price reaches this rule <em>through</em> the calculator (see {@link
+ * com.np.pricehunt.backend.service.dashboard.DashboardSnapshotService}), so the row and the trend
+ * series' latest point are the same number by shared code rather than by two implementations
+ * happening to agree.
  *
  * <p>Four rules, each with a reason:
  *

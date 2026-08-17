@@ -16,8 +16,9 @@ import org.springframework.validation.annotation.Validated;
  *
  * <p>{@code carryForwardDays} is the freshness TTL: a listing's last observed price keeps counting
  * as that listing's price for this many days after the observation, then the listing drops out until
- * it is scraped again. It is deliberately shared with {@code ProductQueryService}'s row best-price
- * eligibility so the dashboard row and the trend series cannot disagree by construction.
+ * it is scraped again. The dashboard's lean pass ({@code DashboardSnapshotService}) applies it through
+ * the same calculator the sparkline endpoint uses, so a row and that product's trend cannot disagree
+ * by construction.
  *
  * <p>The 7-day delta window itself is <em>not</em> configurable — "7-day delta" is the feature's
  * semantics, not a tuning knob, so it lives as a constant in {@code PriceTrendCalculator}.
