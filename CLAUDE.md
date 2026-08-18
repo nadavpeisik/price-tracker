@@ -55,7 +55,7 @@ Workflow: **write code → run BOTH `scripts/agy-review.sh` AND `scripts/codex-r
 
 Both scripts get their diff from the same shared helper, `scripts/get-review-diff.sh` — **Gemini and Codex review the exact same diff text**, so a disagreement between them reflects different judgment, not different scope.
 
-- **`agy-review.sh`** wraps the Antigravity CLI (`agy -p`), default model **Gemini 3.6 Flash (High)** (`AGY_REVIEW_MODEL`, switch to `Gemini 3.1 Pro (High)` off the free tier).
+- **`agy-review.sh`** wraps the Antigravity CLI (`agy -p`), default model **Gemini 3.7 Flash (High)** (`AGY_REVIEW_MODEL`, switch to `Gemini 3.1 Pro (High)` off the free tier).
 - **`codex-review.sh`** wraps plain `codex exec --sandbox read-only -`, model pinned to **gpt-5.6-sol** (`CODEX_REVIEW_MODEL`, set to the empty string to inherit Codex CLI's own default), reasoning effort **high** by default (`CODEX_REVIEW_REASONING_EFFORT`). Both model and effort are pinned in-script so review quality doesn't drift when `~/.codex/config.toml` is retuned for interactive use.
 
 Both produce findings grouped **HIGH / MEDIUM / LOW**, ending with `VERDICT:`. Two independent models fill issue #81's "second opinion" role. Run either script with `--help` for the full environment-variable reference. On failure — quota/rate-limit, an oversized prompt, or a reviewer returning no output — either script prints `REVIEW FAILED` to stderr (exit 2); never mistake that for a clean review.
