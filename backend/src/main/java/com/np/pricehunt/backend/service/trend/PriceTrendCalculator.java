@@ -13,7 +13,6 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 /**
@@ -56,7 +55,6 @@ import org.springframework.stereotype.Component;
  *       between currencies.
  * </ul>
  */
-@Slf4j
 @Component
 @RequiredArgsConstructor
 public class PriceTrendCalculator {
@@ -120,10 +118,6 @@ public class PriceTrendCalculator {
                         new BestOffer(best.trackedItemId(), best.shopName(), best.observedAt())));
                 latestEmitted = best;
             }
-        }
-
-        if (context.nonPositivePriceSeen()) {
-            log.warn("Ignored non-positive price record(s) while computing a price trend; check for manual DB edits");
         }
 
         return new ProductTrend(
@@ -214,9 +208,6 @@ public class PriceTrendCalculator {
         if (candidate == null) {
             return null;
         }
-        if (candidate.price() != null && candidate.price().signum() <= 0) {
-            context.markNonPositivePriceSeen();
-        }
         if (!TrendEligibility.isEligible(
                 candidate.timestamp(),
                 candidate.availability(),
@@ -280,51 +271,12 @@ public class PriceTrendCalculator {
 
     /**
      * Everything scoped to one {@link #compute} call: the conversion target, the rates to convert with,
-     * how long a price carries forward, and the single piece of state the computation accumulates —
-     * whether any corrupt price was seen.
+     * and how long a price carries forward.
      *
      * <p>Grouped so the per-listing helpers take the two things that actually vary — which listing, and
-     * which point in time — instead of re-threading four unchanging arguments through every call. A
-     * fresh instance per call is also what stops the warning leaking between products in a batch.
-     *
-     * <p>A class rather than a record: three of the four fields are fixed configuration, but the
-     * corrupt-price flag is accumulated as the computation runs, and a record would advertise a
-     * value-like immutability this does not have.
+     * which point in time — instead of re-threading three unchanging arguments through every call.
      */
-    private static final class ComputationContext {
-
-        private final String displayCurrency;
-        private final HistoricalRateWindow rates;
-        private final int carryForwardDays;
-        private boolean nonPositivePriceSeen;
-
-        ComputationContext(String displayCurrency, HistoricalRateWindow rates, int carryForwardDays) {
-            this.displayCurrency = displayCurrency;
-            this.rates = rates;
-            this.carryForwardDays = carryForwardDays;
-        }
-
-        String displayCurrency() {
-            return displayCurrency;
-        }
-
-        HistoricalRateWindow rates() {
-            return rates;
-        }
-
-        int carryForwardDays() {
-            return carryForwardDays;
-        }
-
-        /** Latched, not counted: one warn per computation, so corrupt rows can't spam the log. */
-        void markNonPositivePriceSeen() {
-            nonPositivePriceSeen = true;
-        }
-
-        boolean nonPositivePriceSeen() {
-            return nonPositivePriceSeen;
-        }
-    }
+    private record ComputationContext(String displayCurrency, HistoricalRateWindow rates, int carryForwardDays) {}
 
     /**
      * One listing's offer, comparable against the other listings' — a <em>candidate</em> because it is
