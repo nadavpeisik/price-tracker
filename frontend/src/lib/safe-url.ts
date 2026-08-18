@@ -12,7 +12,10 @@
  * strings ("//evil.com", "foo/bar") throw instead of resolving against
  * window.location, where they could masquerade as same-origin http(s).
  */
-export function safeExternalHref(url: string): string | null {
+export function safeExternalHref(url: string | null): string | null {
+  // Legacy hand-inserted rows can carry no URL at all (#157) — same outcome
+  // as an unsafe one: no link.
+  if (url === null) return null
   let parsed: URL
   try {
     parsed = new URL(url)

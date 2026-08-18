@@ -4,6 +4,7 @@ import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.domain.ShopNameSource;
 import com.np.pricehunt.backend.domain.TrackedItem;
 import com.np.pricehunt.backend.repository.projection.DashboardListingRef;
+import com.np.pricehunt.backend.repository.projection.ListingLatestObservationRow;
 import com.np.pricehunt.backend.repository.projection.TrackedItemRefreshView;
 import java.time.Instant;
 import java.util.Collection;
@@ -66,6 +67,52 @@ public interface TrackedItemRepository extends JpaRepository<TrackedItem, Long> 
            ORDER BY t.id ASC
            """)
     List<DashboardListingRef> findAllForDashboard();
+
+    /**
+     * A product's listings, each with its latest observation at or before {@code asOf} — one
+     * statement regardless of listing count (issue #157).
+     *
+     * <p>{@code LEFT JOIN LATERAL … LIMIT 1} rather than a {@code ROW_NUMBER()} window: the lateral
+     * subquery walks the {@code (tracked_item_id, "timestamp")} index and stops after one row per
+     * listing, where a window would rank the product's whole price history to pick the same rows.
+     * The selection rule — latest at or before the instant, ties broken by higher record id — is the
+     * dashboard's ({@code PriceRecordRepository.findCutoffObservations}), so the panel and the row can
+     * never pick different observations for the same listing.
+     *
+     * <p>Outer join on purpose: a listing with no qualifying record is still a listing, and comes
+     * back with null observation columns. Ordered by listing id so callers that don't re-sort get a
+     * stable order across requests.
+     *
+     * <p>Aliases are quoted because the interface projection binds by exact column label and Postgres
+     * folds unquoted identifiers to lowercase; {@code "timestamp"} is quoted for the other reason — it
+     * is the column's real (reserved-word) name from V1.
+     */
+    @Query(
+            nativeQuery = true,
+            value =
+                    """
+                    SELECT t.id                  AS "trackedItemId",
+                           t.url                 AS "url",
+                           t.shop_name           AS "shopName",
+                           t.shop_name_source    AS "shopNameSource",
+                           t.last_checked        AS "lastChecked",
+                           o.price               AS "price",
+                           o.currency            AS "currency",
+                           o.availability_status AS "availability",
+                           o.observed_at         AS "observedAt"
+                    FROM tracked_item t
+                    LEFT JOIN LATERAL (
+                        SELECT r.price, r.currency, r.availability_status, r."timestamp" AS observed_at
+                        FROM price_record r
+                        WHERE r.tracked_item_id = t.id AND r."timestamp" <= :asOf
+                        ORDER BY r."timestamp" DESC, r.id DESC
+                        LIMIT 1
+                    ) o ON true
+                    WHERE t.product_id = :productId
+                    ORDER BY t.id ASC
+                    """)
+    List<ListingLatestObservationRow> findListingsWithLatestObservation(
+            @Param("productId") Long productId, @Param("asOf") Instant asOf);
 
     /**
      * Listings for the products on one dashboard page, as entities.

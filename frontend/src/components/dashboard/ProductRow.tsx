@@ -186,7 +186,7 @@ export function ProductRow({ product, index, expanded, onToggle, celebrate }: Pr
             transition={{ duration: 0.28, ease: 'easeInOut' }}
             className="overflow-hidden bg-[color-mix(in_srgb,var(--pa)_5%,var(--surface-2))]"
           >
-            <ListingPanel productId={product.id} open={expanded} />
+            <ListingPanel productId={product.id} open={expanded} bestTrackedItemId={product.bestTrackedItemId} />
           </motion.div>
         )}
       </AnimatePresence>

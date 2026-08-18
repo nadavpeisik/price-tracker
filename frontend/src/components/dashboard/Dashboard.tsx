@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronLeft, ChevronRight, Moon, RefreshCw, Sun } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { dashboardQueryOptions, PAGE_SIZE } from '@/lib/queries'
 import { safeStorage } from '@/lib/safe-storage'
 import { collectCelebrations, createCelebrationState } from '@/lib/celebration'
+import { canonicalizeShops, sameShops } from '@/lib/shop-identity'
 import { useTheme } from '@/hooks/use-theme'
 import { useDashboardUrlState } from '@/hooks/use-dashboard-url-state'
 import { SummaryTiles } from '@/components/dashboard/SummaryTiles'
@@ -99,14 +100,39 @@ export function Dashboard() {
   const data = committed?.data
   const filterActive = state.search !== '' || state.shops.length > 0
 
-  // Prune bookmarked ?shop= values that don't exist — but only AFTER facets
-  // have loaded (never discard a valid shop during loading).
+  // Canonicalize bookmarked ?shop= values against the facets — but only AFTER
+  // facets have loaded (never discard a valid shop during loading). The
+  // backend folds shop identities case-insensitively and labels each facet
+  // with its majority spelling, so `?shop=ksp` must become the "KSP" chip
+  // rather than being pruned as unknown (#157). A pure spelling rewrite keeps
+  // the bookmarked page (`update` resets it whenever `shops` changes unless
+  // the patch paginates); dropping a genuinely unknown shop lets that reset
+  // happen, because the result set really did change.
   useEffect(() => {
     if (data === undefined) return
-    const known = new Set(data.facets.shops)
-    const valid = state.shops.filter((shop) => known.has(shop))
-    if (valid.length !== state.shops.length) update({ shops: valid })
-  }, [data, state.shops, update])
+    const { shops, droppedUnknown } = canonicalizeShops(state.shops, data.facets.shops)
+    if (sameShops(shops, state.shops)) return
+    update(droppedUnknown ? { shops } : { shops, page: state.page })
+  }, [data, state.shops, state.page, update])
+
+  // Re-sync open listing panels on every successful dashboard fetch (#157):
+  // the rows' `bestTrackedItemId` and the panel's prices come from two
+  // requests, and a panel left expanded across a background refresh would
+  // otherwise keep showing stale prices under a chip the row may have moved.
+  // Keyed on `dataUpdatedAt`, NOT on `committed`: structural sharing keeps
+  // `result.data` reference-stable when a refetch is deeply equal, so a
+  // refresh that only moved a NON-winning listing's price leaves every row
+  // identical — `committed` never changes and the open panel would stay stale
+  // indefinitely. The timestamp advances on each successful fetch regardless.
+  // Only MOUNTED (expanded) listing queries actually refetch on invalidation.
+  // In an effect, never in the render-phase commit above — invalidation
+  // notifies other components' observers, which is a side effect.
+  const queryClient = useQueryClient()
+  const dashboardFetchedAt = result.isPlaceholderData ? 0 : result.dataUpdatedAt
+  useEffect(() => {
+    if (dashboardFetchedAt === 0) return
+    void queryClient.invalidateQueries({ queryKey: ['product-listings'] })
+  }, [dashboardFetchedAt, queryClient])
 
   // Bookmarked overflow page → clamp to totalPages (not 1 — respect the
   // link) once the real page count is known. Skeleton covers the gap.

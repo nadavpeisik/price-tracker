@@ -24,6 +24,7 @@ price-tracker/
 ```bash
 # From backend/
 ./mvnw spring-boot:run        # Run the application — auto-starts Docker Compose services
+./mvnw spring-boot:run -Dspring-boot.run.profiles=seed   # …with the dev seeder (DevDataSeeder): 22 back-dated demo products + FX history; idempotent, blocklisted *.seed.invalid URLs
 ./mvnw clean install          # Build and install
 ./mvnw test                   # Run all tests
 ./mvnw test -Dtest=ClassName  # Run a single test class

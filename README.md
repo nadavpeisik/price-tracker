@@ -78,7 +78,19 @@ ollama pull llama3.2
 # Start the backend — Spring Boot auto-starts postgres + scraper via Docker Compose
 cd backend
 ./mvnw spring-boot:run
+
+# …or with demo data (recommended for a first look at the dashboard):
+./mvnw spring-boot:run -Dspring-boot.run.profiles=seed
 ```
+
+The `seed` profile writes 22 back-dated demo products (two dashboard pages)
+covering the states that decide the price rules — a sample exactly at the
+7-day boundary, under-a-week history, a flat price, out-of-stock,
+never-checked, gone-cold, mixed ILS/USD, a case-variant shop spelling, and a
+product with no listings — plus 35 days of exchange rates. It is safe to
+re-run (it replaces only its own `[dev-seed]` rows and never deletes real
+FX data), and its `*.seed.invalid` URLs are blocklisted so the scheduler
+never scrapes them. Ollama is not needed for it.
 
 Verify it's up:
 

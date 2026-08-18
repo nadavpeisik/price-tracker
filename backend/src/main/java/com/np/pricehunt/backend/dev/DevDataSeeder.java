@@ -36,8 +36,9 @@ import org.springframework.transaction.annotation.Transactional;
  * indistinguishably "New": no seven-day window to compare against, no sparkline, no drops to sort by.
  * The fixtures below deliberately cover the states that are rare in real data but decide the rules —
  * a sample exactly at the seven-day boundary, history that stops short of a week, a perfectly flat
- * price, an out-of-stock listing, a never-checked listing, mixed currencies, and a product with no
- * listings at all.
+ * price, an out-of-stock listing, a never-checked listing, mixed currencies, a product with no
+ * listings at all — and, for the dashboard (issue #157), one case-variant shop spelling and enough
+ * filler products to cross onto a second page.
  *
  * <p><b>Gating.</b> One gate — {@code @Profile("seed")} — deliberately, unlike the double-gated
  * scrape-attempt export controller: that one serves untrusted page text over HTTP at runtime, while
@@ -77,7 +78,14 @@ public class DevDataSeeder implements CommandLineRunner {
         BUG("Bug", "bug"),
         TMS("TMS", "tms"),
         ELECTRA("אלקטרה", "electra"),
-        AMAZON("Amazon", "amazon-seed");
+        AMAZON("Amazon", "amazon-seed"),
+        /**
+         * The same shop as {@link #KSP} spelled differently — the case-variant fixture (issue #157).
+         * Shop names are snapshotted per listing, so siblings on one domain really can disagree until
+         * each refreshes; the dashboard folds them into one facet labelled by the majority spelling.
+         * Used on exactly one listing so {@code KSP} stays the majority.
+         */
+        KSP_LOWER("ksp", "ksp");
 
         private final String displayName;
         private final String host;
@@ -91,6 +99,13 @@ public class DevDataSeeder implements CommandLineRunner {
             return "https://" + host + ".seed.invalid/item/" + itemNo;
         }
     }
+
+    /**
+     * Enough near-identical products to push the catalogue past one dashboard page of 20 (issue
+     * #157), so pagination and the bookmarked-overflow-page clamp are reachable against real data.
+     * Deliberately not a second full fixture set — one Ivory listing each, two observations, a delta.
+     */
+    static final int FILLER_COUNT = 12;
 
     private final ProductRepository productRepository;
     private final ExchangeRateRepository exchangeRateRepository;
@@ -210,7 +225,7 @@ public class DevDataSeeder implements CommandLineRunner {
                         obs(6, "419"),
                         obs(3, "405"),
                         obs(0.3, "399")),
-                listing(Shop.KSP, 2002, now, obs(14, "455"), obs(7, "446"), obs(2, "431"))));
+                listing(Shop.KSP_LOWER, 2002, now, obs(14, "455"), obs(7, "446"), obs(2, "431"))));
 
         products.add(product(
                 "LG C3 55\" OLED",
@@ -290,7 +305,25 @@ public class DevDataSeeder implements CommandLineRunner {
 
         products.add(product("Bambu Lab A1 mini", "Compact 3D printer"));
 
+        for (int n = 1; n <= FILLER_COUNT; n++) {
+            products.add(filler(n, now));
+        }
+
         return products;
+    }
+
+    /** A lightweight page-filler: one shop, a two-point history, a small drop. */
+    private static Product filler(int n, Instant now) {
+        int base = 100 + n * 10;
+        return product(
+                "Filler %02d — USB-C hub".formatted(n),
+                "Page-filler product",
+                listing(
+                        Shop.IVORY,
+                        10000 + n,
+                        now,
+                        obs(8, Integer.toString(base + 5)),
+                        obs(1, Integer.toString(base))));
     }
 
     private static Product product(String name, String description, TrackedItem... items) {

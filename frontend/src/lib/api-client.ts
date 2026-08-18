@@ -19,22 +19,18 @@ import type { DashboardQuery, DashboardResponse, Listing } from '@/lib/types'
 
 const API_BASE = '/api'
 
-/**
- * Endpoint name is #146's to finalize — the mock implements the same
- * contract, so only these paths change at live wiring time.
- */
+/** The dashboard query endpoint (#146); the mock implements the same contract. */
 const DASHBOARD_PATH = `${API_BASE}/tracked-products`
 
 /**
  * NOTE: the fetch functions below repeat the `import.meta.env.DEV && …`
- * expression LITERALLY instead of calling this helper — Vite substitutes
+ * expression LITERALLY instead of sharing a helper — Vite substitutes
  * `import.meta.env.DEV` with `false` at build time only when it appears
  * directly in the branch condition, which is what lets Rollup dead-code-
  * eliminate the mock imports (a function call is opaque to it and would
- * emit mock chunks into the prod bundle).
+ * emit mock chunks into the prod bundle). Mock mode is a data-source switch
+ * inside this module only; nothing else in the app knows about it (#157).
  */
-export const isMockMode = (): boolean =>
-  import.meta.env.DEV && import.meta.env.VITE_USE_MOCK === 'true'
 
 /** UI query → backend query string; `page` is 1-based on both sides. */
 export function toBackendParams(query: DashboardQuery): URLSearchParams {
@@ -69,8 +65,9 @@ export async function fetchListings(productId: number): Promise<Listing[]> {
     const { mockFetchListings } = await import('@/mocks/mock-client')
     return mockFetchListings(productId)
   }
-  // Live shape: GET /api/products/{id} → ProductDetailResponse.trackedItems,
-  // adapted to Listing[] when #146 wiring lands. Until then this path serves
-  // the (unmounted-in-prod) live mode only.
+  // Live: GET /api/products/{id}/listings (#157) — already ordered and
+  // FX-normalized into the display currency by the backend; rendered as
+  // received. No displayCurrency param: both endpoints fall back to the same
+  // configured default, so a row and its panel agree by construction.
   return liveFetch<Listing[]>(`${API_BASE}/products/${productId}/listings`)
 }

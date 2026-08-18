@@ -90,6 +90,90 @@ class ProductControllerTest {
         mvc.perform(get("/api/products/99")).andExpect(status().isNotFound());
     }
 
+    // --- GET /{id}/listings (#157) ---
+
+    @Test
+    void getListings_returnsTheOrderedPanelRows_withMoneyAsStrings() throws Exception {
+        when(rateService.isDefinitelyUnsupported("ILS")).thenReturn(false);
+        when(queryService.getListings(1L, "ILS"))
+                .thenReturn(List.of(
+                        new ProductListingResponse(
+                                7L,
+                                "Amazon",
+                                "https://amazon-seed.seed.invalid/item/7",
+                                "102.0000",
+                                "USD",
+                                "382.0000",
+                                "ILS",
+                                false,
+                                AvailabilityStatus.AVAILABLE,
+                                Instant.parse("2026-05-23T10:00:00Z")),
+                        new ProductListingResponse(
+                                8L,
+                                "TMS",
+                                "https://tms.seed.invalid/item/8",
+                                null,
+                                null,
+                                null,
+                                null,
+                                false,
+                                AvailabilityStatus.UNKNOWN,
+                                Instant.parse("2026-05-15T10:00:00Z"))));
+
+        mvc.perform(get("/api/products/1/listings"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].trackedItemId").value(7))
+                .andExpect(jsonPath("$[0].shopName").value("Amazon"))
+                .andExpect(jsonPath("$[0].priceOriginal").value("102.0000"))
+                .andExpect(jsonPath("$[0].priceOriginalCurrency").value("USD"))
+                .andExpect(jsonPath("$[0].priceConverted").value("382.0000"))
+                .andExpect(jsonPath("$[0].priceConvertedCurrency").value("ILS"))
+                .andExpect(jsonPath("$[0].conversionStale").value(false))
+                .andExpect(jsonPath("$[0].availability").value("AVAILABLE"))
+                .andExpect(jsonPath("$[1].priceOriginal").isEmpty())
+                .andExpect(jsonPath("$[1].priceConverted").isEmpty())
+                .andExpect(jsonPath("$[1].availability").value("UNKNOWN"))
+                .andExpect(jsonPath("$[1].lastChecked").value("2026-05-15T10:00:00Z"));
+    }
+
+    @Test
+    void getListings_omittedDisplayCurrency_fallsBackToTheConfiguredDefault() throws Exception {
+        when(rateService.isDefinitelyUnsupported("ILS")).thenReturn(false);
+        when(queryService.getListings(1L, "ILS")).thenReturn(List.of());
+
+        mvc.perform(get("/api/products/1/listings")).andExpect(status().isOk());
+
+        verify(queryService).getListings(1L, "ILS");
+    }
+
+    @Test
+    void getListings_explicitDisplayCurrencyIsNormalized() throws Exception {
+        when(rateService.isDefinitelyUnsupported("USD")).thenReturn(false);
+        when(queryService.getListings(1L, "USD")).thenReturn(List.of());
+
+        mvc.perform(get("/api/products/1/listings").param("displayCurrency", "usd"))
+                .andExpect(status().isOk());
+
+        verify(queryService).getListings(1L, "USD");
+    }
+
+    @Test
+    void getListings_invalidDisplayCurrency_returns400WithoutCallingTheService() throws Exception {
+        mvc.perform(get("/api/products/1/listings").param("displayCurrency", "xxxx"))
+                .andExpect(status().isBadRequest());
+
+        verify(queryService, never()).getListings(anyLong(), anyString());
+    }
+
+    @Test
+    void getListings_unknownProduct_propagates404() throws Exception {
+        when(rateService.isDefinitelyUnsupported("ILS")).thenReturn(false);
+        when(queryService.getListings(99L, "ILS"))
+                .thenThrow(new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found"));
+
+        mvc.perform(get("/api/products/99/listings")).andExpect(status().isNotFound());
+    }
+
     @Test
     void deleteProduct_returnsNoContent() throws Exception {
         mvc.perform(delete("/api/products/1")).andExpect(status().isNoContent());

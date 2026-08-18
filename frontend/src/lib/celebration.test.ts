@@ -11,6 +11,7 @@ const product = (id: number, price: string | null): TrackedProduct => ({
   bestPriceOriginal: price,
   bestPriceOriginalCurrency: price === null ? null : 'ILS',
   bestPriceShop: price === null ? null : 'KSP',
+  bestTrackedItemId: price === null ? null : 1001,
   conversionStale: false,
   conversionAsOf: null,
   mixedCurrencies: false,

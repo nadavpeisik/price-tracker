@@ -12,6 +12,7 @@ import com.np.pricehunt.backend.domain.ExchangeRate;
 import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.domain.PriceRecord;
 import com.np.pricehunt.backend.domain.Product;
+import com.np.pricehunt.backend.domain.ShopNameSource;
 import com.np.pricehunt.backend.domain.TrackedItem;
 import com.np.pricehunt.backend.repository.ExchangeRateRepository;
 import com.np.pricehunt.backend.repository.PriceRecordRepository;
@@ -301,6 +302,124 @@ class DashboardQueryIntegrationTest {
         assertThat(unpricedRows).describedAs("TTL-expired fixtures").isEqualTo(1);
     }
 
+    // --- equivalence with the listings panel (#157) ---
+
+    @Test
+    void everyRowsBestListingIsTheFirstRowOfItsPanel_inBothDisplayCurrencies() throws Exception {
+        seedThePanelFixtures();
+
+        // Two currencies because rounding and margin can change the winner between them; the pin
+        // must hold wherever the two endpoints are asked the same question.
+        for (String displayCurrency : List.of(ILS, USD)) {
+            String dashboard = mvc.perform(get("/api/tracked-products")
+                            .param("displayCurrency", displayCurrency)
+                            .param("size", "100"))
+                    .andExpect(status().isOk())
+                    .andReturn()
+                    .getResponse()
+                    .getContentAsString();
+
+            List<Integer> ids = JsonPath.read(dashboard, "$.items[*].id");
+            assertThat(ids).hasSize(8);
+
+            int pricedRows = 0;
+            for (int index = 0; index < ids.size(); index++) {
+                long productId = ids.get(index);
+                Object bestId = readOrNull(dashboard, "$.items[" + index + "].bestTrackedItemId");
+                Object bestPrice = readOrNull(dashboard, "$.items[" + index + "].bestPriceConverted");
+
+                String panel = mvc.perform(
+                                get("/api/products/{id}/listings", productId).param("displayCurrency", displayCurrency))
+                        .andExpect(status().isOk())
+                        .andReturn()
+                        .getResponse()
+                        .getContentAsString();
+
+                if (bestId == null) {
+                    assertThat(bestPrice).isNull();
+                    // No eligible offer means every listing is either unpriced/unconvertible or out
+                    // of stock — nothing the panel shows could have been the headline.
+                    List<Object> converted = JsonPath.read(panel, "$[*].priceConverted");
+                    List<String> availability = JsonPath.read(panel, "$[*].availability");
+                    for (int i = 0; i < converted.size(); i++) {
+                        assertThat(converted.get(i) == null || "UNAVAILABLE".equals(availability.get(i)))
+                                .describedAs("product %s listing %d in %s", productId, i, displayCurrency)
+                                .isTrue();
+                    }
+                    continue;
+                }
+                pricedRows++;
+
+                Object firstId = readOrNull(panel, "$[0].trackedItemId");
+                Object firstPrice = readOrNull(panel, "$[0].priceConverted");
+                assertThat(((Number) firstId).longValue())
+                        .describedAs(
+                                "first panel row vs bestTrackedItemId for product %s in %s", productId, displayCurrency)
+                        .isEqualTo(((Number) bestId).longValue());
+                assertThat(asDecimal(firstPrice))
+                        .describedAs("first panel price vs headline for product %s in %s", productId, displayCurrency)
+                        .isEqualTo(asDecimal(bestPrice));
+            }
+            assertThat(pricedRows).describedAs("rows with a best listing").isGreaterThanOrEqualTo(5);
+        }
+    }
+
+    @Test
+    void panelAppliesTheRowsFreshnessRule_whileTheDetailKeepsTheRawObservation() throws Exception {
+        Product product = seedProduct("Framework Laptop 16");
+        TrackedItem tms = seedItem(product, "TMS", 3);
+        TrackedItem ivory = seedItem(product, "Ivory", 4);
+        seedRecord(tms, "8890", ILS, daysAgo(9));
+        seedRecord(ivory, "9100", ILS, hoursAgo(3));
+
+        // The panel: the 9-day-old TMS price is not current — no price, UNKNOWN, sorted last, but
+        // lastChecked is still reported so "9 days ago" explains it.
+        mvc.perform(get("/api/products/{id}/listings", product.getId()).param("displayCurrency", ILS))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].shopName").value("Ivory"))
+                .andExpect(jsonPath("$[0].priceConverted").value("9100.0000"))
+                .andExpect(jsonPath("$[1].shopName").value("TMS"))
+                .andExpect(jsonPath("$[1].priceOriginal").isEmpty())
+                .andExpect(jsonPath("$[1].priceConverted").isEmpty())
+                .andExpect(jsonPath("$[1].availability").value("UNKNOWN"));
+
+        // The detail keeps its meaning: the raw latest observation at any age.
+        mvc.perform(get("/api/products/{id}", product.getId()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.trackedItems[0].shopName").value("TMS"))
+                .andExpect(jsonPath("$.trackedItems[0].currentPrice").value("8890.0000"))
+                .andExpect(jsonPath("$.trackedItems[0].availability").value("AVAILABLE"))
+                .andExpect(jsonPath("$.trackedItems[1].currentPrice").value("9100.0000"));
+    }
+
+    @Test
+    void latestObservationSelection_isAtOrBeforeNowWithAnIdTiebreak_onBothDetailAndPanel() throws Exception {
+        Product product = seedProduct("Selection");
+        TrackedItem future = seedItem(product, "Future", 5, ShopNameSource.MAPPING);
+        TrackedItem tied = seedItem(product, "Tied", 6);
+        // A future-dated row (clock skew, hand insert) is skipped in favour of the earlier current one.
+        seedRecord(future, "150", ILS, hoursAgo(5));
+        seedRecord(future, "100", ILS, FIXED_NOW.plus(1, ChronoUnit.DAYS));
+        // Equal timestamps: the later insert (higher id) wins, exactly as the dashboard query does.
+        Instant tie = hoursAgo(2);
+        seedRecord(tied, "260", ILS, tie);
+        seedRecord(tied, "250", ILS, tie);
+
+        mvc.perform(get("/api/products/{id}", product.getId()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.trackedItems[0].shopName").value("Future"))
+                .andExpect(jsonPath("$.trackedItems[0].shopNameSource").value("MAPPING"))
+                .andExpect(jsonPath("$.trackedItems[0].currentPrice").value("150.0000"))
+                .andExpect(jsonPath("$.trackedItems[1].currentPrice").value("250.0000"));
+
+        mvc.perform(get("/api/products/{id}/listings", product.getId()).param("displayCurrency", ILS))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].shopName").value("Future"))
+                .andExpect(jsonPath("$[0].priceConverted").value("150.0000"))
+                .andExpect(jsonPath("$[1].shopName").value("Tied"))
+                .andExpect(jsonPath("$[1].priceConverted").value("250.0000"));
+    }
+
     // --- the TTL divergence, asserted head-on ---
 
     @Test
@@ -451,14 +570,38 @@ class DashboardQueryIntegrationTest {
         seedRecord(seedItem(fresh, "KSP", 27), "199", ILS, daysAgo(2));
     }
 
+    /** The awkward fixtures plus the two the listings panel adds (#157). */
+    private void seedThePanelFixtures() {
+        seedTheAwkwardFixtures();
+
+        // 7. Future-dated latest record alongside an earlier current one; the earlier one counts.
+        Product future = seedProduct("G Future");
+        TrackedItem futureShop = seedItem(future, "KSP", 28);
+        seedRecord(futureShop, "150", ILS, hoursAgo(5));
+        seedRecord(futureShop, "100", ILS, FIXED_NOW.plus(1, ChronoUnit.DAYS));
+
+        // 8. An unconvertible currency next to a convertible one: the panel keeps the GBP listing
+        // (original price, no converted amount, sorted after the priced ones); the row ignores it.
+        Product mixed = seedProduct("H Unconvertible");
+        TrackedItem mixedIls = seedItem(mixed, "Ivory", 29);
+        TrackedItem mixedGbp = seedItem(mixed, "Argos", 30);
+        seedRecord(mixedIls, "700", ILS, hoursAgo(1));
+        seedRecord(mixedGbp, "50", "GBP", hoursAgo(1));
+    }
+
     private Product seedProduct(String name) {
         return productRepository.save(Product.builder().name(name).build());
     }
 
     private TrackedItem seedItem(Product product, String shop, int itemNo) {
+        return seedItem(product, shop, itemNo, null);
+    }
+
+    private TrackedItem seedItem(Product product, String shop, int itemNo, ShopNameSource shopNameSource) {
         return trackedItemRepository.save(TrackedItem.builder()
                 .url("https://shop.seed.invalid/item/" + itemNo)
                 .shopName(shop)
+                .shopNameSource(shopNameSource)
                 .product(product)
                 .build());
     }

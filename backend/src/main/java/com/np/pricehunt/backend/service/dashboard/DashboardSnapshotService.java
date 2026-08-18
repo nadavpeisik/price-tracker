@@ -141,6 +141,7 @@ public class DashboardSnapshotService {
                 headlineObservation == null ? null : headlineObservation.getPrice(),
                 headlineObservation == null ? null : headlineObservation.getCurrency(),
                 headline == null ? null : headline.bestOffer().shopName(),
+                headline == null ? null : headline.bestOffer().trackedItemId(),
                 trend.conversionAsOf(),
                 trend.conversionStale(),
                 hasMixedCurrencies(listings, observationsByListingId),

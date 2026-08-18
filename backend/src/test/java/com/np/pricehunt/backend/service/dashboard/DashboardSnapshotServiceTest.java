@@ -301,6 +301,7 @@ class DashboardSnapshotServiceTest {
         assertThat(snapshot.bestPriceOriginal()).isEqualByComparingTo("12");
         assertThat(snapshot.bestPriceOriginalCurrency()).isEqualTo(USD);
         assertThat(snapshot.bestPriceShop()).isEqualTo("Amazon");
+        assertThat(snapshot.bestTrackedItemId()).isEqualTo(2L);
         assertThat(snapshot.conversionAsOf()).isEqualTo(LocalDate.of(2026, 3, 19));
         assertThat(snapshot.conversionStale()).isTrue();
         assertThat(snapshot.delta7d()).isEqualByComparingTo("-8.00");
@@ -318,6 +319,7 @@ class DashboardSnapshotServiceTest {
         assertThat(snapshot.bestPriceOriginal()).isNull();
         assertThat(snapshot.bestPriceOriginalCurrency()).isNull();
         assertThat(snapshot.bestPriceShop()).isNull();
+        assertThat(snapshot.bestTrackedItemId()).isNull();
         assertThat(snapshot.conversionAsOf()).isNull();
         assertThat(snapshot.conversionStale()).isFalse();
         assertThat(snapshot.delta7d()).isNull();

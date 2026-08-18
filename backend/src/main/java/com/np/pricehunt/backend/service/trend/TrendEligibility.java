@@ -8,11 +8,14 @@ import java.time.temporal.ChronoUnit;
 /**
  * The single definition of "this observation may count as a listing's price right now" (issue #145).
  *
- * <p>{@link PriceTrendCalculator} is the only caller, and that is the point: the dashboard row's
- * headline best price reaches this rule <em>through</em> the calculator (see {@link
- * com.np.pricehunt.backend.service.dashboard.DashboardSnapshotService}), so the row and the trend
- * series' latest point are the same number by shared code rather than by two implementations
- * happening to agree.
+ * <p>{@link PriceTrendCalculator} is the only caller of {@link #isEligible}, and that is the point:
+ * the dashboard row's headline best price reaches this rule <em>through</em> the calculator (see
+ * {@link com.np.pricehunt.backend.service.dashboard.DashboardSnapshotService}), so the row and the
+ * trend series' latest point are the same number by shared code rather than by two implementations
+ * happening to agree. The two <em>time</em> rules are also exposed on their own as {@link #isCurrent}
+ * so the per-shop listings panel (issue #157) can decide "does this listing have a current price"
+ * with the row's exact rule — while still showing an out-of-stock listing's price, which the full
+ * eligibility check would drop.
  *
  * <p>Four rules, each with a reason:
  *
@@ -37,18 +40,26 @@ public final class TrendEligibility {
 
     public static boolean isEligible(
             Instant timestamp, AvailabilityStatus availability, BigDecimal price, Instant reference, int ttlDays) {
-        if (timestamp == null || reference == null || price == null) {
-            return false;
-        }
-        if (timestamp.isAfter(reference)) {
-            return false;
-        }
-        if (timestamp.isBefore(reference.minus(ttlDays, ChronoUnit.DAYS))) {
+        if (price == null || !isCurrent(timestamp, reference, ttlDays)) {
             return false;
         }
         if (availability == AvailabilityStatus.UNAVAILABLE) {
             return false;
         }
         return price.signum() > 0;
+    }
+
+    /**
+     * The freshness half of {@link #isEligible}: observed at or before {@code reference} and no older
+     * than {@code ttlDays} (inclusive). Null-safe — a missing timestamp or reference is "not current".
+     */
+    public static boolean isCurrent(Instant timestamp, Instant reference, int ttlDays) {
+        if (timestamp == null || reference == null) {
+            return false;
+        }
+        if (timestamp.isAfter(reference)) {
+            return false;
+        }
+        return !timestamp.isBefore(reference.minus(ttlDays, ChronoUnit.DAYS));
     }
 }

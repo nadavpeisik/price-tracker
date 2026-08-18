@@ -26,6 +26,8 @@ import java.util.List;
  *
  * @param bestPriceConverted the cheapest eligible offer in the requested display currency
  * @param bestPriceOriginal the same offer as the shop lists it, before conversion
+ * @param bestTrackedItemId the listing behind {@code bestPriceShop}, so the expanded panel can mark
+ *     "Best" by identity instead of by position (#157); null with the rest of the cluster
  * @param conversionStale the FX rate used was over a week old — badge the converted price
  * @param delta7d percent change over seven days; null renders as "New", and is never a substitute
  *     for 0 (a genuine 0 means the price held steady)
@@ -41,6 +43,7 @@ public record DashboardProductResponse(
         String bestPriceOriginal,
         String bestPriceOriginalCurrency,
         String bestPriceShop,
+        Long bestTrackedItemId,
         boolean conversionStale,
         LocalDate conversionAsOf,
         boolean mixedCurrencies,

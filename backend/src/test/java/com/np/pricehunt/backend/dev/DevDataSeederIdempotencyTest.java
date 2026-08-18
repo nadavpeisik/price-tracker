@@ -94,9 +94,33 @@ class DevDataSeederIdempotencyTest {
         seeder.run();
 
         List<Product> products = productRepository.findByDescriptionStartingWith(DevDataSeeder.SEED_MARKER);
-        assertThat(products).hasSize(10);
+        assertThat(products).hasSize(10 + DevDataSeeder.FILLER_COUNT);
         assertThat(trackedItemRepository.findAll()).isNotEmpty();
         assertThat(priceRecordRepository.findAll()).isNotEmpty();
+    }
+
+    @Test
+    void seedsMoreThanOneDashboardPage_soPaginationIsReachableAgainstRealData() {
+        seeder.run();
+
+        // The dashboard's default page size is 20 (#157): the clamp of a bookmarked overflow page and
+        // the pagination controls only render when there is a second page.
+        assertThat(productRepository.count()).isGreaterThan(20);
+    }
+
+    @Test
+    void seedsOneCaseVariantShopSpelling_withTheCanonicalSpellingStillTheMajority() {
+        seeder.run();
+
+        List<String> shopNames = trackedItemRepository.findAll().stream()
+                .map(TrackedItem::getShopName)
+                .toList();
+
+        // Exercises the dashboard's shop fold and the client-side canonicalization of ?shop=ksp (#157),
+        // while the facet label stays "KSP" because the majority rule picks the more frequent spelling.
+        assertThat(shopNames).contains("ksp");
+        assertThat(shopNames.stream().filter("KSP"::equals).count())
+                .isGreaterThan(shopNames.stream().filter("ksp"::equals).count());
     }
 
     @Test
