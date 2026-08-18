@@ -12,7 +12,7 @@
 #
 set -euo pipefail
 
-MODEL="${AGY_REVIEW_MODEL:-Gemini 3.6 Flash (High)}"
+MODEL="${AGY_REVIEW_MODEL:-Gemini 3.7 Flash (High)}"
 TIMEOUT="${AGY_REVIEW_TIMEOUT:-240s}"
 SANDBOX="${AGY_REVIEW_SANDBOX:-1}" # sandbox ON unless explicitly "0" (fail-safe); 0 = allow agy command/file access
 MAX_UNTRACKED_BYTES="${AGY_REVIEW_MAX_FILE_BYTES:-102400}" # bounds the SANDBOX=0 untracked-file snapshot below
@@ -35,7 +35,7 @@ Note: the script runs from the repo root, so explicit path arguments are resolve
 relative to the repo root (price-tracker/), not your current directory.
 
 Environment:
-  AGY_REVIEW_MODEL    Model (default: "Gemini 3.6 Flash (High)"; switch to
+  AGY_REVIEW_MODEL    Model (default: "Gemini 3.7 Flash (High)"; switch to
                       "Gemini 3.1 Pro (High)" when off the free tier).
   AGY_REVIEW_TIMEOUT  agy --print-timeout value (default: 240s).
   AGY_REVIEW_SANDBOX  On by default — runs agy with --sandbox ("terminal restrictions"),
