@@ -97,16 +97,15 @@ function ListingRow({ listing, isBest, now }: { listing: Listing; isBest: boolea
   )
 }
 
-export function ListingPanel({
-  productId,
-  open,
-  bestTrackedItemId,
-}: {
+interface ListingPanelProps {
   productId: number
+  /** Expanded — the query is gated on this, so a collapsed row never fetches. */
   open: boolean
   /** The row's winning listing (#157) — Best is marked by identity, never by position. */
   bestTrackedItemId: number | null
-}) {
+}
+
+export function ListingPanel({ productId, open, bestTrackedItemId }: ListingPanelProps) {
   const { data, status, refetch, isRefetching } = useQuery(listingsQueryOptions(productId, open))
   const now = useNow()
 

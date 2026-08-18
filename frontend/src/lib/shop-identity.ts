@@ -34,6 +34,7 @@ export interface CanonicalShops {
   droppedUnknown: boolean
 }
 
+/** Re-spells bookmarked values as their facet label; see {@link CanonicalShops} for what comes back. */
 export function canonicalizeShops(bookmarked: readonly string[], facets: readonly string[]): CanonicalShops {
   const labelByKey = new Map<string, string>()
   for (const label of facets) {

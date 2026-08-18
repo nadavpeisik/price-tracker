@@ -410,18 +410,28 @@ describe('Dashboard', () => {
     expect((await within(region).findByText('Best')).closest('.shop-color')).toHaveTextContent('KSP')
 
     // The next dashboard result moves the win to Bug (id 12) as an in-place
-    // update (same id order → commits silently), and the listings endpoint
-    // now returns Bug first at its new price.
+    // update (same product id order → commits silently), and the listings
+    // endpoint now returns a DIFFERENT wire order: KSP first, then Bug at its
+    // new price. The panel must adopt that order rather than keep the old one.
     fetchDashboardMock.mockResolvedValue(
       response(PRODUCTS.map((p) => (p.id === 1 ? { ...p, bestTrackedItemId: 12, bestPriceShop: 'Bug' } : p))),
     )
-    fetchListingsMock.mockResolvedValue([{ ...LISTINGS[0], priceOriginal: '90.00', priceConverted: '90.00' }, LISTINGS[1]])
+    fetchListingsMock.mockResolvedValue([
+      LISTINGS[1],
+      { ...LISTINGS[0], priceOriginal: '90.00', priceConverted: '90.00' },
+    ])
     // A background refetch — what the 5-minute interval does in production.
     await client.refetchQueries({ queryKey: ['dashboard'] })
 
-    // The commit effect invalidated the open panel: it refetched, re-rendered
-    // in the new wire order, and the chip moved with the row's winner.
+    // The effect invalidated the open panel: it refetched, re-rendered in the
+    // new wire order, and the chip moved with the row's winner — which is now
+    // the LAST row, so position can play no part in finding it.
     await waitFor(() => expect(within(region).getByText('Best').closest('.shop-color')).toHaveTextContent('Bug'))
+    expect(
+      within(region)
+        .getAllByText(/^(KSP|Bug)$/)
+        .map((el) => el.textContent),
+    ).toEqual(['KSP', 'Bug'])
     expect(within(region).getByText(/90/)).toBeInTheDocument()
     expect(fetchListingsMock).toHaveBeenCalledTimes(2)
   })
