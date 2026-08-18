@@ -33,6 +33,7 @@ function product(overrides: Partial<TrackedProduct> & { id: number; name: string
     bestPriceOriginal: '100.00',
     bestPriceOriginalCurrency: 'ILS',
     bestPriceShop: 'KSP',
+    bestTrackedItemId: 11,
     conversionStale: false,
     conversionAsOf: null,
     mixedCurrencies: false,
@@ -62,6 +63,7 @@ const PRODUCTS: TrackedProduct[] = [
     bestPriceOriginal: null,
     bestPriceOriginalCurrency: null,
     bestPriceShop: null,
+    bestTrackedItemId: null,
     delta7d: null,
     sparkline: [],
     availability: { status: 'UNAVAILABLE', availableCount: 0, total: 1 },
@@ -86,25 +88,34 @@ function response(items: TrackedProduct[], overrides?: Partial<DashboardResponse
   }
 }
 
+// Wire order is display order (#157) — the panel must NOT reorder. The Best
+// listing (11, per the product fixture's bestTrackedItemId) is deliberately
+// handed SECOND so a positional "first is best" heuristic would fail.
 const LISTINGS: Listing[] = [
   {
+    trackedItemId: 12,
+    shopName: 'Bug',
+    url: 'javascript:alert(1)', // scheme-guard fixture
+    priceOriginal: '120.00',
+    priceOriginalCurrency: 'ILS',
+    priceConverted: '120.00',
+    priceConvertedCurrency: 'ILS',
+    conversionStale: false,
+    availability: 'UNKNOWN',
+    lastChecked: null,
+  },
+  {
     trackedItemId: 11,
-    shop: 'KSP',
+    shopName: 'KSP',
     url: 'https://ksp.co.il/web/item/1',
-    price: '100.00',
-    currency: 'ILS',
+    priceOriginal: '100.00',
+    priceOriginalCurrency: 'ILS',
+    priceConverted: '100.00',
+    priceConvertedCurrency: 'ILS',
+    conversionStale: false,
     availability: 'AVAILABLE',
     lastChecked: new Date(Date.now() - 2 * HOUR).toISOString(),
     // 2 hours ago → "checked 2h ago"
-  },
-  {
-    trackedItemId: 12,
-    shop: 'Bug',
-    url: 'javascript:alert(1)', // scheme-guard fixture
-    price: '120.00',
-    currency: 'ILS',
-    availability: 'UNKNOWN',
-    lastChecked: null,
   },
 ]
 
@@ -112,13 +123,14 @@ const LISTINGS: Listing[] = [
 
 function renderDashboard() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(
+  const utils = render(
     <QueryClientProvider client={client}>
       <TooltipProvider>
         <Dashboard />
       </TooltipProvider>
     </QueryClientProvider>,
   )
+  return { ...utils, client }
 }
 
 beforeEach(() => {
@@ -302,6 +314,168 @@ describe('Dashboard', () => {
     )
     // After the response (facets known), Ghost is dropped from the URL.
     await waitFor(() => expect(window.location.search).toBe('?shop=KSP'))
+  })
+
+  /* ── live listings contract (#157) ─────────────────────────────────── */
+
+  it('renders listings in WIRE ORDER and marks Best by bestTrackedItemId, not by position', async () => {
+    const user = userEvent.setup()
+    renderDashboard()
+    await screen.findByRole('button', { name: 'Sony WH-1000XM5' })
+    await user.click(screen.getByRole('button', { name: 'Sony WH-1000XM5' }))
+    const region = await screen.findByRole('region', { name: 'Sony WH-1000XM5' })
+    await within(region).findByText('KSP')
+    // The fixture hands Bug first and the (Best) KSP listing second — the panel
+    // must not reorder, and the chip must sit on KSP because the row said so.
+    const shops = within(region)
+      .getAllByText(/^(KSP|Bug)$/)
+      .map((el) => el.textContent)
+    expect(shops).toEqual(['Bug', 'KSP'])
+    expect(within(region).getAllByText('Best')).toHaveLength(1)
+    expect(within(region).getByText('Best').closest('.shop-color')).toHaveTextContent('KSP')
+  })
+
+  it('shows no Best chip when the row has no winning listing', async () => {
+    const user = userEvent.setup()
+    renderDashboard()
+    await screen.findByRole('button', { name: 'Framework Laptop 16' })
+    await user.click(screen.getByRole('button', { name: 'Framework Laptop 16' }))
+    const region = await screen.findByRole('region', { name: 'Framework Laptop 16' })
+    await within(region).findByText('KSP')
+    expect(within(region).queryByText('Best')).not.toBeInTheDocument()
+  })
+
+  it('renders converted + original at source, a stale-rate flag, an unconvertible original and "no current price"', async () => {
+    fetchListingsMock.mockResolvedValue([
+      {
+        trackedItemId: 21,
+        shopName: 'Amazon',
+        url: 'https://www.amazon.com/dp/1',
+        priceOriginal: '102.00',
+        priceOriginalCurrency: 'USD',
+        priceConverted: '382.00',
+        priceConvertedCurrency: 'ILS',
+        conversionStale: true,
+        availability: 'AVAILABLE',
+        lastChecked: new Date(Date.now() - 2 * HOUR).toISOString(),
+      },
+      {
+        trackedItemId: 22,
+        shopName: 'Argos',
+        url: 'https://www.argos.co.uk/p/2',
+        priceOriginal: '50.00',
+        priceOriginalCurrency: 'GBP',
+        priceConverted: null, // no rate → unconvertible
+        priceConvertedCurrency: null,
+        conversionStale: false,
+        availability: 'UNKNOWN',
+        lastChecked: new Date(Date.now() - 3 * HOUR).toISOString(),
+      },
+      {
+        trackedItemId: 23,
+        shopName: 'TMS',
+        url: 'https://tms.co.il/item/3',
+        priceOriginal: null, // gone cold past the carry-forward TTL
+        priceOriginalCurrency: null,
+        priceConverted: null,
+        priceConvertedCurrency: null,
+        conversionStale: false,
+        availability: 'UNKNOWN',
+        lastChecked: new Date(Date.now() - 9 * 24 * HOUR).toISOString(),
+      },
+    ] satisfies Listing[])
+    const user = userEvent.setup()
+    renderDashboard()
+    await screen.findByRole('button', { name: 'Sony WH-1000XM5' })
+    await user.click(screen.getByRole('button', { name: 'Sony WH-1000XM5' }))
+    const region = await screen.findByRole('region', { name: 'Sony WH-1000XM5' })
+    // 1. converted primary + original "at source" + stale flag
+    expect(await within(region).findByText(/382/)).toBeInTheDocument()
+    expect(within(region).getByText(/at source/)).toHaveTextContent(/102/)
+    expect(within(region).getByText('Rate outdated')).toBeInTheDocument()
+    // 2. unconvertible: the original alone, with the honest note
+    expect(within(region).getByText(/50/)).toBeInTheDocument()
+    expect(within(region).getByText('conversion unavailable')).toBeInTheDocument()
+    // 3. no current observation: one neutral copy; "9 days ago" is the explanation
+    expect(within(region).getByText('no current price')).toBeInTheDocument()
+    expect(within(region).getByText(/9d ago|9 days ago/)).toBeInTheDocument()
+  })
+
+  it('re-syncs an expanded panel when the rows commit again — new winner, new order, new chip', async () => {
+    const user = userEvent.setup()
+    const { client } = renderDashboard()
+    await screen.findByRole('button', { name: 'Sony WH-1000XM5' })
+    await user.click(screen.getByRole('button', { name: 'Sony WH-1000XM5' }))
+    const region = await screen.findByRole('region', { name: 'Sony WH-1000XM5' })
+    expect((await within(region).findByText('Best')).closest('.shop-color')).toHaveTextContent('KSP')
+
+    // The next dashboard result moves the win to Bug (id 12) as an in-place
+    // update (same product id order → commits silently), and the listings
+    // endpoint now returns a DIFFERENT wire order: KSP first, then Bug at its
+    // new price. The panel must adopt that order rather than keep the old one.
+    fetchDashboardMock.mockResolvedValue(
+      response(PRODUCTS.map((p) => (p.id === 1 ? { ...p, bestTrackedItemId: 12, bestPriceShop: 'Bug' } : p))),
+    )
+    fetchListingsMock.mockResolvedValue([
+      LISTINGS[1],
+      { ...LISTINGS[0], priceOriginal: '90.00', priceConverted: '90.00' },
+    ])
+    // A background refetch — what the 5-minute interval does in production.
+    await client.refetchQueries({ queryKey: ['dashboard'] })
+
+    // The effect invalidated the open panel: it refetched, re-rendered in the
+    // new wire order, and the chip moved with the row's winner — which is now
+    // the LAST row, so position can play no part in finding it.
+    await waitFor(() => expect(within(region).getByText('Best').closest('.shop-color')).toHaveTextContent('Bug'))
+    expect(
+      within(region)
+        .getAllByText(/^(KSP|Bug)$/)
+        .map((el) => el.textContent),
+    ).toEqual(['KSP', 'Bug'])
+    expect(within(region).getByText(/90/)).toBeInTheDocument()
+    expect(fetchListingsMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('re-syncs an expanded panel even when the dashboard response is UNCHANGED', async () => {
+    // A refresh where only a NON-winning listing moved leaves every row
+    // byte-identical, so structural sharing keeps `result.data` reference-stable
+    // and the committed snapshot never changes. Keying the invalidation on the
+    // fetch timestamp instead is what keeps the open panel from going stale.
+    const user = userEvent.setup()
+    const { client } = renderDashboard()
+    await screen.findByRole('button', { name: 'Sony WH-1000XM5' })
+    await user.click(screen.getByRole('button', { name: 'Sony WH-1000XM5' }))
+    const region = await screen.findByRole('region', { name: 'Sony WH-1000XM5' })
+    expect(await within(region).findByText(/120/)).toBeInTheDocument()
+
+    // Same rows (a fresh but deeply-equal object), only the loser's price moved.
+    fetchDashboardMock.mockResolvedValue(response(PRODUCTS))
+    fetchListingsMock.mockResolvedValue([
+      { ...LISTINGS[0], priceOriginal: '95.00', priceConverted: '95.00' },
+      LISTINGS[1],
+    ])
+    await client.refetchQueries({ queryKey: ['dashboard'] })
+
+    await waitFor(() => expect(within(region).getByText(/95/)).toBeInTheDocument())
+    expect(fetchListingsMock).toHaveBeenCalledTimes(2)
+    // The winner is unchanged, as the (unchanged) row still says.
+    expect(within(region).getByText('Best').closest('.shop-color')).toHaveTextContent('KSP')
+  })
+
+  it('canonicalizes a bookmarked ?shop= spelling to the facet label, keeps the page, and presses the chip', async () => {
+    fetchDashboardMock.mockResolvedValue(
+      response(PRODUCTS, { page: { number: 2, size: 20, totalElements: 44, totalPages: 3 } }),
+    )
+    window.history.replaceState(null, '', '/?shop=ksp&page=2')
+    renderDashboard()
+    // First fetch carries the raw bookmark (the backend folds it anyway).
+    await waitFor(() =>
+      expect(fetchDashboardMock).toHaveBeenCalledWith(expect.objectContaining({ shops: ['ksp'], page: 2 })),
+    )
+    // After facets: URL re-spelled, page KEPT (a spelling rewrite is not a filter change).
+    await waitFor(() => expect(window.location.search).toBe('?shop=KSP&page=2'))
+    const chips = screen.getByRole('toolbar', { name: 'Filter by shop' })
+    expect(within(chips).getByRole('button', { name: /KSP/ })).toHaveAttribute('aria-pressed', 'true')
   })
 
   it('clamps a bookmarked overflow page to totalPages (not 1)', async () => {

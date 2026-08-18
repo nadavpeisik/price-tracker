@@ -19,14 +19,32 @@ import type { Listing } from '@/lib/types'
  */
 
 function ListingRow({ listing, isBest, now }: { listing: Listing; isBest: boolean; now: number }) {
-  const price = formatPrice(listing.price, listing.currency)
+  // Nullable on the wire for legacy rows only; one non-null value feeds the
+  // label, the colour hash and the screen-reader text alike.
+  const shopName = listing.shopName ?? 'Unknown shop'
   const href = safeExternalHref(listing.url)
+
+  // Three price states (#157):
+  //  1. converted present → the number the user compares, plus the shop's own
+  //     price "at source" when the currencies differ (same wording as the row);
+  //  2. only the original → the FX side failed (no snapshot yet / unknown
+  //     currency): show it, but say the conversion is unavailable — a bare $
+  //     on an ₪ page would read as intentional;
+  //  3. neither → no CURRENT observation (never scraped, or gone cold past the
+  //     carry-forward TTL). One neutral copy; the "last checked" column tells
+  //     "never" from "9 days ago".
+  const converted = formatPrice(listing.priceConverted, listing.priceConvertedCurrency)
+  const original = formatPrice(listing.priceOriginal, listing.priceOriginalCurrency)
+  const primary = converted ?? original
+  const showOriginalAtSource =
+    converted !== null && original !== null && listing.priceOriginalCurrency !== listing.priceConvertedCurrency
+  const conversionUnavailable = converted === null && original !== null
 
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-dashed border-line-strong px-4.5 py-2.5 ps-7 md:grid md:grid-cols-[minmax(150px,1fr)_120px_110px_130px_90px]">
-      <span className="shop-color inline-flex min-w-0 items-center gap-1.5 text-[13px] font-semibold" style={shopColorStyle(listing.shop)}>
+      <span className="shop-color inline-flex min-w-0 items-center gap-1.5 text-[13px] font-semibold" style={shopColorStyle(shopName)}>
         <span className="inline-block size-2 flex-none rounded-full bg-(--sc-dot)" aria-hidden="true" />
-        <bdi className="truncate text-(--sc-text)">{listing.shop}</bdi>
+        <bdi className="truncate text-(--sc-text)">{shopName}</bdi>
         {isBest && (
           <span className="ms-0.5 rounded-[5px] bg-good px-1.5 py-px text-[9.5px] font-extrabold uppercase tracking-wider text-white">
             Best
@@ -34,7 +52,24 @@ function ListingRow({ listing, isBest, now }: { listing: Listing; isBest: boolea
         )}
       </span>
       <span className="font-num text-[14.5px] font-semibold tabular-nums md:text-right">
-        {price !== null ? <bdi>{price}</bdi> : <span className="font-sans text-xs font-normal text-ink-faint">not checked yet</span>}
+        {primary !== null ? (
+          <>
+            <bdi>{primary}</bdi>
+            {showOriginalAtSource && (
+              <span className="block text-[10px] font-normal text-ink-faint">
+                <bdi>{original}</bdi> at source
+              </span>
+            )}
+            {conversionUnavailable && (
+              <span className="block text-[10px] font-normal text-ink-faint">conversion unavailable</span>
+            )}
+            {listing.conversionStale && (
+              <span className="block text-[10px] font-semibold text-warn">Rate outdated</span>
+            )}
+          </>
+        ) : (
+          <span className="font-sans text-xs font-normal text-ink-faint">no current price</span>
+        )}
       </span>
       <span className="md:justify-self-start">
         <ListingAvailabilityBadge status={listing.availability} />
@@ -49,11 +84,11 @@ function ListingRow({ listing, isBest, now }: { listing: Listing; isBest: boolea
         >
           Open
           <ExternalLink className="size-3" aria-hidden="true" />
-          <span className="sr-only"> {listing.shop} in a new tab</span>
+          <span className="sr-only"> {shopName} in a new tab</span>
         </a>
       ) : (
-        // Unsafe/malformed scraped URL — a non-interactive element, not a
-        // dead link (no href="#" a11y trap).
+        // Unsafe/malformed/missing scraped URL — a non-interactive element,
+        // not a dead link (no href="#" a11y trap).
         <span className="inline-flex items-center justify-self-end px-2 py-1 text-xs text-ink-faint" title="Link unavailable">
           Open
         </span>
@@ -62,7 +97,15 @@ function ListingRow({ listing, isBest, now }: { listing: Listing; isBest: boolea
   )
 }
 
-export function ListingPanel({ productId, open }: { productId: number; open: boolean }) {
+interface ListingPanelProps {
+  productId: number
+  /** Expanded — the query is gated on this, so a collapsed row never fetches. */
+  open: boolean
+  /** The row's winning listing (#157) — Best is marked by identity, never by position. */
+  bestTrackedItemId: number | null
+}
+
+export function ListingPanel({ productId, open, bestTrackedItemId }: ListingPanelProps) {
   const { data, status, refetch, isRefetching } = useQuery(listingsQueryOptions(productId, open))
   const now = useNow()
 
@@ -94,16 +137,16 @@ export function ListingPanel({ productId, open }: { productId: number; open: boo
     return <div className="px-4.5 py-3 ps-7 text-sm text-ink-muted">No shops tracked for this product yet.</div>
   }
 
-  // Data arrives cheapest-first; the first priced listing is the best.
-  const bestId = data.find((l) => l.price !== null)?.trackedItemId
-
+  // Rendered in WIRE ORDER — the backend sorts (not out of stock first, then
+  // converted price ascending, unpriced last, ties by id); the client does no
+  // money math. Best is the row's calculator winner, recognised by id.
   return (
     <div>
       {data.map((listing) => (
         <ListingRow
           key={listing.trackedItemId}
           listing={listing}
-          isBest={listing.trackedItemId === bestId}
+          isBest={listing.trackedItemId === bestTrackedItemId}
           now={now}
         />
       ))}

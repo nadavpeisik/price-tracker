@@ -244,8 +244,10 @@ class DashboardControllerTest {
     void rowsCarryNoListings_soTheLazyFetchStaysEnforced() throws Exception {
         stubResponse(fullResponse());
 
+        // A scalar id for the winning listing is fine (#157); the listings themselves are not.
         mvc.perform(get("/api/tracked-products"))
-                .andExpect(jsonPath("$.items[0].listings").doesNotExist());
+                .andExpect(jsonPath("$.items[0].listings").doesNotExist())
+                .andExpect(jsonPath("$.items[0].bestTrackedItemId").value(7));
     }
 
     @Test
@@ -316,6 +318,7 @@ class DashboardControllerTest {
                 "100.0000",
                 "USD",
                 "Amazon",
+                7L,
                 false,
                 LocalDate.of(2026, 3, 20),
                 true,

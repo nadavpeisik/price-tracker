@@ -5,6 +5,7 @@ import com.np.pricehunt.backend.service.ProductQueryService;
 import com.np.pricehunt.backend.service.ProductTrackingService;
 import com.np.pricehunt.backend.service.trend.PriceTrendService;
 import java.time.Instant;
+import java.util.List;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
@@ -27,13 +28,20 @@ public class ProductController {
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
-    private String resolveDisplayCurrency(String requested) {
-        return displayCurrencyResolver.resolve(requested);
-    }
-
     @GetMapping("/{id}")
     public ResponseEntity<ProductDetailResponse> getProduct(@PathVariable Long id) {
         return ResponseEntity.ok(queryService.getProduct(id));
+    }
+
+    /**
+     * The dashboard's expanded per-shop panel for one product (issue #157): every listing with its
+     * price in the shop's currency and in {@code displayCurrency}, already in display order. Same
+     * currency rule as the dashboard rows, so a panel and its row agree by construction.
+     */
+    @GetMapping("/{id}/listings")
+    public ResponseEntity<List<ProductListingResponse>> getListings(
+            @PathVariable Long id, @RequestParam(required = false) String displayCurrency) {
+        return ResponseEntity.ok(queryService.getListings(id, displayCurrencyResolver.resolve(displayCurrency)));
     }
 
     /**
@@ -48,7 +56,8 @@ public class ProductController {
             @PathVariable Long id,
             @RequestParam(required = false) Integer days,
             @RequestParam(required = false) String displayCurrency) {
-        return ResponseEntity.ok(trendService.getProductTrend(id, days, resolveDisplayCurrency(displayCurrency)));
+        return ResponseEntity.ok(
+                trendService.getProductTrend(id, days, displayCurrencyResolver.resolve(displayCurrency)));
     }
 
     @PostMapping("/{id}/track")

@@ -8,6 +8,7 @@
  * DEV-ONLY — imported solely behind `import.meta.env.DEV`; see mock-data.ts.
  */
 import { buildMockDb, type MockDbEntry } from '@/mocks/mock-data'
+import { foldShop } from '@/lib/shop-identity'
 import type {
   DashboardQuery,
   DashboardResponse,
@@ -39,8 +40,10 @@ function matches(entry: MockDbEntry, query: DashboardQuery): boolean {
   const search = query.search?.trim().toLowerCase()
   if (search && !entry.product.name.toLowerCase().includes(search)) return false
   if (query.shops && query.shops.length > 0) {
-    const shops = new Set(query.shops)
-    if (!entry.listings.some((l) => shops.has(l.shop))) return false
+    // Fold BOTH sides, like the backend: a canonicalized "KSP" chip must still
+    // match a listing spelled "ksp" (and vice versa).
+    const shops = new Set(query.shops.map(foldShop))
+    if (!entry.listings.some((l) => shops.has(foldShop(l.shopName)))) return false
   }
   return true
 }
@@ -107,24 +110,44 @@ export async function mockFetchDashboard(query: DashboardQuery): Promise<Dashboa
     items,
     page: { number: query.page, size: query.size, totalElements, totalPages },
     facets: {
-      // GLOBAL facet list — never derived from the current page.
-      shops: [...new Set(all.flatMap((e) => e.listings.map((l) => l.shop)))].sort((a, b) =>
-        a.localeCompare(b),
-      ),
+      // GLOBAL facet list — never derived from the current page. One chip per
+      // folded identity, labelled by the first spelling seen (deterministic;
+      // the backend's "most frequent spelling" rule is not reproduced here).
+      shops: facetShops(all),
     },
     globalSummary: summarize(all),
     summaryForCurrentQuery: summarize(filtered),
   }
 }
 
+function facetShops(all: MockDbEntry[]): string[] {
+  const labelByKey = new Map<string, string>()
+  for (const entry of all) {
+    for (const l of entry.listings) {
+      const key = foldShop(l.shopName)
+      if (key !== null && !labelByKey.has(key)) labelByKey.set(key, l.shopName!)
+    }
+  }
+  return [...labelByKey.values()].sort((a, b) => a.localeCompare(b))
+}
+
 export async function mockFetchListings(productId: number): Promise<Listing[]> {
   await sleep(LATENCY_MS)
   const entry = getDb().find((e) => e.product.id === productId)
   if (!entry) throw new Error(`Unknown product id ${productId}`)
-  // Cheapest-first, like the mockup's expanded view.
+  // The mock plays the backend, which owns the panel order (#157): not out of
+  // stock first, then converted price ascending, unpriced last, ties by id.
+  // (Number() on money is fine HERE — DEV-only fixture code, not business
+  // logic; the real ordering runs on exact BigDecimals server-side.)
   return entry.listings.slice().sort((a, b) => {
-    if (a.price === null) return b.price === null ? 0 : 1
-    if (b.price === null) return -1
-    return Number(a.price) - Number(b.price)
+    const outA = a.availability === 'UNAVAILABLE' ? 1 : 0
+    const outB = b.availability === 'UNAVAILABLE' ? 1 : 0
+    if (outA !== outB) return outA - outB
+    if (a.priceConverted === null || b.priceConverted === null) {
+      if (a.priceConverted === b.priceConverted) return a.trackedItemId - b.trackedItemId
+      return a.priceConverted === null ? 1 : -1
+    }
+    const byPrice = Number(a.priceConverted) - Number(b.priceConverted)
+    return byPrice !== 0 ? byPrice : a.trackedItemId - b.trackedItemId
   })
 }

@@ -66,6 +66,14 @@ interface RawListingSpec {
   history: [number, number][]
   /** Force "no latest price" even with history (backend nullability is real). */
   currentPriceMissing?: boolean
+  /**
+   * The current price already converted into the display currency (ILS) —
+   * the mock's stand-in for the backend's FX conversion (#157). Omit for ILS
+   * listings (identity). The mock never converts anything itself.
+   */
+  currentPriceConverted?: number
+  /** The FX rate behind `currentPriceConverted` was stale → "Rate outdated". */
+  conversionStale?: boolean
 }
 
 interface RawProductSpec {
@@ -81,21 +89,6 @@ interface RawProductSpec {
    * stand-in for #145's FX engine output (the client never converts).
    */
   normalizedSparkline?: [number, number][]
-  /**
-   * Explicit best price for cross-currency products. The backend computes
-   * "best" over FX-converted values; the mock has no FX rates, so a
-   * mixed-currency product supplies the already-converted best directly
-   * instead of letting the builder raw-compare prices across currencies
-   * (which would pick a cheap USD number and mislabel it as the display
-   * currency). Same-currency products omit this — the cheapest listing wins.
-   */
-  bestOverride?: {
-    convertedPrice: string
-    convertedCurrency: string
-    originalPrice: string
-    originalCurrency: string
-    shop: string
-  }
 }
 
 const iso = (now: number, daysAgo: number) => new Date(now - daysAgo * DAY_MS).toISOString()
@@ -338,16 +331,10 @@ function specs(): RawProductSpec[] {
       mixedCurrencies: true,
       conversionStale: true,
       conversionAsOf: null, // stale AND no snapshot date → "Rate outdated" without a date
-      // FX-normalized best (backend's job): Amazon's $102 converts to ₪382,
-      // beating אלקטרה's native ₪385. The header shows ₪382 (display) with
-      // "$102 at source"; the sparkline below is the normalized ILS series.
-      bestOverride: {
-        convertedPrice: '382.00',
-        convertedCurrency: 'ILS',
-        originalPrice: '102.00',
-        originalCurrency: 'USD',
-        shop: 'Amazon',
-      },
+      // FX-normalized best (backend's job): Amazon's $102 converts to ₪382
+      // (see its `currentPriceConverted`), beating אלקטרה's native ₪385. The
+      // header shows ₪382 (display) with "$102 at source"; the sparkline
+      // below is the normalized ILS series.
       normalizedSparkline: [
         [12, 420],
         [9, 415],
@@ -381,6 +368,8 @@ function specs(): RawProductSpec[] {
             [6, 110],
             [2, 102],
           ],
+          currentPriceConverted: 382, // $102 at the mock's stale rate
+          conversionStale: true,
         },
       ],
     },
@@ -498,42 +487,58 @@ function currentPrice(spec: RawListingSpec): string | null {
   return latest[1].toFixed(2)
 }
 
+const DISPLAY_CURRENCY = 'ILS'
+
 export function buildMockDb(now: number): MockDbEntry[] {
   return specs().map((spec) => {
-    const priced = spec.listings.filter((l) => currentPrice(l) !== null)
-    // Cheapest priced listing. For same-currency products (all current
-    // fixtures except the mixed one) this IS the best; for mixed-currency
-    // products the raw number is meaningless across currencies, so
-    // `bestOverride` supplies the already-converted best instead — the mock
-    // never compares prices across currencies (that's the backend's FX job).
-    const cheapest =
-      priced.length === 0
-        ? null
-        : priced.reduce((a, b) => (Number(currentPrice(a)) <= Number(currentPrice(b)) ? a : b))
+    // Listings first — the wire shape of GET /api/products/{id}/listings
+    // (#157). `priceConverted` is either the spec's already-converted value
+    // or, for display-currency listings, the price itself; the mock never
+    // compares or converts across currencies (that's the backend's FX job).
+    const listings: Listing[] = spec.listings.map((l, i) => {
+      const priceOriginal = currentPrice(l)
+      const priceConverted =
+        priceOriginal === null
+          ? null
+          : l.currentPriceConverted !== undefined
+            ? l.currentPriceConverted.toFixed(2)
+            : l.currency === DISPLAY_CURRENCY
+              ? priceOriginal
+              : null // foreign currency without a supplied conversion → unconvertible
+      return {
+        trackedItemId: spec.id * 1000 + i,
+        shopName: l.shop,
+        url: l.url,
+        priceOriginal,
+        priceOriginalCurrency: priceOriginal === null ? null : l.currency,
+        priceConverted,
+        priceConvertedCurrency: priceConverted === null ? null : DISPLAY_CURRENCY,
+        conversionStale: priceConverted !== null && (l.conversionStale ?? false),
+        availability: l.availability,
+        lastChecked:
+          l.lastCheckedHoursAgo === null
+            ? null
+            : new Date(now - l.lastCheckedHoursAgo * HOUR_MS).toISOString(),
+      }
+    })
 
-    let bestConverted: string | null = null
-    let bestConvertedCurrency: string | null = null
-    let bestOriginal: string | null = null
-    let bestOriginalCurrency: string | null = null
-    let bestShop: string | null = null
-    if (spec.bestOverride) {
-      bestConverted = spec.bestOverride.convertedPrice
-      bestConvertedCurrency = spec.bestOverride.convertedCurrency
-      bestOriginal = spec.bestOverride.originalPrice
-      bestOriginalCurrency = spec.bestOverride.originalCurrency
-      bestShop = spec.bestOverride.shop
-    } else if (cheapest) {
-      bestConverted = currentPrice(cheapest)
-      bestConvertedCurrency = cheapest.currency
-      bestOriginal = bestConverted
-      bestOriginalCurrency = cheapest.currency
-      bestShop = cheapest.shop
-    }
+    // The winning listing, selected ONCE and then every best-* field derived
+    // from it — so price, shop, currency and bestTrackedItemId can never drift
+    // apart. Rule: cheapest converted price among priced + not-out-of-stock,
+    // ties by lower id. NARROWER than the backend's (no TTL, positivity or
+    // convertibility rules — the mock has no clock-relative freshness beyond
+    // what the fixtures encode); the winner here is a demo, not the engine.
+    const best = listings.reduce<Listing | null>((winner, l) => {
+      if (l.priceConverted === null || l.availability === 'UNAVAILABLE') return winner
+      if (winner === null || Number(l.priceConverted) < Number(winner.priceConverted)) return l
+      return winner
+    }, null)
+    const bestSpec = best === null ? null : spec.listings[listings.indexOf(best)]
 
     const sparkline: PricePoint[] = spec.normalizedSparkline
       ? toSeries(now, spec.normalizedSparkline)
-      : cheapest
-        ? toSeries(now, cheapest.history)
+      : bestSpec
+        ? toSeries(now, bestSpec.history)
         : []
 
     const product: TrackedProduct = {
@@ -541,31 +546,19 @@ export function buildMockDb(now: number): MockDbEntry[] {
       name: spec.name,
       imageUrl: null, // backend image endpoint is a separate SSRF-safe track
       category: spec.category,
-      bestPriceConverted: bestConverted,
-      bestPriceConvertedCurrency: bestConvertedCurrency,
-      bestPriceOriginal: bestOriginal,
-      bestPriceOriginalCurrency: bestOriginalCurrency,
-      bestPriceShop: bestShop,
+      bestPriceConverted: best?.priceConverted ?? null,
+      bestPriceConvertedCurrency: best === null ? null : DISPLAY_CURRENCY,
+      bestPriceOriginal: best?.priceOriginal ?? null,
+      bestPriceOriginalCurrency: best?.priceOriginalCurrency ?? null,
+      bestPriceShop: best?.shopName ?? null,
+      bestTrackedItemId: best?.trackedItemId ?? null,
       conversionStale: spec.conversionStale ?? false,
       conversionAsOf: spec.conversionAsOf ?? null,
       mixedCurrencies: spec.mixedCurrencies ?? false,
       availability: rollup(spec.listings),
-      delta7d: bestConverted === null ? null : computeDelta7d(sparkline, now),
+      delta7d: best === null ? null : computeDelta7d(sparkline, now),
       sparkline,
     }
-
-    const listings: Listing[] = spec.listings.map((l, i) => ({
-      trackedItemId: spec.id * 1000 + i,
-      shop: l.shop,
-      url: l.url,
-      price: currentPrice(l),
-      currency: currentPrice(l) === null ? null : l.currency,
-      availability: l.availability,
-      lastChecked:
-        l.lastCheckedHoursAgo === null
-          ? null
-          : new Date(now - l.lastCheckedHoursAgo * HOUR_MS).toISOString(),
-    }))
 
     return { product, listings }
   })

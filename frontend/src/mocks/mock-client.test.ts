@@ -94,15 +94,37 @@ describe('mockFetchListings', () => {
     return promise
   }
 
-  it('sorts listings cheapest-first with null prices last', async () => {
-    // Sony (id 1) has three priced ILS listings — cheapest first.
+  it('orders listings like the backend: not out of stock first, converted price ascending, unpriced last', async () => {
+    // Sony (id 1) has three priced ILS listings — cheapest converted first.
     const result = await listings(1)
-    const prices = result.map((l) => (l.price === null ? null : Number(l.price)))
+    const prices = result.map((l) => (l.priceConverted === null ? null : Number(l.priceConverted)))
     const nonNull = prices.filter((p): p is number => p !== null)
     expect(nonNull).toEqual([...nonNull].sort((a, b) => a - b))
     // Any null-priced listing sorts after every priced one.
     const firstNull = prices.indexOf(null)
     if (firstNull !== -1) expect(prices.slice(firstNull).every((p) => p === null)).toBe(true)
+  })
+
+  it('puts out-of-stock listings last even when they are the cheapest', async () => {
+    // AirPods (id 5) has one AVAILABLE and one UNAVAILABLE listing.
+    const result = await listings(5)
+    const availability = result.map((l) => l.availability)
+    const firstOut = availability.indexOf('UNAVAILABLE')
+    expect(firstOut).toBeGreaterThan(0)
+    expect(availability.slice(firstOut).every((a) => a === 'UNAVAILABLE')).toBe(true)
+  })
+
+  it('shop filter folds both sides — a canonical chip still matches a differently-cased request', async () => {
+    const canonical = await fetch({ shops: ['TMS'] })
+    const lower = await fetch({ shops: [' tms '] })
+    expect(lower.items.map((p) => p.id)).toEqual(canonical.items.map((p) => p.id))
+    expect(canonical.page.totalElements).toBe(3)
+  })
+
+  it('facets are one chip per folded shop identity', async () => {
+    const response = await fetch({})
+    const folded = response.facets.shops.map((s) => s.trim().toLowerCase())
+    expect(new Set(folded).size).toBe(folded.length)
   })
 
   it('rejects for an unknown product id (drives the row-level error/retry UX)', async () => {

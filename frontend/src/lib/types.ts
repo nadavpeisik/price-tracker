@@ -2,11 +2,13 @@
  * Frontend view-model + dashboard query contract for the tracked-items
  * dashboard (#144).
  *
- * This is NOT 1:1 with any backend DTO. It is a view model composed from
- * the dashboard endpoint (#146: availability counts, delta7d, normalized
- * sparkline from #145) plus, on row expand, the detail endpoint's
- * TrackedItemSummary listings. The mock client implements this exact
- * contract so live wiring is a URL swap, not a logic rewrite.
+ * `TrackedProduct` mirrors one row of the dashboard endpoint (#146:
+ * availability counts, delta7d, normalized sparkline from #145) and
+ * `Listing` mirrors one row of the listings endpoint (#157:
+ * GET /api/products/{id}/listings — per-shop prices FX-normalized into the
+ * display currency, already in display order). Both are the wire shape
+ * field-for-field; the mock client implements the same contract so offline
+ * work and live data are interchangeable.
  *
  * MONEY IS A DECIMAL STRING, never `number` — the backend uses
  * BigDecimal(19,4). The frontend does no money arithmetic; it parses to a
@@ -37,16 +39,41 @@ export interface PricePoint {
   price: string
 }
 
+/**
+ * One shop's listing as the expanded panel shows it (#157). WIRE ORDER IS
+ * DISPLAY ORDER: the backend sorts (not out of stock first, then converted
+ * price ascending, unpriced last, ties by id) because only it holds exact
+ * decimals and the FX-normalized amounts — the panel renders as received.
+ */
 export interface Listing {
   trackedItemId: number
-  shop: string
-  url: string
-  /** Decimal string; null → "not checked yet" — neutral placeholder, never 0. */
-  price: string | null
-  /** ISO 4217 (e.g. "ILS"); null when price is null. */
-  currency: string | null
+  /** Nullable for hand-inserted legacy rows only; render a neutral fallback. */
+  shopName: string | null
+  /** Nullable for hand-inserted legacy rows only; safeExternalHref handles it. */
+  url: string | null
+  /**
+   * The shop's own price. Null when the listing has NO CURRENT observation —
+   * never scraped, or its latest record is older than the carry-forward TTL
+   * (the same rule the row's "N of M in stock" applies) → "no current price".
+   */
+  priceOriginal: string | null
+  /** ISO 4217; null when priceOriginal is null. */
+  priceOriginalCurrency: string | null
+  /**
+   * The same amount in the display currency — what the panel compares. Null
+   * when priceOriginal is null OR the amount is unconvertible (no FX snapshot
+   * yet, unknown currency); the original survives so it can still be shown.
+   */
+  priceConverted: string | null
+  priceConvertedCurrency: string | null
+  /** FX rate used was over a week old → "Rate outdated". */
+  conversionStale: boolean
+  /** UNKNOWN when there is no current observation. */
   availability: ListingAvailability
-  /** ISO timestamp; null → "never checked". */
+  /**
+   * The listing's own timestamp — populated even when the observation is too
+   * old to count; "never" vs "9 days ago" is what tells the two apart.
+   */
   lastChecked: string | null
   /**
    * OPTIONAL and UNFETCHED in v1 — per-shop mini-charts are a follow-up.
@@ -71,6 +98,11 @@ export interface TrackedProduct {
   bestPriceOriginal: string | null
   bestPriceOriginalCurrency: string | null
   bestPriceShop: string | null
+  /**
+   * The listing behind bestPriceShop — the panel marks it "Best" by identity,
+   * never by position. Null together with the rest of the best-price cluster.
+   */
+  bestTrackedItemId: number | null
   /** FX snapshot was stale when computed → badge the converted price. */
   conversionStale: boolean
   /** Date of the FX snapshot used; null + stale → "Rate outdated" (no date). */

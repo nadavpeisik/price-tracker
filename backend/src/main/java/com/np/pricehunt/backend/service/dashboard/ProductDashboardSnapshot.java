@@ -22,6 +22,8 @@ import java.time.LocalDate;
  *
  * @param bestPriceConverted cheapest eligible offer in the display currency
  * @param bestPriceOriginal that same offer as listed, before conversion
+ * @param bestTrackedItemId the listing behind {@code bestPriceShop} — the id the expanded panel
+ *     marks "Best" (#157); null together with the rest of the cluster
  * @param mixedCurrencies the product's listings are not all priced in one currency — an info flag,
  *     not a warning; the comparison is still valid because everything is FX-normalized
  * @param delta7d percent change against seven days ago, or null for "less than a week of history"
@@ -32,6 +34,7 @@ public record ProductDashboardSnapshot(
         BigDecimal bestPriceOriginal,
         String bestPriceOriginalCurrency,
         String bestPriceShop,
+        Long bestTrackedItemId,
         LocalDate conversionAsOf,
         boolean conversionStale,
         boolean mixedCurrencies,

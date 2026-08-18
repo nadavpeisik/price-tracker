@@ -353,6 +353,7 @@ public class DashboardQueryService {
                 WireMoney.decimalString(snapshot.bestPriceOriginal()),
                 snapshot.bestPriceOriginalCurrency(),
                 snapshot.bestPriceShop(),
+                snapshot.bestTrackedItemId(),
                 snapshot.conversionStale(),
                 snapshot.conversionAsOf(),
                 snapshot.mixedCurrencies(),

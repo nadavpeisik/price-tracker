@@ -406,6 +406,7 @@ class DashboardQueryServiceTest {
         assertThat(row.bestPriceOriginal()).isEqualTo("100.0000");
         assertThat(row.bestPriceOriginalCurrency()).isEqualTo("USD");
         assertThat(row.bestPriceShop()).isEqualTo("Amazon");
+        assertThat(row.bestTrackedItemId()).isEqualTo(100L);
         assertThat(row.delta7d()).isEqualByComparingTo("-8.25");
         assertThat(row.availability().status()).isEqualTo(AvailabilityRollupStatus.AVAILABLE);
     }
@@ -422,6 +423,7 @@ class DashboardQueryServiceTest {
         assertThat(row.bestPriceConverted()).isNull();
         assertThat(row.bestPriceConvertedCurrency()).isNull();
         assertThat(row.bestPriceOriginal()).isNull();
+        assertThat(row.bestTrackedItemId()).isNull();
     }
 
     @Test
@@ -548,6 +550,7 @@ class DashboardQueryServiceTest {
                     priced ? new BigDecimal("100.0000") : null,
                     priced ? "USD" : null,
                     priced ? "Amazon" : null,
+                    priced ? productId * 100 : null,
                     priced ? LocalDate.of(2026, 3, 20) : null,
                     false,
                     false,
