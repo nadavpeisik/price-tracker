@@ -84,6 +84,30 @@ class EcbRateSourceTest {
                 .hasMessageNotContaining("unreadable");
     }
 
+    // A <Cube currency=...> outside the dated cube is not part of the day. The real feed never emits
+    // one, but nothing downstream could tell: a stray rate is positive and plausible, so it would be
+    // merged into the snapshot and priced against. Position is what distinguishes the two cube kinds.
+    @Test
+    void fetchLatest_rateOutsideTheDatedCube_isIgnored() {
+        String stray =
+                """
+                <gesmes:Envelope xmlns:gesmes="http://www.gesmes.org/xml/2002-08-01">
+                  <Cube>
+                    <Cube time='2026-08-17'><Cube currency='USD' rate='1.1593'/></Cube>
+                    <Cube currency='USD' rate='999'/>
+                    <Cube currency='ZZZ' rate='42'/>
+                  </Cube>
+                </gesmes:Envelope>
+                """;
+
+        RateSnapshot snapshot = provider(MediaType.TEXT_XML, stray).fetchLatest();
+
+        // The strays sit AFTER the dated cube on purpose: a parser that collected every currency-bearing
+        // Cube would let them win on last-write, so this ordering is what makes the test able to fail.
+        assertThat(snapshot.asOf()).isEqualTo(LocalDate.parse("2026-08-17"));
+        assertThat(snapshot.rates()).hasSize(1).containsEntry("USD", new BigDecimal("1.1593"));
+    }
+
     @Test
     void fetchLatest_dateless_throws() {
         String noDate =
