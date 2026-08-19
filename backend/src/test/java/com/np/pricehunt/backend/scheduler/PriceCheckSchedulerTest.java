@@ -119,26 +119,32 @@ class PriceCheckSchedulerTest {
     }
 
     @Test
-    void refreshAll_skipsBlocklistedItems_notCountedAsFailed() {
+    void refreshAll_skipsNeverScrapableItems_notCountedAsFailed() {
         Instant old = Instant.now().minusSeconds(60 * 60 * 24);
         List<TrackedItemRefreshView> items = List.of(
                 new TrackedItemRefreshView(1L, "https://ok.com/1", old),
                 new TrackedItemRefreshView(2L, "https://www.amazon.com/2", old),
-                new TrackedItemRefreshView(3L, "https://ok.com/3", old));
+                new TrackedItemRefreshView(3L, "https://ok.com/3", old),
+                new TrackedItemRefreshView(4L, "https://ivory.seed.invalid/item/1001", old));
         when(trackedItemRepository.findStaleItems(any(Instant.class))).thenReturn(items);
         // Explicit per-URL stubs (no lenient): every call the loop makes matches a stub, and all are used.
-        when(urlValidator.isUnsupportedHost("https://ok.com/1")).thenReturn(false);
-        when(urlValidator.isUnsupportedHost("https://www.amazon.com/2")).thenReturn(true);
-        when(urlValidator.isUnsupportedHost("https://ok.com/3")).thenReturn(false);
+        when(urlValidator.isNeverScrapable("https://ok.com/1")).thenReturn(false);
+        when(urlValidator.isNeverScrapable("https://www.amazon.com/2")).thenReturn(true);
+        when(urlValidator.isNeverScrapable("https://ok.com/3")).thenReturn(false);
+        when(urlValidator.isNeverScrapable("https://ivory.seed.invalid/item/1001"))
+                .thenReturn(true);
 
         scheduler.refreshAll();
 
-        // Blocklisted item is never refreshed (no request sent) and does NOT count as processed/failed.
+        // Skipped items are never refreshed (no request sent) and do NOT count as processed/failed.
         verify(trackingService).scheduledRefresh(1L);
         verify(trackingService).scheduledRefresh(3L);
         verify(trackingService, never()).scheduledRefresh(2L);
+        verify(trackingService, never()).scheduledRefresh(4L);
         verify(jobRunRecorder, never()).recordItem(anyLong(), eq("https://www.amazon.com/2"), any(), anyLong(), any());
-        // processed = 2 (only the non-blocklisted items), 0 failed.
+        verify(jobRunRecorder, never())
+                .recordItem(anyLong(), eq("https://ivory.seed.invalid/item/1001"), any(), anyLong(), any());
+        // processed = 2 (only the scrapable items), 0 failed.
         verify(jobRunRecorder).complete(eq(RUN_ID), eq(JobStatus.SUCCESS), eq(2), eq(2), eq(0), isNull());
     }
 

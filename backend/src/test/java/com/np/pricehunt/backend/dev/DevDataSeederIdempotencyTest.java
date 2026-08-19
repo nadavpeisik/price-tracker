@@ -78,7 +78,7 @@ class DevDataSeederIdempotencyTest {
     @Autowired
     private ExchangeRateRepository exchangeRateRepository;
 
-    /** The real, bound blocklist config — so this test breaks if the seed.invalid pattern is removed. */
+    /** The real, bound validation config — the test below starts from it rather than a hand-made copy. */
     @Autowired
     private UrlValidationProperties urlValidationProperties;
 
@@ -240,16 +240,23 @@ class DevDataSeederIdempotencyTest {
     }
 
     @Test
-    void everySeededUrlIsBlocklistedSoTheSchedulerSkipsIt() {
+    void everySeededUrlIsSkippedByTheSchedulerEvenWithTheBlocklistDisabled() {
         seeder.run();
-        // Bind the REAL configured patterns rather than a copy: hardcoding them here would keep this
-        // test green even if someone deleted the seed.invalid entry, while the scheduler quietly began
-        // scraping seeded URLs.
-        UrlValidator validator = new UrlValidator(urlValidationProperties, mockResolver());
+        // Bind the REAL config, then switch the blocklist OFF — the state a run started with
+        // --price.validation.unsupported-sites-enabled=false is in. The seeded .invalid hosts must
+        // still be skipped: while that guarantee lived in the configurable blocklist, such a run spent
+        // a DNS lookup and a FAILED job-run item on every seeded listing, once per scheduler pass.
+        UrlValidationProperties blocklistOff = new UrlValidationProperties(
+                false,
+                urlValidationProperties.unsupportedHostPatterns(),
+                urlValidationProperties.dnsResolveTimeout(),
+                urlValidationProperties.dnsResolverPoolSize(),
+                urlValidationProperties.dnsResolverQueueCapacity());
+        UrlValidator validator = new UrlValidator(blocklistOff, mockResolver());
 
         assertThat(trackedItemRepository.findAll()).isNotEmpty().allSatisfy(item -> assertThat(
-                        validator.isUnsupportedHost(item.getUrl()))
-                .as("seeded URL %s must be blocklisted", item.getUrl())
+                        validator.isNeverScrapable(item.getUrl()))
+                .as("seeded URL %s must never be scraped", item.getUrl())
                 .isTrue());
     }
 

@@ -9,6 +9,7 @@ import java.net.UnknownHostException;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.TimeoutException;
 import java.util.regex.Pattern;
 import lombok.extern.slf4j.Slf4j;
@@ -24,8 +25,13 @@ import org.springframework.web.server.ResponseStatusException;
  * the operational unsupported-site blocklist. The blocklist is a <b>safety control</b> — it stops us
  * hammering sites with anti-bot walls that could get our IP flagged — so it is enforced everywhere:
  * blocklisting a host halts ALL outbound requests to it, including refreshes of already-tracked items.
- * The scheduler additionally calls {@link #isUnsupportedHost(String)} to skip blocklisted items up front
+ * The scheduler additionally calls {@link #isNeverScrapable(String)} to skip such items up front
  * (a clean skip, not a failed scrape attempt) so they are never even attempted.
+ *
+ * <p>{@code .invalid} and {@code localhost} are rejected <b>unconditionally</b> —
+ * {@code unsupportedSitesEnabled} does not gate them. Neither can name a real shop, so treating them
+ * as a configurable product decision is what let a run with the blocklist switched off spend a DNS
+ * lookup and a FAILED job-run item on every seeded {@code .invalid} listing, once per scheduler pass.
  *
  * <p>The SSRF host check ({@link #assertHostAllowed}) resolves the host and rejects any resolved IP in a
  * private / loopback / link-local / CGNAT / ULA / multicast / reserved range or a cloud-metadata
@@ -35,6 +41,20 @@ import org.springframework.web.server.ResponseStatusException;
 @Slf4j
 @Component
 public class UrlValidator {
+
+    /**
+     * The two special-use names RFC 6761 lets an application recognise without asking a resolver:
+     * {@code invalid} (§6.4, "MAY recognize ... as special" — and it is guaranteed not to exist) and
+     * {@code localhost} (§6.3). Matched on the last label, so every subdomain is covered.
+     *
+     * <p>The list is deliberately this short. {@code test} (§6.2) and {@code example} (§6.5) carry the
+     * opposite instruction — application software SHOULD NOT treat them as special — so blocking them
+     * here would contradict the standard that justifies the entry above it. {@code local} (RFC 6762) is
+     * a genuine SSRF surface rather than a nonexistent name, and the resolved-IP check below already
+     * rejects the link-local addresses mDNS hands back; promoting it to a pre-DNS block is a network
+     * policy decision for the SSRF follow-ups, not a side effect of skipping dev-seed data.
+     */
+    private static final Set<String> RESERVED_TLDS = Set.of("invalid", "localhost");
 
     private final boolean unsupportedSitesEnabled;
     private final List<Pattern> blockedHostPatterns;
@@ -67,18 +87,23 @@ public class UrlValidator {
     }
 
     /**
-     * Non-throwing predicate: is {@code url}'s host on the operational unsupported-site blocklist? The
-     * scheduler uses this to skip blocklisted items up front (a clean skip, not a FAILED scrape attempt),
-     * so we never send them a request. Parses defensively — an unparseable / host-less URL returns
+     * Non-throwing predicate: would {@link #validate} reject {@code url} on a check that needs no DNS —
+     * a reserved special-use name, or a host on the unsupported-site blocklist? The scheduler uses it to
+     * skip such items up front (a clean skip, not a FAILED scrape attempt), so we never send them a
+     * request nor consume a resolver slot. Parses defensively — an unparseable / host-less URL returns
      * {@code false} and flows on to full {@link #validate}, which will reject it there.
      */
-    public boolean isUnsupportedHost(String url) {
-        if (!unsupportedSitesEnabled || url == null) {
+    public boolean isNeverScrapable(String url) {
+        if (url == null) {
             return false;
         }
         try {
             String host = new URI(url).getHost();
-            return host != null && matchesBlocklist(host.toLowerCase(Locale.ROOT));
+            if (host == null) {
+                return false;
+            }
+            String hostLc = stripIpv6Brackets(host).toLowerCase(Locale.ROOT);
+            return isReservedName(hostLc) || matchesBlocklist(hostLc);
         } catch (URISyntaxException e) {
             return false;
         }
@@ -103,10 +128,7 @@ public class UrlValidator {
         }
 
         // Strip IPv6 brackets — URI.getHost() keeps them ("[::1]"); getByName("[::1]") throws.
-        String bare = host;
-        if (bare.startsWith("[") && bare.endsWith("]")) {
-            bare = bare.substring(1, bare.length() - 1);
-        }
+        String bare = stripIpv6Brackets(host);
 
         // Reject any trailing-dot host outright (#139 review). We must resolve exactly what the scraper
         // fetches (it gets the raw URL, dot kept); stripping the dot would let us validate a different
@@ -150,13 +172,26 @@ public class UrlValidator {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "URL host is not allowed");
         }
 
-        // (c) Reject the loopback alias `localhost` (+ any `*.localhost`) WITHOUT DNS — runtimes/browsers
-        // special-case it and system resolution can differ (RFC 6761 reserves *.localhost as loopback).
-        if (bareLc.equals("localhost") || bareLc.endsWith(".localhost")) {
+        // (c) Reject the reserved names in RESERVED_TLDS WITHOUT DNS — see that constant for why the
+        // list stops where it does.
+        if (isReservedName(bareLc)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "URL host is not allowed");
         }
 
         return new HostContext(bare, bareLc);
+    }
+
+    // Last-label match: "seed.invalid" and "ivory.seed.invalid" both reduce to "invalid". An IP literal
+    // never matches (its last label is numeric, or the whole string for a colon-bearing IPv6 address).
+    private static boolean isReservedName(String hostLc) {
+        int lastDot = hostLc.lastIndexOf('.');
+        return RESERVED_TLDS.contains(lastDot < 0 ? hostLc : hostLc.substring(lastDot + 1));
+    }
+
+    private static String stripIpv6Brackets(String host) {
+        return host.length() > 1 && host.charAt(0) == '[' && host.charAt(host.length() - 1) == ']'
+                ? host.substring(1, host.length() - 1)
+                : host;
     }
 
     private URI parseOrThrow(String url) {
@@ -174,7 +209,7 @@ public class UrlValidator {
         }
     }
 
-    // Shared by rejectUnsupportedSites (throwing, in validate) and isUnsupportedHost (predicate, for the
+    // Shared by rejectUnsupportedSites (throwing, in validate) and isNeverScrapable (predicate, for the
     // scheduler). Honors the enable flag so a disabled blocklist matches nothing.
     private boolean matchesBlocklist(String hostLc) {
         if (!unsupportedSitesEnabled) {

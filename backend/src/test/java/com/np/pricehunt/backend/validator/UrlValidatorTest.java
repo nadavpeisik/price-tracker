@@ -196,7 +196,7 @@ class UrlValidatorTest {
             })
     void assertHostAllowed_resolvedToPublicIp_passes(String ip) {
         UrlValidator v = validatorWith(resolverReturning(addr(ip)));
-        assertThatCode(() -> v.validate("https://ok.example/x")).doesNotThrowAnyException();
+        assertThatCode(() -> v.validate("https://ok.example.com/x")).doesNotThrowAnyException();
     }
 
     // --- SSRF: IPv6-embedded-IPv4 must be extracted and checked (genuine Inet6Address, not collapsed) ---
@@ -230,7 +230,7 @@ class UrlValidatorTest {
         // 64:ff9b::0808:0808 synthesises the public 8.8.8.8 — must pass (the DNS64/NAT64 fix).
         InetAddress a = addr6(0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0, 0x08, 0x08, 0x08, 0x08);
         UrlValidator v = validatorWith(resolverReturning(a));
-        assertThatCode(() -> v.validate("https://ok.example/x")).doesNotThrowAnyException();
+        assertThatCode(() -> v.validate("https://ok.example.com/x")).doesNotThrowAnyException();
     }
 
     @Test
@@ -244,7 +244,7 @@ class UrlValidatorTest {
         // ::ffff:0:8.8.8.8 must still pass — the SIIT extraction must not over-block a public embed.
         InetAddress a = addr6(0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 0, 0, 0x08, 0x08, 0x08, 0x08);
         UrlValidator v = validatorWith(resolverReturning(a));
-        assertThatCode(() -> v.validate("https://ok.example/x")).doesNotThrowAnyException();
+        assertThatCode(() -> v.validate("https://ok.example.com/x")).doesNotThrowAnyException();
     }
 
     @Test
@@ -288,7 +288,7 @@ class UrlValidatorTest {
     @ValueSource(
             strings = {
                 "http://sony0x.com/", // a real domain that merely contains "0x" — NOT an IP-literal shape
-                "http://cafe0x.example/",
+                "http://cafe0x.example.com/",
             })
     void validate_domainContainingHexLikeText_passes(String url) {
         UrlValidator v = validatorWith(PUBLIC);
@@ -309,7 +309,7 @@ class UrlValidatorTest {
         UrlValidator v = validatorWith(host -> {
             throw new UnknownHostException(host);
         });
-        assertThatThrownBy(() -> v.validate("https://nope.example/x"))
+        assertThatThrownBy(() -> v.validate("https://nope.example.com/x"))
                 .isInstanceOfSatisfying(ResponseStatusException.class, e -> assertThat(e.getStatusCode())
                         .isEqualTo(HttpStatus.BAD_REQUEST));
     }
@@ -319,7 +319,7 @@ class UrlValidatorTest {
         UrlValidator v = validatorWith(host -> {
             throw new TimeoutException("slow");
         });
-        assertThatThrownBy(() -> v.validate("https://slow.example/x"))
+        assertThatThrownBy(() -> v.validate("https://slow.example.com/x"))
                 .isInstanceOfSatisfying(ResponseStatusException.class, e -> assertThat(e.getStatusCode())
                         .isEqualTo(HttpStatus.GATEWAY_TIMEOUT));
     }
@@ -329,7 +329,7 @@ class UrlValidatorTest {
         UrlValidator v = validatorWith(host -> {
             throw new HostResolutionUnavailableException("saturated", null);
         });
-        assertThatThrownBy(() -> v.validate("https://busy.example/x"))
+        assertThatThrownBy(() -> v.validate("https://busy.example.com/x"))
                 .isInstanceOfSatisfying(ResponseStatusException.class, e -> assertThat(e.getStatusCode())
                         .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE));
     }
@@ -337,7 +337,7 @@ class UrlValidatorTest {
     @Test
     void resolverReturnsEmpty_returns400() {
         UrlValidator v = validatorWith(host -> new InetAddress[0]);
-        assertThatThrownBy(() -> v.validate("https://empty.example/x"))
+        assertThatThrownBy(() -> v.validate("https://empty.example.com/x"))
                 .isInstanceOfSatisfying(ResponseStatusException.class, e -> assertThat(e.getStatusCode())
                         .isEqualTo(HttpStatus.BAD_REQUEST));
     }
@@ -347,7 +347,7 @@ class UrlValidatorTest {
     @Test
     void multiRecord_anyInternal_rejected() {
         UrlValidator v = validatorWith(resolverReturning(addr("8.8.8.8"), addr("10.0.0.1")));
-        assertThatThrownBy(() -> v.validate("https://split.example/x"))
+        assertThatThrownBy(() -> v.validate("https://split.example.com/x"))
                 .isInstanceOfSatisfying(ResponseStatusException.class, e -> assertThat(e.getStatusCode())
                         .isEqualTo(HttpStatus.BAD_REQUEST));
     }
@@ -379,32 +379,90 @@ class UrlValidatorTest {
         }
     }
 
-    // --- isUnsupportedHost predicate (the scheduler's pre-skip; DNS-free, non-throwing) ---
+    // --- reserved special-use names (RFC 6761 §6.3/§6.4) — rejected unconditionally, no DNS ---
+
+    @ParameterizedTest
+    @ValueSource(
+            strings = {
+                "https://ivory.seed.invalid/item/1001",
+                "https://invalid/x",
+                "https://localhost/x",
+                "https://api.localhost/x"
+            })
+    void validate_reservedName_rejectedWithoutDns(String url) {
+        UrlValidator v = validatorWith(FAIL_IF_CALLED, AMAZON_PATTERN);
+        assertThatThrownBy(() -> v.validate(url)).isInstanceOfSatisfying(ResponseStatusException.class, e -> {
+            assertThat(e.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+            assertThat(e.getReason()).isEqualTo("URL host is not allowed");
+        });
+    }
+
+    // The whole point of moving these off the blocklist: the run that produced a FAILED job-run item
+    // per seeded listing had started with --price.validation.unsupported-sites-enabled=false.
+    @Test
+    void validate_reservedName_rejectedEvenWithTheBlocklistDisabled() {
+        UrlValidator v = new UrlValidator(props(false), FAIL_IF_CALLED);
+        assertThatThrownBy(() -> v.validate("https://ivory.seed.invalid/item/1001"))
+                .isInstanceOf(ResponseStatusException.class);
+    }
+
+    // A reserved TLD is matched on the LAST label only — a real host merely containing the word is
+    // ordinary traffic and must still resolve normally.
+    @ParameterizedTest
+    @ValueSource(strings = {"https://invalid.example.com/x", "https://test.thomann.de/x", "https://local.co.uk/x"})
+    void validate_reservedWordInsideARealHost_passes(String url) {
+        validatorWith(AMAZON_PATTERN).validate(url);
+    }
+
+    // RFC 6761 tells application software NOT to special-case these two (§6.2 test, §6.5 example), so
+    // they go to the resolver like any other name. Pinned as a test because the tempting symmetry with
+    // .invalid is exactly what the standard rules out.
+    @ParameterizedTest
+    @ValueSource(strings = {"https://api.test/x", "https://shop.example/x"})
+    void validate_nonSpecialReservedTld_stillResolvedNormally(String url) {
+        validatorWith(PUBLIC).validate(url);
+    }
+
+    // --- isNeverScrapable predicate (the scheduler's pre-skip; DNS-free, non-throwing) ---
 
     @Test
-    void isUnsupportedHost_blocklistedHost_true() {
+    void isNeverScrapable_blocklistedHost_true() {
         UrlValidator v = validatorWith(FAIL_IF_CALLED, AMAZON_PATTERN); // must not resolve — predicate is DNS-free
-        assertThat(v.isUnsupportedHost("https://www.amazon.com/dp/x")).isTrue();
+        assertThat(v.isNeverScrapable("https://www.amazon.com/dp/x")).isTrue();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"https://ivory.seed.invalid/item/1001", "https://localhost/x"})
+    void isNeverScrapable_reservedName_true(String url) {
+        assertThat(validatorWith(FAIL_IF_CALLED, AMAZON_PATTERN).isNeverScrapable(url))
+                .isTrue();
+    }
+
+    // Config cannot switch this one off, which is exactly what makes the scheduler's skip dependable.
+    @Test
+    void isNeverScrapable_reservedName_trueEvenWithTheBlocklistDisabled() {
+        assertThat(disabledValidatorWith(AMAZON_PATTERN).isNeverScrapable("https://ivory.seed.invalid/item/1001"))
+                .isTrue();
     }
 
     @Test
-    void isUnsupportedHost_allowedHost_false() {
+    void isNeverScrapable_allowedHost_false() {
         UrlValidator v = validatorWith(FAIL_IF_CALLED, AMAZON_PATTERN);
-        assertThat(v.isUnsupportedHost("https://www.thomann.de/x")).isFalse();
+        assertThat(v.isNeverScrapable("https://www.thomann.de/x")).isFalse();
     }
 
     @Test
-    void isUnsupportedHost_blocklistDisabled_false() {
+    void isNeverScrapable_blocklistDisabled_false() {
         UrlValidator v = disabledValidatorWith(AMAZON_PATTERN);
-        assertThat(v.isUnsupportedHost("https://www.amazon.com/dp/x")).isFalse();
+        assertThat(v.isNeverScrapable("https://www.amazon.com/dp/x")).isFalse();
     }
 
     @Test
-    void isUnsupportedHost_malformedOrNullUrl_false() {
+    void isNeverScrapable_malformedOrNullUrl_false() {
         UrlValidator v = validatorWith(FAIL_IF_CALLED, AMAZON_PATTERN);
-        assertThat(v.isUnsupportedHost("not a url")).isFalse();
-        assertThat(v.isUnsupportedHost("mailto:x@amazon.com")).isFalse(); // no host component
-        assertThat(v.isUnsupportedHost(null)).isFalse();
+        assertThat(v.isNeverScrapable("not a url")).isFalse();
+        assertThat(v.isNeverScrapable("mailto:x@amazon.com")).isFalse(); // no host component
+        assertThat(v.isNeverScrapable(null)).isFalse();
     }
 
     @Test
@@ -423,7 +481,7 @@ class UrlValidatorTest {
 
     private static void assertResolvedAddrBlocked(InetAddress resolved) {
         UrlValidator v = validatorWith(resolverReturning(resolved));
-        assertThatThrownBy(() -> v.validate("https://evil.example/x"))
+        assertThatThrownBy(() -> v.validate("https://evil.example.com/x"))
                 .isInstanceOfSatisfying(ResponseStatusException.class, e -> {
                     assertThat(e.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
                     assertThat(e.getReason()).contains("not allowed");
@@ -466,6 +524,10 @@ class UrlValidatorTest {
 
     private static UrlValidator disabledValidatorWith(String... patterns) {
         return new UrlValidator(props(false, patterns), PUBLIC);
+    }
+
+    private static UrlValidationProperties props(boolean enabled) {
+        return props(enabled, new String[0]);
     }
 
     private static UrlValidationProperties props(boolean enabled, String... patterns) {

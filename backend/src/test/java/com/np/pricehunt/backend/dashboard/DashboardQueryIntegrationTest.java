@@ -19,7 +19,7 @@ import com.np.pricehunt.backend.repository.PriceRecordRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
 import com.np.pricehunt.backend.service.fx.ExchangeRateService;
-import com.np.pricehunt.backend.service.fx.FrankfurterRateProvider;
+import com.np.pricehunt.backend.service.fx.FxRateProvider;
 import com.np.pricehunt.backend.service.fx.RateSnapshot;
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -122,7 +122,7 @@ class DashboardQueryIntegrationTest {
     private ExchangeRateService rateService;
 
     @MockitoBean
-    private FrankfurterRateProvider rateProvider;
+    private FxRateProvider rateProvider;
 
     private MockMvc mvc;
     private LocalDate today;
