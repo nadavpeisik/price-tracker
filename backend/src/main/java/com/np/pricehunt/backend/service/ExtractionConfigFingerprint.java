@@ -41,7 +41,7 @@ public class ExtractionConfigFingerprint {
                 + "|temperature:" + options.temperature()
                 + "|numCtx:" + options.numCtx()
                 + "|format:" + options.format();
-        this.extractionConfigHash = Hashing.sha256Hex(descriptor).substring(0, 16);
+        this.extractionConfigHash = Hashing.sha256HexRequired(descriptor).substring(0, 16);
         log.info("Ollama extraction_config_hash={}", extractionConfigHash);
     }
 

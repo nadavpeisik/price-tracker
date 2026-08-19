@@ -173,3 +173,21 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_SCANNER_JAVA_EXE_PATH: ${{ env.JAVA_HOME }}/bin/java
+
+      # The scan steps above only UPLOAD; SonarCloud computes the verdict afterwards, so the job
+      # went green whatever the gate said. The main-branch gate was therefore red from 2026-06-29
+      # to 2026-08-19 with nobody notified — its verdict lands as an app check on a commit page,
+      # which sends no notification, while every PR gate stayed legitimately green (different
+      # "new code" scope). This step waits for that verdict on main pushes and fails the run, and
+      # a failed run is the one thing GitHub does notify about (issue #165).
+      # Only on push (= main; PRs already show their own gate next to the merge button). A separate
+      # step rather than -Dsonar.qualitygate.wait=true on the scanner: with the continue-on-error
+      # retry above, a red gate would look like a transport failure and re-run the whole analysis.
+      - name: SonarCloud branch quality gate (main only)
+        if: github.event_name == 'push'
+        uses: SonarSource/sonarqube-quality-gate-action@7a5fffe8e523c40e0c740b6bc2712ab503e52efa # v1.2.1
+        timeout-minutes: 12
+        with:
+          pollingTimeoutSec: 600
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

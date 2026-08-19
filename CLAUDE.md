@@ -236,6 +236,8 @@ Schema is managed by **Flyway**. SQL files live in `backend/src/main/resources/d
 
 **Phase 1.7 (before cloud deploy):** SSRF hardening. The backend `UrlValidator` component already enforces the `http`/`https` scheme check and an unsupported-site host blocklist at the user-input boundary — but it does **not** yet reject private IP ranges (RFC-1918: 10.x, 172.16–31.x, 192.168.x) or cloud metadata endpoints (169.254.169.254, 100.100.100.200). Phase 1.7 extends `UrlValidator` to block those before the scrape request is dispatched. (The scheme check also still lives in the scraper; the private-IP/metadata blocklist belongs in the backend at the user-input boundary.)
 
+SSRF is not the only pre-deploy prerequisite: **the scraper's Python dependencies must be hash-locked before the image runs anywhere but a laptop** (#187). Transitive versions — and the `hatchling` build backend — are resolved fresh on every `docker build`, so the image that ships is not the image that was tested. `docker:S8544` is Accepted in SonarCloud on exactly that basis (#165); the triggers that make it due are the first cloud deployment or CI starting to build/publish the image. `--only-binary=:all:` in `scraper/Dockerfile` already closes the related sdist-execution hole (`docker:S8541`) — keep it: it also fails the build loudly if a future transitive ships no wheel.
+
 **Phase 2 (future):** Kafka async pipeline. Replace synchronous scraper call with:
 - Spring Boot publishes `ScrapeRequestedEvent` to `price-tracker.scrape-requests` topic
 - Python scraper consumes, scrapes, publishes `ScrapeCompletedEvent` to `price-tracker.scrape-results`
