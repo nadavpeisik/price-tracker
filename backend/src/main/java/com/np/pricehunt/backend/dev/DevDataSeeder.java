@@ -46,8 +46,9 @@ import org.springframework.transaction.annotation.Transactional;
  *
  * <p><b>Safety around real data.</b> Exchange rates are inserted only where a {@code (quote, asOf)}
  * row is absent and only for dates at least two days old, so the startup FX refresh still runs and
- * today's real snapshot always wins. Seeded URLs live under the reserved {@code .invalid} TLD and are
- * blocklisted in {@code application.properties}, so the scheduler never tries to scrape them.
+ * today's real snapshot always wins. Seeded URLs live under the reserved {@code .invalid} TLD, which
+ * {@code UrlValidator} rejects unconditionally — not via the configurable blocklist, so the scheduler
+ * still skips them on a run started with {@code --price.validation.unsupported-sites-enabled=false}.
  */
 @Slf4j
 @Component

@@ -59,13 +59,14 @@ public class PriceCheckScheduler {
                 List<TrackedItemRefreshView> staleItems = trackedItemRepository.findStaleItems(cutoff);
                 log.info("Scheduled refresh starting for {} stale items", staleItems.size());
                 for (TrackedItemRefreshView item : staleItems) {
-                    // Skip blocklisted hosts (anti-bot safety): never send them a request, and don't count
-                    // them as processed/FAILED. Cheap, DNS-free host match. These items never update
-                    // lastChecked, so they recur every run — hence a bounded INFO summary (below) with the
-                    // per-URL detail at DEBUG, rather than a per-item INFO line that would spam every run.
-                    if (urlValidator.isUnsupportedHost(item.url())) {
+                    // Skip hosts validate() would reject anyway (blocklisted for anti-bot safety, or a
+                    // reserved special-use name): never send them a request, and don't count them as
+                    // processed/FAILED. Cheap, DNS-free host match. These items never update lastChecked,
+                    // so they recur every run — hence a bounded INFO summary (below) with the per-URL
+                    // detail at DEBUG, rather than a per-item INFO line that would spam every run.
+                    if (urlValidator.isNeverScrapable(item.url())) {
                         skipped++;
-                        log.debug("Skipping blocklisted item — no request sent: {}", item.url());
+                        log.debug("Skipping never-scrapable item — no request sent: {}", item.url());
                         continue;
                     }
                     long startNanos = System.nanoTime();
@@ -94,7 +95,7 @@ public class PriceCheckScheduler {
                     }
                 }
                 if (skipped > 0) {
-                    log.info("Scheduled refresh skipped {} blocklisted item(s) — no request sent", skipped);
+                    log.info("Scheduled refresh skipped {} never-scrapable item(s) — no request sent", skipped);
                 }
                 log.info("Scheduled refresh done: {} success, {} failed", success, failed);
             } catch (Exception e) {
