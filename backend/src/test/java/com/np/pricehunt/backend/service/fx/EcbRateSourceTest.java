@@ -84,11 +84,12 @@ class EcbRateSourceTest {
                 .hasMessageNotContaining("unreadable");
     }
 
-    // A <Cube currency=...> outside the dated cube is not part of the day. The real feed never emits
-    // one, but nothing downstream could tell: a stray rate is positive and plausible, so it would be
-    // merged into the snapshot and priced against. Position is what distinguishes the two cube kinds.
+    // A <Cube currency=...> that is not a child of the dated cube is not part of the day, and nothing
+    // downstream could tell: a stray rate is positive and plausible, which is all the failover chain
+    // inspects. Refused rather than skipped — a document shaped like this is not the daily feed, and
+    // keeping the subset that looked right would be a guess.
     @Test
-    void fetchLatest_rateOutsideTheDatedCube_isIgnored() {
+    void fetchLatest_rateBesideTheDatedCube_throws() {
         String stray =
                 """
                 <gesmes:Envelope xmlns:gesmes="http://www.gesmes.org/xml/2002-08-01">
@@ -100,12 +101,71 @@ class EcbRateSourceTest {
                 </gesmes:Envelope>
                 """;
 
-        RateSnapshot snapshot = provider(MediaType.TEXT_XML, stray).fetchLatest();
+        assertThatThrownBy(() -> provider(MediaType.TEXT_XML, stray).fetchLatest())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("2 rate(s) outside the dated cube");
+    }
 
-        // The strays sit AFTER the dated cube on purpose: a parser that collected every currency-bearing
-        // Cube would let them win on last-write, so this ordering is what makes the test able to fail.
-        assertThat(snapshot.asOf()).isEqualTo(LocalDate.parse("2026-08-17"));
-        assertThat(snapshot.rates()).hasSize(1).containsEntry("USD", new BigDecimal("1.1593"));
+    // The case a depth-only check waves through: the stray sits at the SAME nesting level as the real
+    // rates, just under an undated sibling branch rather than under the dated cube. Reading position as
+    // "depth 3" accepts it and lets 999 win on last-write; reading it as "child of the dated cube"
+    // does not. This is also the case that proves leave() resets the ancestry when the dated cube
+    // closes — a stale datedCubeDepth would make the stray look enclosed.
+    @Test
+    void fetchLatest_rateUnderAnUndatedSibling_throws() {
+        String sibling =
+                """
+                <gesmes:Envelope xmlns:gesmes="http://www.gesmes.org/xml/2002-08-01">
+                  <Cube>
+                    <Cube time='2026-08-17'><Cube currency='USD' rate='1.1593'/></Cube>
+                    <Cube><Cube currency='USD' rate='999'/></Cube>
+                  </Cube>
+                </gesmes:Envelope>
+                """;
+
+        assertThatThrownBy(() -> provider(MediaType.TEXT_XML, sibling).fetchLatest())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("1 rate(s) outside the dated cube");
+    }
+
+    // A rate hanging off the envelope, enclosed by nothing at all.
+    @Test
+    void fetchLatest_rateOutsideTheWrapper_throws() {
+        String after =
+                """
+                <gesmes:Envelope xmlns:gesmes="http://www.gesmes.org/xml/2002-08-01">
+                  <Cube>
+                    <Cube time='2026-08-17'><Cube currency='USD' rate='1.1593'/></Cube>
+                  </Cube>
+                  <Cube currency='USD' rate='999'/>
+                </gesmes:Envelope>
+                """;
+
+        assertThatThrownBy(() -> provider(MediaType.TEXT_XML, after).fetchLatest())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("outside the dated cube");
+    }
+
+    // Counting only <Cube> depth would make this rate look like a direct child: the intervening
+    // element is invisible to a cube-only counter, so the grandchild presents itself at the child's
+    // depth. Depth counts every element for exactly this reason.
+    @Test
+    void fetchLatest_rateNestedUnderAForeignElement_throws() {
+        String nested =
+                """
+                <gesmes:Envelope xmlns:gesmes="http://www.gesmes.org/xml/2002-08-01">
+                  <Cube>
+                    <Cube time='2026-08-17'>
+                      <Cube currency='USD' rate='1.1593'/>
+                      <Wrapper><Cube currency='USD' rate='999'/></Wrapper>
+                    </Cube>
+                  </Cube>
+                </gesmes:Envelope>
+                """;
+
+        assertThatThrownBy(() -> provider(MediaType.TEXT_XML, nested).fetchLatest())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("1 rate(s) outside the dated cube");
     }
 
     @Test
@@ -120,6 +180,28 @@ class EcbRateSourceTest {
         assertThatThrownBy(() -> provider(MediaType.TEXT_XML, noDate).fetchLatest())
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("publication date");
+    }
+
+    // Deliberately lenient, and pinned so it stays a decision. The dated cube normally sits under an
+    // outer wrapper; a document without one is off-schema, but its single date and its own direct rate
+    // children still hold the invariant that matters — every rate belongs to the date it is filed
+    // under. Rejecting it would throw away correct data to enforce a shape, which is the opposite of
+    // what the stray-rate check is for.
+    @Test
+    void fetchLatest_datedCubeWithoutTheOuterWrapper_isAccepted() {
+        String noWrapper =
+                """
+                <gesmes:Envelope xmlns:gesmes="http://www.gesmes.org/xml/2002-08-01">
+                  <Cube time='2026-08-17'>
+                    <Cube currency='USD' rate='1.1593'/>
+                  </Cube>
+                </gesmes:Envelope>
+                """;
+
+        RateSnapshot snapshot = provider(MediaType.TEXT_XML, noWrapper).fetchLatest();
+
+        assertThat(snapshot.asOf()).isEqualTo(LocalDate.parse("2026-08-17"));
+        assertThat(snapshot.rates()).hasSize(1).containsEntry("USD", new BigDecimal("1.1593"));
     }
 
     // An outage answered by a captive portal or an error page is HTML, not XML — it must fail loudly

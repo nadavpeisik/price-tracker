@@ -44,10 +44,6 @@ public class EcbRateSource implements FxRateSource {
     private static final String SOURCE_NAME = "ecb";
     /** The feed nests {@code <Cube>} three deep: wrapper, one per day, one per currency. */
     private static final String CUBE = "Cube";
-    /** Depths of the two {@code <Cube>} kinds carrying data; the wrapper at depth 1 carries none. */
-    private static final int DATED_CUBE_DEPTH = 2;
-
-    private static final int RATE_CUBE_DEPTH = 3;
 
     private final RestClient restClient;
     private final String url;
@@ -86,11 +82,11 @@ public class EcbRateSource implements FxRateSource {
      * off: this is remote XML, and an ECB outage answered by a captive portal or a hijacked response
      * must not be able to talk the parser into fetching anything.
      *
-     * <p>Position is part of the contract, not just the element name. A {@code <Cube>} means different
-     * things at different depths, so a rate is read only from inside the dated cube. Otherwise a
-     * document that merely contained rate elements somewhere would yield a snapshot assembled from
-     * whatever was lying around, and nothing downstream would object: a stray rate is positive and
-     * plausible, which is all {@code FailoverRateProvider} inspects.
+     * <p>Ancestry is part of the contract, not just the element name. A {@code <Cube>} means different
+     * things depending on what encloses it, so a rate counts only as a direct child of the cube that
+     * carries the date — not merely at the same nesting level, which an undated sibling branch also
+     * reaches. Nothing downstream could tell the difference: a rate lying loose in the document is
+     * positive and plausible, which is all {@code FailoverRateProvider} inspects.
      */
     private static RateSnapshot parse(String xml) {
         DailyCubes cubes = readCubes(xml);
@@ -108,6 +104,13 @@ public class EcbRateSource implements FxRateSource {
             throw new IllegalStateException("ecb payload carried " + cubes.datedCubes
                     + " publication dates — expected the daily feed, which carries exactly one");
         }
+        // Refused rather than skipped, for the same reason: a document with rates outside the dated
+        // block is not the daily feed, and quietly keeping the subset that looked right would be the
+        // guess this parser exists to avoid.
+        if (cubes.strayRates > 0) {
+            throw new IllegalStateException("ecb payload carried " + cubes.strayRates
+                    + " rate(s) outside the dated cube — expected the daily feed's single dated block");
+        }
         return new RateSnapshot(cubes.asOf, cubes.rates);
     }
 
@@ -123,16 +126,22 @@ public class EcbRateSource implements FxRateSource {
         // needs the finally below.
         try (StringReader in = new StringReader(xml)) {
             reader = factory.createXMLStreamReader(in);
+            // Depth counts EVERY element, not just cubes: counting only cubes would let an intervening
+            // foreign element vanish, so a grandchild of the dated cube would present itself at the
+            // depth of a direct child and be read as a rate.
             int depth = 0;
             while (reader.hasNext()) {
                 int event = reader.next();
-                if (!isCube(reader, event)) {
-                    continue;
-                }
-                if (event == XMLStreamConstants.END_ELEMENT) {
+                if (event == XMLStreamConstants.START_ELEMENT) {
+                    depth++;
+                    if (CUBE.equals(reader.getLocalName())) {
+                        cubes.enter(reader, depth);
+                    }
+                } else if (event == XMLStreamConstants.END_ELEMENT) {
+                    if (CUBE.equals(reader.getLocalName())) {
+                        cubes.leave(depth);
+                    }
                     depth--;
-                } else {
-                    cubes.read(reader, ++depth);
                 }
             }
         } catch (XMLStreamException | RuntimeException e) {
@@ -143,40 +152,49 @@ public class EcbRateSource implements FxRateSource {
         return cubes;
     }
 
-    // getLocalName() throws unless the cursor sits on an element, so the event check has to come first.
-    private static boolean isCube(XMLStreamReader reader, int event) {
-        return (event == XMLStreamConstants.START_ELEMENT || event == XMLStreamConstants.END_ELEMENT)
-                && CUBE.equals(reader.getLocalName());
-    }
-
     /**
      * What one pass over the document found — mutable because a StAX pass is accumulative by nature.
      *
-     * <p>Dated cubes are counted rather than rejected on sight: judging the shape belongs in
+     * <p>Findings are counted rather than rejected on sight: judging the shape belongs in
      * {@link #parse}, outside the catch that turns any {@link RuntimeException} into "unreadable
-     * payload", because a multi-day document is perfectly readable and simply is not the one we want.
+     * payload", because a document can be perfectly readable and still not be the one we want.
      */
     private static final class DailyCubes {
 
+        /** No dated cube is open. Chosen so the child test below can never match a real depth. */
+        private static final int OUTSIDE = Integer.MIN_VALUE;
+
         private LocalDate asOf;
         private int datedCubes;
+        private int strayRates;
+        private int datedCubeDepth = OUTSIDE;
         private final Map<String, BigDecimal> rates = new HashMap<>();
 
-        void read(XMLStreamReader reader, int depth) {
-            if (depth == DATED_CUBE_DEPTH) {
-                String time = reader.getAttributeValue(null, "time");
-                if (time != null) {
-                    datedCubes++;
-                    if (asOf == null) {
-                        asOf = LocalDate.parse(time);
-                    }
+        void enter(XMLStreamReader reader, int depth) {
+            String time = reader.getAttributeValue(null, "time");
+            if (time != null) {
+                datedCubes++;
+                if (asOf == null) {
+                    asOf = LocalDate.parse(time);
                 }
-            } else if (depth == RATE_CUBE_DEPTH) {
-                String currency = reader.getAttributeValue(null, "currency");
-                String rate = reader.getAttributeValue(null, "rate");
-                if (currency != null && rate != null) {
-                    rates.put(currency, new BigDecimal(rate));
-                }
+                datedCubeDepth = depth;
+                return;
+            }
+            String currency = reader.getAttributeValue(null, "currency");
+            String rate = reader.getAttributeValue(null, "rate");
+            if (currency == null || rate == null) {
+                return; // the outer wrapper, which carries neither
+            }
+            if (depth == datedCubeDepth + 1) {
+                rates.put(currency, new BigDecimal(rate));
+            } else {
+                strayRates++;
+            }
+        }
+
+        void leave(int depth) {
+            if (depth == datedCubeDepth) {
+                datedCubeDepth = OUTSIDE;
             }
         }
     }
