@@ -91,12 +91,17 @@ public class EcbRateSource implements FxRateSource {
         int datedCubes = 0;
         Map<String, BigDecimal> rates = new HashMap<>();
         XMLStreamReader reader = null;
-        try {
-            reader = factory.createXMLStreamReader(new StringReader(xml));
+        // XMLStreamReader is not AutoCloseable (it predates the interface, and its close() throws a checked
+        // XMLStreamException), so only the StringReader can be managed here; the reader still needs the
+        // finally below.
+        try (StringReader in = new StringReader(xml)) {
+            reader = factory.createXMLStreamReader(in);
             while (reader.hasNext()) {
                 if (reader.next() != XMLStreamConstants.START_ELEMENT || !CUBE.equals(reader.getLocalName())) {
                     continue;
                 }
+                // A Cube carries either the day or a currency, never both — the if/else is that fact
+                // rather than a shortcut.
                 String time = reader.getAttributeValue(null, "time");
                 if (time != null) {
                     // Counted rather than rejected here: the shape checks belong below, outside the catch
@@ -106,12 +111,12 @@ public class EcbRateSource implements FxRateSource {
                     if (asOf == null) {
                         asOf = LocalDate.parse(time);
                     }
-                    continue;
-                }
-                String currency = reader.getAttributeValue(null, "currency");
-                String rate = reader.getAttributeValue(null, "rate");
-                if (currency != null && rate != null) {
-                    rates.put(currency, new BigDecimal(rate));
+                } else {
+                    String currency = reader.getAttributeValue(null, "currency");
+                    String rate = reader.getAttributeValue(null, "rate");
+                    if (currency != null && rate != null) {
+                        rates.put(currency, new BigDecimal(rate));
+                    }
                 }
             }
         } catch (XMLStreamException | RuntimeException e) {
