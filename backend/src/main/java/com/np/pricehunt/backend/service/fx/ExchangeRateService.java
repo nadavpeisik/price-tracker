@@ -31,7 +31,7 @@ public class ExchangeRateService {
     public static final String BASE_CURRENCY = "EUR";
 
     private final ExchangeRateRepository repository;
-    private final FrankfurterRateProvider provider;
+    private final FxRateProvider provider;
     private final Clock clock;
 
     // Volatile is sufficient: snapshot is replaced wholesale on refresh; readers see either old or new, never partial.

@@ -15,7 +15,7 @@ import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.dto.ScrapeResponse;
 import com.np.pricehunt.backend.repository.ProductRepository;
-import com.np.pricehunt.backend.service.fx.FrankfurterRateProvider;
+import com.np.pricehunt.backend.service.fx.FxRateProvider;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import java.math.BigDecimal;
@@ -96,7 +96,7 @@ class TrackAndHistoryAgreeOnPriceTest {
      * null, and nothing here converts currencies.
      */
     @MockitoBean
-    private FrankfurterRateProvider rateProvider;
+    private FxRateProvider rateProvider;
 
     private MockMvc mvc;
 

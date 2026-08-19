@@ -33,7 +33,7 @@ class ExchangeRateServiceTest {
     private ExchangeRateRepository repository;
 
     @Mock
-    private FrankfurterRateProvider provider;
+    private FxRateProvider provider;
 
     private Clock clock;
     private ExchangeRateService service;
