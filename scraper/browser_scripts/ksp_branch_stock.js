@@ -1,3 +1,4 @@
+// @ts-check
 // Ask KSP for one catalog id's per-branch stock (issue #196).
 //
 // Runs INSIDE the page (page.evaluate) rather than out-of-band, and that is the whole point:
@@ -20,6 +21,10 @@
 // Returns the parsed body, or null on a non-2xx. A wrong origin, a rejected fetch and an
 // unparseable body all throw, which the caller turns into UNKNOWN — availability degrades, the
 // price still returns.
+/**
+ * @param {{catalog: string, timeoutMs: number, expectedOrigin: string}} req
+ * @returns {Promise<object|null>} the parsed mlay body, or null on a non-2xx
+ */
 async ({ catalog, timeoutMs, expectedOrigin }) => {
   if (location.origin !== expectedOrigin) {
     throw new Error('ksp: page navigated to ' + location.origin + ', expected ' + expectedOrigin);
