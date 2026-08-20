@@ -11,10 +11,22 @@ updates:
     schedule:
       interval: weekly
     groups:
-      # One PR a week carrying every action bump, rather than one PR per action.
-      actions:
+      # Batch ONLY the safe update types. Majors are deliberately left ungrouped, which makes
+      # Dependabot open one PR per major — so a breaking one blocks nothing but itself. Grouping
+      # everything together means a single bad bump holds the whole batch hostage, including the
+      # routine minor/patch bumps queued alongside it. #201 showed it immediately: the very first
+      # Dependabot run bundled four majors (checkout/setup-node/setup-python v6→v7, cache v5→v6)
+      # into one PR, where any single failure would have stalled the other three. Majors need
+      # reading anyway and arrive rarely, so the extra PRs cost little.
+      # Note this governs VERSION updates only — `groups` defaults to applies-to: version-updates.
+      # Advisory-driven security updates are a separate flow and always get their own PRs, so no
+      # grouping here can ever delay one.
+      actions-minor:
         patterns:
           - "*"
+        update-types:
+          - minor
+          - patch
     commit-message:
       prefix: chore(ci)
 
