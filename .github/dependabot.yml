@@ -1,0 +1,23 @@
+version: 2
+
+updates:
+  # Our actions are pinned to commit SHAs (issue #199) because a git tag is a movable pointer: the
+  # owner can repoint `v6` at new code and our next run executes it, with SONAR_TOKEN and
+  # GITHUB_TOKEN in scope. Pinning removes that — and freezes us in exchange, so without this file
+  # we would never see action updates again, security fixes included. Dependabot understands SHA
+  # pins: it bumps the SHA and rewrites the trailing `# v6` comment to match.
+  - package-ecosystem: github-actions
+    directory: /  # github-actions is always rooted here; it covers all of .github/workflows
+    schedule:
+      interval: weekly
+    groups:
+      # One PR a week carrying every action bump, rather than one PR per action.
+      actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: chore(ci)
+
+  # Deliberately not covered yet, so their absence reads as a decision rather than an oversight:
+  # maven (backend), npm (frontend), and pip/uv (scraper — hash-locked via uv.lock, see #187, and
+  # Dependabot's uv support would need checking before trusting it to regenerate our exports).
