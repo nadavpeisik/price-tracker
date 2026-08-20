@@ -157,9 +157,9 @@ Base path: `/api/products`
 # Backend — uses @DataJpaTest with H2 at test scope, no Postgres required
 cd backend && ./mvnw test
 
-# Scraper
+# Scraper — installs the hash-pinned lock, not pyproject.toml (see CLAUDE.md)
 cd scraper
-pip install -e '.[dev]'
+pip install --require-hashes --only-binary=:all: -r requirements-dev.lock
 playwright install --with-deps chromium
 pytest -v
 ```

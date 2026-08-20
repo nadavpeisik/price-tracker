@@ -106,18 +106,45 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-          cache-dependency-path: scraper/pyproject.toml
+          cache-dependency-path: scraper/requirements-dev.lock
 
+      # Nothing reads pyproject.toml at install time any more, so a dependency edit with stale locks
+      # would NOT fail — it would silently build and test the old dependency tree. This is the step
+      # that makes the lock a guarantee instead of a convention (issue #187): uv lock --check proves
+      # uv.lock matches pyproject.toml, and re-exporting proves the two requirements files match
+      # uv.lock. uv is pinned to the version that generated them so a formatting change in a newer
+      # uv can't fail the diff spuriously.
+      - name: Verify scraper lockfiles are current
+        working-directory: scraper
+        run: |
+          pip install uv==0.12.5
+          # git diff ignores untracked files, so a DELETED export would be silently recreated by the
+          # re-export below and pass. Assert both are tracked first.
+          git ls-files --error-unmatch uv.lock requirements.lock requirements-dev.lock
+          uv lock --check
+          uv export --no-dev    --no-emit-project -o requirements.lock
+          uv export --extra dev --no-emit-project -o requirements-dev.lock
+          git diff --exit-code -- requirements.lock requirements-dev.lock
+
+      # From the hashed lock, not pyproject.toml — a lock only counts where installs actually use
+      # it (issue #187), otherwise CI tests one dependency tree while the image ships another. The
+      # project itself is not installed: pytest's pythonpath = ["."] puts scraper/ on sys.path, so
+      # the tests import main/models/sites directly, exactly as uvicorn does in the image.
       - name: Install scraper deps
         working-directory: scraper
-        run: pip install -e '.[dev]'
+        # Quoted: the `:all: ` in --only-binary contains a colon-space, which YAML would otherwise
+        # read as a nested mapping and fail to parse the whole workflow.
+        run: 'pip install --require-hashes --only-binary=:all: -r requirements-dev.lock'
 
       - name: Cache Playwright browsers
         id: pw-cache
         uses: actions/cache@v5
         with:
+          # Keyed on the lock: the browser build to download follows the locked playwright version.
+          # runner.arch is in the key because Chromium builds are per-architecture — without it, an
+          # ARM runner could restore an x64 cache and skip the install.
+          key: ${{ runner.os }}-${{ runner.arch }}-playwright-${{ hashFiles('scraper/requirements-dev.lock') }}
           path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('scraper/pyproject.toml') }}
 
       - name: Install Playwright OS deps
         working-directory: scraper

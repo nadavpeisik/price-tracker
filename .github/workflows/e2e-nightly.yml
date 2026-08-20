@@ -17,8 +17,13 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-          cache-dependency-path: scraper/pyproject.toml
-      - run: pip install -e '.[dev]'
+          cache-dependency-path: scraper/requirements-dev.lock
+      # Hashed lock, same as CI (issue #187) — a canary that exercises a different dependency tree
+      # than the one CI tests and the image ships would report on something nobody runs.
+      # The bare filename is correct: defaults.run.working-directory above is `scraper`, so this
+      # resolves to scraper/requirements-dev.lock. Review has twice "fixed" this to a repo-root
+      # path — don't. Quoted because `:all: ` is a colon-space, which YAML reads as a mapping.
+      - run: 'pip install --require-hashes --only-binary=:all: -r requirements-dev.lock'
       - run: playwright install --with-deps chromium
       - name: Start scraper
         id: start

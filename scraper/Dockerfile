@@ -2,30 +2,31 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Stage 1: install third-party deps from pyproject.toml. Placeholders for every only-include
-# path (main.py, models.py, sites/, browser_scripts/) are needed because hatchling requires them
-# at wheel-build time; this wheel exists only to pull in deps. The heavy chromium-download layer
-# stays cached across code changes (the real code is copied in stage 2).
-# --only-binary=:all: forbids source distributions for the third-party graph, so no downloaded
-# package can execute its own build script during the image build (docker:S8541, issue #165). The
-# build fails loudly if some future transitive ships no wheel — that is the point. Transitive
-# VERSIONS are still resolved fresh per build (docker:S8544, deliberately deferred: see #187).
-# It does NOT block the local project below: the flag filters index candidates, and an explicitly
-# given local path is still built via its PEP 517 backend. Verified by a --no-cache build (#165) —
-# review keeps predicting otherwise, so don't "fix" it with --no-binary=price-tracker-scraper.
-COPY pyproject.toml ./
-RUN mkdir -p sites browser_scripts && \
-    touch main.py models.py sites/__init__.py browser_scripts/__init__.py && \
-    pip install --no-cache-dir --only-binary=:all: . && \
-    rm -rf main.py models.py sites browser_scripts && \
+# Dependency layer, installed from a hash-pinned lock (issue #187). Two guarantees:
+#   --require-hashes     every downloaded file is verified against requirements.lock, so pip can
+#                        only install an artifact whose hash was committed — a newer or compromised
+#                        transitive cannot slip in on its own (docker:S8544). Not byte-identical
+#                        across architectures: arm64 and amd64 legitimately take different wheels
+#                        of the same locked version, both hashes being in the lock.
+#   --only-binary=:all:  wheels only, so nothing executes a build script during the image build
+#                        (docker:S8541, issue #165). Fails loudly if a package ships no wheel.
+# The lock is multi-architecture (uv resolves universally), so one file serves linux/arm64 dev
+# machines and linux/amd64 deploy targets. A per-arch lock proves nothing about the other one, and
+# with our compiled deps (uvloop, httptools, pydantic-core, …) it fails there outright.
+# Regenerate after ANY dependency change (see CLAUDE.md):
+#   uv lock && uv export --no-dev --no-emit-project -o requirements.lock
+# This layer stays cached across code changes; real source is copied below.
+COPY requirements.lock ./
+RUN pip install --no-cache-dir --require-hashes --only-binary=:all: -r requirements.lock && \
     playwright install --with-deps chromium
 
-# Stage 2: real source — only these layers invalidate on code change.
+# Real source — only these layers invalidate on code change. The project itself is deliberately
+# NOT pip-installed: uvicorn puts /app first on sys.path, so these files are imported directly.
+# (This replaced a placeholder-file trick whose only purpose was to make `pip install .` resolve
+# dependencies; installing the lock directly does that, so the trick and its build backend are gone.)
 COPY main.py models.py ./
 COPY sites ./sites
 COPY browser_scripts ./browser_scripts
-# No reinstall: uvicorn runs with app-dir "." so /app is first on sys.path and the real files
-# shadow the empty site-packages placeholders (the long-standing single-file Dockerfile pattern).
 
 EXPOSE 8001
 

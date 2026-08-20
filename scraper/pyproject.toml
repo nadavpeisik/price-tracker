@@ -1,5 +1,10 @@
 [build-system]
-requires = ["hatchling"]
+# Version-pinned so an explicit local build uses a known backend instead of whatever is current.
+# That stabilizes the backend version only — it is neither reproducible nor hash-secured: PEP 518
+# has no hash syntax, so pip downloads hatchling, and hatchling's own build deps (packaging,
+# pathspec, pluggy, tomlkit, trove-classifiers, …) still float, unverified, in the build env. It
+# rarely fires: neither the image nor CI builds this project, both install the hashed locks (#187).
+requires = ["hatchling==1.32.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -19,6 +24,23 @@ dev = [
     "pytest-cov==6.0.0",
     "ruff==0.8.4",
     "pre-commit==4.0.1",
+]
+
+[tool.uv]
+# Must match the uv pinned in ci.yml's lockfile-freshness step. Export formatting and lock schema can
+# shift between uv releases, so a developer on a newer uv would regenerate files that CI then rejects
+# as "stale" — a confusing failure with nothing actually wrong. uv refuses to run on a mismatch.
+required-version = "==0.12.5"
+
+# A partial safety net for the wheel-only install: uv enforces these environments only for packages
+# that publish NO sdist, and for those a missing arm64/amd64 wheel fails `uv lock`. A package that
+# ships an sdist but no wheel for one arch still locks fine and only breaks at image-build time — so
+# this narrows the blast radius, it does not prove wheel availability. The actual per-arch proof is
+# incidental but real: CI installs requirements-dev.lock (a superset of the runtime lock) on amd64
+# every run, and `docker build` exercises arm64 locally.
+required-environments = [
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "sys_platform == 'linux' and platform_machine == 'aarch64'",
 ]
 
 [tool.hatch.build.targets.wheel]
