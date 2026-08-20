@@ -32,6 +32,15 @@ class OllamaPriceExtractionServiceTest {
         }
     }
 
+    // --- PROMPT_VERSION (auto-derived prompt fingerprint) ---
+
+    @Test
+    void promptVersion_is16LowercaseHexChars() {
+        // Derived in a static initializer, so a broken derivation is a class-init failure at startup
+        // rather than a bad value. The other tests only compare it to itself; this pins the shape.
+        assertThat(OllamaPriceExtractionService.PROMPT_VERSION).hasSize(16).matches("[0-9a-f]{16}");
+    }
+
     // --- isStructuredOutputParseFailure (cause-chain predicate) ---
 
     @Test

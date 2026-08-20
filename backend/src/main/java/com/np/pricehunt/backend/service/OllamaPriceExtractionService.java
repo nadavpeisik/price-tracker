@@ -93,8 +93,9 @@ public class OllamaPriceExtractionService {
     // across the system/user boundary without changing the hash; 16 hex chars (64 bits) removes any
     // collision doubt. It fingerprints the PROMPT TEXT only — model + options are tracked separately
     // (model_name); a schema/options change is not reflected here.
-    public static final String PROMPT_VERSION = Hashing.sha256Hex("system:" + SYSTEM_PROMPT.length() + ":"
-                    + SYSTEM_PROMPT + "\nuser:" + USER_PROMPT_TEMPLATE.length() + ":" + USER_PROMPT_TEMPLATE)
+    public static final String PROMPT_VERSION = Hashing.sha256HexRequired("system:" + SYSTEM_PROMPT.length()
+                    + ":" + SYSTEM_PROMPT + "\nuser:" + USER_PROMPT_TEMPLATE.length() + ":"
+                    + USER_PROMPT_TEMPLATE)
             .substring(0, 16);
 
     private final ChatClient chatClient;
