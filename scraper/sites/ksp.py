@@ -71,6 +71,18 @@ def matches(url: str) -> bool:
     return host == _KSP_HOST or host.endswith("." + _KSP_HOST)
 
 
+def _origin_of(url: str) -> str:
+    """The URL's origin as a browser spells it (``scheme://host[:port]``), for comparing against
+    ``location.origin`` inside the page. Lowercased like a browser does; a default port is left
+    off because ``location.origin`` omits it."""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    default_port = {"http": 80, "https": 443}.get(parsed.scheme)
+    port = parsed.port
+    suffix = f":{port}" if port is not None and port != default_port else ""
+    return f"{parsed.scheme}://{host}{suffix}"
+
+
 def parse_uin(url: str) -> str | None:
     """Extract the KSP item id ("uin") from a product URL, or None if it isn't an item page."""
     match = _ITEM_PATH_RE.search(urlparse(url).path)
@@ -160,16 +172,27 @@ def parse_item_from_sse(sse_text: str, uin: str) -> SseItem | None:
 
     Keyed on the price: an event we can't read a price out of is skipped, so a later well-formed
     event still wins (malformed events are likewise skipped rather than raised).
+
+    A complete item (price *and* catalog) wins outright. Absent one, we keep the first priced item
+    as a fallback but go on reading, so a later event carrying the catalog is not thrown away just
+    for arriving second — the price is identical either way, and settling for the earlier event
+    would cost availability for no gain. Note the fallback is the FIRST such item, not the last:
+    among equally incomplete events the earliest still wins, as before (Codex adversarial review).
     """
+    fallback = None
     for block in _sse_data_blocks(sse_text):
         try:
             payload = json.loads(block)
         except (ValueError, TypeError):
             continue
         item = _item_from_event(payload, uin)
-        if item is not None:
+        if item is None:
+            continue
+        if item.catalog is not None:
             return item
-    return None
+        if fallback is None:
+            fallback = item
+    return fallback
 
 
 def _parse_qnt(raw) -> int | None:
@@ -237,29 +260,47 @@ def attach_sse_capture(page) -> asyncio.Queue[str]:
 
 
 async def _drain_item(sse_queue: asyncio.Queue[str], uin: str) -> SseItem | None:
-    """Pull SSE bodies off the queue until our uin's item is found or the deadline elapses."""
+    """Pull SSE bodies off the queue until our uin's item is found or the deadline elapses.
+
+    Mirrors parse_item_from_sse across bodies: a complete item returns at once, while a priced
+    item with no catalog is held as a fallback and we keep looking. The follow-on look is
+    deliberately non-blocking (get_nowait) — bodies already captured are free to inspect, but a
+    missing catalog is not worth waiting on the network for once we have a usable price.
+    """
     deadline = time.monotonic() + _PRICE_DEADLINE_S
+    fallback = None
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            return None
-        try:
-            body = await asyncio.wait_for(sse_queue.get(), timeout=remaining)
-        except TimeoutError:
-            return None
+            return fallback
+        if fallback is None:
+            try:
+                body = await asyncio.wait_for(sse_queue.get(), timeout=remaining)
+            except TimeoutError:
+                return None
+        else:
+            try:
+                body = sse_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return fallback
         item = parse_item_from_sse(body, uin)
-        if item is not None:
+        if item is None:
+            continue
+        if item.catalog is not None:
             return item
+        if fallback is None:
+            fallback = item
 
 
-async def _fetch_stock(page, catalog: str) -> AvailabilityStatus:
+async def _fetch_stock(page, catalog: str, expected_origin: str) -> AvailabilityStatus:
     """Best-effort branch-stock lookup. Any failure → UNKNOWN (the price still returns).
 
     Asks the page to fetch GET /m_action/api/mlay/{catalog} on our behalf — see
-    browser_scripts/ksp_branch_stock.js for why it has to be the page that asks. The response
-    carries every branch regardless of the region the shopper has picked in KSP's area-selection
-    modal: that modal only filters what the UI draws (each branch gained `region`/`region_id`
-    fields for it), so there is nothing to select before reading stock.
+    browser_scripts/ksp_branch_stock.js for why it has to be the page that asks, and why it
+    re-checks the origin instead of trusting the caller's earlier check. The response carries
+    every branch regardless of the region the shopper has picked in KSP's area-selection modal:
+    that modal only filters what the UI draws (each branch gained `region`/`region_id` fields for
+    it), so there is nothing to select before reading stock.
 
     Two timeouts on purpose: AbortSignal inside the page bounds the request, and wait_for bounds
     the evaluate itself, so a page that stops answering can't outlive the scrape either way.
@@ -267,7 +308,12 @@ async def _fetch_stock(page, catalog: str) -> AvailabilityStatus:
     try:
         payload = await asyncio.wait_for(
             page.evaluate(
-                _BRANCH_STOCK_SCRIPT, {"catalog": catalog, "timeoutMs": _STOCK_TIMEOUT_MS}
+                _BRANCH_STOCK_SCRIPT,
+                {
+                    "catalog": catalog,
+                    "timeoutMs": _STOCK_TIMEOUT_MS,
+                    "expectedOrigin": expected_origin,
+                },
             ),
             timeout=_STOCK_TIMEOUT_MS / 1000 + 1,
         )
@@ -288,17 +334,20 @@ async def extract(page, sse_queue: asyncio.Queue[str]) -> ScrapeResponse | None:
     including when the SSE payload carried no usable catalog id to look stock up by.
     """
     # Verify the FINAL page is still a KSP host — a KSP→non-KSP (open) redirect must not yield a
-    # "KSP" structured result from an off-site page (Codex diff-review).
+    # "KSP" structured result from an off-site page (Codex diff-review). The origin captured here
+    # is re-checked inside the page at fetch time, because the drain below gives the page time to
+    # navigate after this check passes (see ksp_branch_stock.js).
     if not matches(page.url):
         return None
     uin = parse_uin(page.url)
     if uin is None:
         return None
+    origin = _origin_of(page.url)
     item = await _drain_item(sse_queue, uin)
     if item is None:
         return None
     availability = (
-        await _fetch_stock(page, item.catalog)
+        await _fetch_stock(page, item.catalog, origin)
         if item.catalog is not None
         else AvailabilityStatus.UNKNOWN
     )

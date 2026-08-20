@@ -172,6 +172,48 @@ def test_catalog_strips_surrounding_whitespace():
     assert _catalog_of(_item_sse(1, 10, catalog=" 362345 "), "1") == "362345"
 
 
+def test_catalog_later_complete_event_beats_earlier_priced_one():
+    # Two events for our uin, the first without a catalog. Returning the first would cost
+    # availability for nothing — the price is identical (Codex adversarial review).
+    sse = _item_sse(1, 10, catalog=None) + _item_sse(1, 10, catalog="362345")
+    item = ksp.parse_item_from_sse(sse, "1")
+    assert item.price == 10.0
+    assert item.catalog == "362345"
+
+
+def test_catalog_unusable_in_later_event_does_not_override_earlier_price():
+    # Neither event has a usable catalog -> the FIRST priced item still wins, as it always did.
+    sse = _item_sse(1, 10, catalog=None) + _item_sse(1, 99, catalog="../evil")
+    item = ksp.parse_item_from_sse(sse, "1")
+    assert item.price == 10.0
+    assert item.catalog is None
+
+
+def test_complete_event_wins_even_when_a_priced_one_precedes_it_for_another_uin():
+    # A different uin's complete event must not satisfy our search.
+    sse = _item_sse(999, 50, catalog="111111") + _item_sse(1, 10, catalog="362345")
+    item = ksp.parse_item_from_sse(sse, "1")
+    assert (item.price, item.catalog) == (10.0, "362345")
+
+
+# --- _origin_of ------------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "url,expected",
+    [
+        ("https://ksp.co.il/web/item/1", "https://ksp.co.il"),
+        ("https://KSP.CO.IL/web/item/1", "https://ksp.co.il"),  # browsers lowercase the host
+        ("https://ksp.co.il:443/web/item/1", "https://ksp.co.il"),  # default port omitted
+        ("http://ksp.co.il:80/x", "http://ksp.co.il"),
+        ("https://ksp.co.il:8443/x", "https://ksp.co.il:8443"),  # non-default port kept
+        ("https://www.ksp.co.il/x", "https://www.ksp.co.il"),  # subdomain is a distinct origin
+    ],
+)
+def test_origin_of(url, expected):
+    # Must spell the origin exactly as the browser's location.origin does — the two are compared
+    # for string equality inside ksp_branch_stock.js.
+    assert ksp._origin_of(url) == expected
+
+
 def test_sse_data_blocks_strips_exactly_one_leading_space():
     # SSE spec: remove at most ONE leading space from a data: value (not all whitespace). Two
     # spaces -> one removed, one kept; a tab is preserved entirely.
@@ -276,6 +318,14 @@ async def page():
         browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
         try:
             ctx = await browser.new_context()
+            # Stand in for Cloudflare's clearance cookie. _make_handler refuses an mlay request
+            # that arrives without it, which is what gives these tests any grip on the property
+            # the whole approach rests on: that the request is document-initiated and credentialed.
+            # Without this a regression to `credentials: 'omit'` would keep every test green while
+            # production 403'd straight back to UNKNOWN (Codex adversarial review, #196).
+            await ctx.add_cookies(
+                [{"name": "cf_clearance", "value": "test-token", "url": "https://ksp.co.il"}]
+            )
             yield await ctx.new_page()
         finally:
             await browser.close()
@@ -292,9 +342,9 @@ def _html(*, fire_sse=True, stock_button=False):
 
 
 def _make_handler(
-    html, sse_body, mlay_body, sse_delay, redirect_to, mlay_status=200, mlay_urls=None
+    html, sse_body, mlay_body, sse_delay, redirect_to, mlay_status=200, mlay_reqs=None
 ):
-    mlay_urls = mlay_urls if mlay_urls is not None else []
+    mlay_reqs = mlay_reqs if mlay_reqs is not None else []
 
     async def handler(route):
         url = route.request.url
@@ -308,8 +358,16 @@ def _make_handler(
                     status=200, content_type="text/event-stream; charset=utf-8", body=sse_body
                 )
         elif "/m_action/api/mlay/" in url:
-            mlay_urls.append(url)
-            if mlay_body is None:
+            headers = await route.request.all_headers()
+            mlay_reqs.append({"url": url, "headers": headers})
+            # Stand in for the bot wall: no clearance cookie, no data. A fetch that stopped
+            # sending credentials would 403 here exactly as it does in production, instead of
+            # being waved through by a mock that only looks at the URL.
+            if "cf_clearance" not in headers.get("cookie", ""):
+                await route.fulfill(
+                    status=403, content_type="text/html; charset=utf-8", body="<html>403</html>"
+                )
+            elif mlay_body is None:
                 await route.abort()
             else:
                 await route.fulfill(
@@ -345,10 +403,10 @@ async def _run_extract(
     mlay_status=200,
     sse_delay=0.0,
     redirect_to=None,
-    mlay_urls=None,
+    mlay_reqs=None,
 ):
     handler = _make_handler(
-        html or _html(), sse_body, mlay_body, sse_delay, redirect_to, mlay_status, mlay_urls
+        html or _html(), sse_body, mlay_body, sse_delay, redirect_to, mlay_status, mlay_reqs
     )
     await page.route("**/*", handler)
     cap = ksp.attach_sse_capture(page)  # before goto, per the intercept-not-replay rule
@@ -388,9 +446,52 @@ async def test_extract_reports_unavailable_when_every_branch_is_empty(page):
 
 
 async def test_extract_stock_lookup_is_same_origin_and_keyed_by_catalog(page):
-    urls = []
-    await _run_extract(page, mlay_urls=urls)
-    assert urls == [f"https://ksp.co.il/m_action/api/mlay/{_CATALOG}"]
+    reqs = []
+    await _run_extract(page, mlay_reqs=reqs)
+    assert [r["url"] for r in reqs] == [f"https://ksp.co.il/m_action/api/mlay/{_CATALOG}"]
+
+
+async def test_extract_stock_request_is_document_initiated_and_credentialed(page):
+    # The reason this approach works at all is that the request goes out from the page, carrying
+    # the clearance cookie and the same-origin fetch metadata a bare replay cannot produce. Assert
+    # those properties directly — a mock that only matched the URL would stay green through a
+    # regression to `credentials: 'omit'`, which is 403 in production (Codex adversarial review).
+    reqs = []
+    result = await _run_extract(page, mlay_reqs=reqs)
+    assert result.priceData.availability is AvailabilityStatus.AVAILABLE
+    headers = reqs[0]["headers"]
+    # The clearance cookie proves it went out credentialed; the referer proves it was initiated by
+    # the document rather than replayed out-of-band. (sec-fetch-site is deliberately not asserted:
+    # Chromium does not expose it on a route-intercepted request, so an assertion on it would be
+    # testing Playwright, not us.)
+    assert "cf_clearance" in headers.get("cookie", "")
+    assert headers.get("referer", "").startswith("https://ksp.co.il/")
+
+
+async def test_fetch_stock_refuses_after_the_page_navigates_off_ksp(page):
+    # The window the origin check exists for: extract() validates page.url, then spends up to
+    # _PRICE_DEADLINE_S draining the SSE queue. A page that navigates off-site inside that window
+    # would resolve the handler's RELATIVE stock path against the attacker's origin, sending a
+    # credentialed request there and accepting its stock JSON as KSP's.
+    #
+    # Driven against _fetch_stock directly rather than racing extract() against a timed redirect:
+    # the guard is what is under test, and a timing-dependent version of this test would be the
+    # kind of test that passes for the wrong reason.
+    reqs = []
+    handler = _make_handler(_html(), _SSE_OK, _MLAY_INSTOCK, 0.0, None, mlay_reqs=reqs)
+    await page.route("**/*", handler)
+    await page.goto(_ITEM_URL, wait_until="domcontentloaded")
+
+    # Sanity: on the validated origin the lookup succeeds, so a later UNKNOWN can only come from
+    # the origin check and not from a broken fixture.
+    assert (
+        await ksp._fetch_stock(page, _CATALOG, "https://ksp.co.il") is AvailabilityStatus.AVAILABLE
+    )
+
+    await page.goto("https://evil.example/web/item/415448", wait_until="domcontentloaded")
+    reqs.clear()
+    assert await ksp._fetch_stock(page, _CATALOG, "https://ksp.co.il") is AvailabilityStatus.UNKNOWN
+    assert reqs == []  # and no request was made to ANY origin
 
 
 async def test_extract_none_when_uin_absent(page):
@@ -402,13 +503,13 @@ async def test_extract_none_when_uin_absent(page):
 async def test_extract_stock_unknown_when_catalog_missing(page):
     # No uinsql in the payload -> nothing to look stock up by -> UNKNOWN, and no request at all
     # (we must not guess a catalog id from the uin: they are different numbers).
-    urls = []
+    reqs = []
     result = await _run_extract(
-        page, sse_body=_item_sse(int(_UIN), 349, catalog=None), mlay_urls=urls
+        page, sse_body=_item_sse(int(_UIN), 349, catalog=None), mlay_reqs=reqs
     )
     assert result.priceData.price == 349.0
     assert result.priceData.availability is AvailabilityStatus.UNKNOWN
-    assert urls == []
+    assert reqs == []
 
 
 async def test_extract_stock_unknown_on_non_2xx(page):
@@ -471,6 +572,11 @@ class _RoutedBrowser:
 
     async def new_context(self, **kwargs):
         ctx = await self._real.new_context(**kwargs)
+        # Same clearance cookie the `page` fixture seeds — _make_handler 403s an mlay request
+        # without it, so these end-to-end cases need it too.
+        await ctx.add_cookies(
+            [{"name": "cf_clearance", "value": "test-token", "url": "https://ksp.co.il"}]
+        )
         await ctx.route("**/*", self._handler)
         return ctx
 
