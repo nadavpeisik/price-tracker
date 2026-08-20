@@ -90,6 +90,14 @@ jobs:
 
   build-test-scan:
     runs-on: ubuntu-latest
+    # Capability marker, NOT the token. GitHub withholds repository secrets from Dependabot-triggered
+    # and fork runs, so SONAR_TOKEN is empty there and the scan 401s — which failed the whole job on
+    # every Dependabot PR (#203-#206), making red meaningless on exactly the PRs we least want to
+    # rubber-stamp. A step-level `if:` cannot read the `secrets` context, so the availability has to
+    # be hoisted to job level; hoisting a boolean rather than the token itself keeps the token scoped
+    # to the two steps that use it instead of exposing it to Maven, pip, pytest, ruff and Playwright.
+    env:
+      HAS_SONAR_TOKEN: ${{ secrets.SONAR_TOKEN != '' }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
         with:
@@ -177,6 +185,7 @@ jobs:
       # fetch. We retry once after a short backoff before failing the job.
       - name: SonarCloud scan
         id: sonar-scan
+        if: env.HAS_SONAR_TOKEN == 'true'
         continue-on-error: true
         uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f  # v8
         env:
@@ -188,13 +197,13 @@ jobs:
           SONAR_SCANNER_JAVA_EXE_PATH: ${{ env.JAVA_HOME }}/bin/java
 
       - name: Backoff before SonarCloud retry
-        if: steps.sonar-scan.outcome == 'failure'
+        if: env.HAS_SONAR_TOKEN == 'true' && steps.sonar-scan.outcome == 'failure'
         run: |
           echo "First SonarCloud attempt failed; sleeping 30s before retry."
           sleep 30
 
       - name: SonarCloud scan (retry)
-        if: steps.sonar-scan.outcome == 'failure'
+        if: env.HAS_SONAR_TOKEN == 'true' && steps.sonar-scan.outcome == 'failure'
         uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f  # v8
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -210,6 +219,10 @@ jobs:
       # Only on push (= main; PRs already show their own gate next to the merge button). A separate
       # step rather than -Dsonar.qualitygate.wait=true on the scanner: with the continue-on-error
       # retry above, a red gate would look like a transport failure and re-run the whole analysis.
+      # Deliberately NOT guarded by HAS_SONAR_TOKEN, unlike the scans above — don't "tidy" that up.
+      # Pushes to main always have the secret, so the guard would be a no-op in normal operation;
+      # its only effect would be to make this step skip silently on the day the token goes missing,
+      # which is exactly the day the #165 alarm needs to fire. Failing loudly is the point.
       - name: SonarCloud branch quality gate (main only)
         if: github.event_name == 'push'
         uses: SonarSource/sonarqube-quality-gate-action@7a5fffe8e523c40e0c740b6bc2712ab503e52efa # v1.2.1
