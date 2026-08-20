@@ -259,30 +259,37 @@ def attach_sse_capture(page) -> asyncio.Queue[str]:
     return queue
 
 
+async def _next_sse_body(sse_queue: asyncio.Queue[str], timeout_s: float, wait: bool) -> str | None:
+    """The next captured SSE body, or None when there is nothing (more) to read.
+
+    ``wait=False`` takes only what has already been captured, so a caller that is merely hoping to
+    improve on a result it can already use never blocks on the network for it.
+    """
+    if not wait:
+        try:
+            return sse_queue.get_nowait()
+        except asyncio.QueueEmpty:
+            return None
+    try:
+        return await asyncio.wait_for(sse_queue.get(), timeout=timeout_s)
+    except TimeoutError:
+        return None
+
+
 async def _drain_item(sse_queue: asyncio.Queue[str], uin: str) -> SseItem | None:
     """Pull SSE bodies off the queue until our uin's item is found or the deadline elapses.
 
     Mirrors parse_item_from_sse across bodies: a complete item returns at once, while a priced
-    item with no catalog is held as a fallback and we keep looking. The follow-on look is
-    deliberately non-blocking (get_nowait) — bodies already captured are free to inspect, but a
-    missing catalog is not worth waiting on the network for once we have a usable price.
+    item with no catalog is held as a fallback and we keep looking. Once we hold that fallback the
+    reads stop blocking — an already-captured body is free to inspect, but a missing catalog is not
+    worth waiting on the network for when we already have a usable price.
     """
     deadline = time.monotonic() + _PRICE_DEADLINE_S
     fallback = None
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
+    while (remaining := deadline - time.monotonic()) > 0:
+        body = await _next_sse_body(sse_queue, remaining, wait=fallback is None)
+        if body is None:
             return fallback
-        if fallback is None:
-            try:
-                body = await asyncio.wait_for(sse_queue.get(), timeout=remaining)
-            except TimeoutError:
-                return None
-        else:
-            try:
-                body = sse_queue.get_nowait()
-            except asyncio.QueueEmpty:
-                return fallback
         item = parse_item_from_sse(body, uin)
         if item is None:
             continue
@@ -290,6 +297,7 @@ async def _drain_item(sse_queue: asyncio.Queue[str], uin: str) -> SseItem | None
             return item
         if fallback is None:
             fallback = item
+    return fallback
 
 
 async def _fetch_stock(page, catalog: str, expected_origin: str) -> AvailabilityStatus:
