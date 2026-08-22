@@ -299,55 +299,78 @@ _BROWSER_USER_AGENT = (
 )
 
 
+class _ChallengeSignals(NamedTuple):
+    """What the page itself says about a Cloudflare challenge. Each read is guarded separately so
+    one failing eval can't mask the others."""
+
+    denial_title: bool
+    interstitial_title: bool
+    challenge_dom: bool
+
+
+def _response_headers(response) -> dict:
+    if response is None:
+        return {}
+    try:
+        return response.headers or {}
+    except Exception:
+        return {}
+
+
+async def _challenge_signals(page) -> _ChallengeSignals:
+    try:
+        title = ((await page.title()) or "").strip().lower()
+    except Exception:
+        title = ""
+    try:
+        challenge_dom = await page.query_selector(_CHALLENGE_DOM_SELECTOR) is not None
+    except Exception:
+        challenge_dom = False
+    return _ChallengeSignals(
+        denial_title=bool(_CF_DENIAL_TITLE_RE.match(title)),
+        interstitial_title=bool(_CF_INTERSTITIAL_TITLE_RE.match(title)),
+        challenge_dom=challenge_dom,
+    )
+
+
+async def _is_aws_waf_challenge(page) -> bool:
+    # HTTP 202 with a shell setting window.gokuProps and window.awsWafCookieDomainList, neither of
+    # which appears on a normal product page.
+    try:
+        html = await page.content()
+    except Exception:
+        return False
+    return "gokuProps" in html or "awsWafCookieDomainList" in html
+
+
 async def _detect_block(page, response) -> BotWall | None:
     # First wall that matches, or None. Cloudflare reasons carry the cf-ray so a live block wave is
     # debuggable end-to-end back through Cloudflare's logs. `window._cf_chl_opt` is deliberately NOT
     # a signal: Cloudflare injects it into healthy 200 pages, and every case where it would fire is
     # already covered by the header, title, DOM or 403 rules below (issue #210).
     status = getattr(response, "status", None)
-    headers = {}
-    if response is not None:
-        try:
-            headers = response.headers or {}
-        except Exception:
-            pass
+    headers = _response_headers(response)
     cf_ray = headers.get("cf-ray") or "unknown"
-    mitigated = "challenge" in (headers.get("cf-mitigated") or "").lower()
-
-    try:
-        title = ((await page.title()) or "").strip().lower()
-    except Exception:
-        title = ""
-    denial_title = bool(_CF_DENIAL_TITLE_RE.match(title))
-    interstitial_title = bool(_CF_INTERSTITIAL_TITLE_RE.match(title))
-    try:
-        challenge_dom = await page.query_selector(_CHALLENGE_DOM_SELECTOR) is not None
-    except Exception:
-        challenge_dom = False
+    signals = await _challenge_signals(page)
 
     # Only a rendered interstitial is worth waiting out: a header-only verdict and a denial page
     # both leave nothing to watch clear, so waiting on them just burns the budget (issue #210).
-    self_resolving = (interstitial_title or challenge_dom) and not denial_title
+    self_resolving = (
+        signals.interstitial_title or signals.challenge_dom
+    ) and not signals.denial_title
 
-    if mitigated:
+    if "challenge" in (headers.get("cf-mitigated") or "").lower():
         return BotWall(f"cloudflare-managed:cf-ray={cf_ray}", self_resolving)
-    if denial_title:
+    if signals.denial_title:
         return BotWall(f"cloudflare-denied:cf-ray={cf_ray}", False)
-    if interstitial_title:
+    if signals.interstitial_title:
         return BotWall(f"cloudflare-challenge-title:cf-ray={cf_ray}", True)
-    if challenge_dom:
+    if signals.challenge_dom:
         return BotWall(f"cloudflare-challenge-dom:cf-ray={cf_ray}", True)
 
-    # AWS WAF Bot Control interstitial: HTTP 202 with a shell setting window.gokuProps and
-    # window.awsWafCookieDomainList, neither of which appears on a normal product page. Never
-    # self-resolving — its JS challenge doesn't complete in our stealth context.
-    if status == 202:
-        try:
-            html = await page.content()
-            if "gokuProps" in html or "awsWafCookieDomainList" in html:
-                return BotWall("aws-waf-challenge:status=202", False)
-        except Exception:
-            pass
+    # Never self-resolving — AWS's JS challenge doesn't complete in our stealth context.
+    if status == 202 and await _is_aws_waf_challenge(page):
+        return BotWall("aws-waf-challenge:status=202", False)
 
     # Provider-agnostic: a bare 403 on a non-Cloudflare host must not spell a Cloudflare-shaped
     # reason, so the ray is appended only when the header is actually present.
