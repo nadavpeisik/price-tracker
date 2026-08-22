@@ -39,6 +39,9 @@ class _FakeResponse:
 
 @pytest_asyncio.fixture
 async def page():
+    # Deliberately not main._BROWSER_CHANNEL: the channel only changes how anti-bot walls
+    # fingerprint us, and these tests drive set_content and route interception. The full
+    # build costs 2-5x the launch time, and this fixture is function-scoped.
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
         try:
@@ -881,15 +884,55 @@ class _FakeBrowser:
         return self._connected
 
 
+class _LaunchedBrowser:
+    """Stand-in for what chromium.launch() returns: lifespan reads version, then close()."""
+
+    version = "0.0.0.0"
+
+    async def close(self):
+        return None
+
+
 # lifespan launches a real Chromium on entry and tears it down on exit. Inside the
 # context the global browser is live and connected; after exit the finally has nulled
 # it (so a later request hits the 503 guard, and a reused process sees no stale handle).
+#
+# Also the only test that launches _BROWSER_CHANNEL for real, so it fails if the full
+# Chromium build is missing — from whatever environment runs pytest, NOT the image (CI
+# never builds scraper/Dockerfile). Re-check that resolution when bumping playwright.
 async def test_lifespan_launches_and_closes_browser():
     assert main.browser is None
     async with main.lifespan(main.app):
         assert main.browser is not None
         assert main.browser.is_connected() is True
     assert main.browser is None
+
+
+# Nothing offline can observe the channel's real effect (Cloudflare), so this just asserts
+# the kwarg reaches launch() — what fails if it is ever "simplified" away. The literal, not
+# _BROWSER_CHANNEL, which would compare the constant to itself.
+async def test_lifespan_launches_with_full_chromium_channel(monkeypatch):
+    recorded = {}
+
+    class _RecordingPlaywright:
+        def __init__(self):
+            self.chromium = self
+
+        async def launch(self, **kwargs):
+            recorded.update(kwargs)
+            return _LaunchedBrowser()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(main, "async_playwright", _RecordingPlaywright)
+    async with main.lifespan(main.app):
+        pass
+
+    assert recorded["channel"] == "chromium"
 
 
 # Pre-startup / post-shutdown window: browser is None → deterministic 503, not an
