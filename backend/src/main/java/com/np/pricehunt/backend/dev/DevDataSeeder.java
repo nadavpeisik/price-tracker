@@ -25,6 +25,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.context.annotation.Profile;
+import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -40,10 +41,15 @@ import org.springframework.transaction.annotation.Transactional;
  * listings at all — and, for the dashboard (issue #157), one case-variant shop spelling and enough
  * filler products to cross onto a second page.
  *
- * <p><b>Gating.</b> One gate — {@code @Profile("seed")} — deliberately, unlike the double-gated
- * scrape-attempt export controller: that one serves untrusted page text over HTTP at runtime, while
- * this only writes rows at startup under a profile someone has to type, and only ever deletes rows
- * carrying its own {@link #SEED_MARKER} prefix.
+ * <p><b>Two modes.</b> Under {@code seed} it replaces the demo data; under {@code seed-clean} it
+ * removes the demo data and writes nothing, which is the only way to get a dev database back to just
+ * the real tracked items — the purge otherwise runs only on a boot that immediately rewrites it
+ * (issue #212). Both together are refused: they request opposite outcomes.
+ *
+ * <p><b>Gating.</b> One gate — the profile — deliberately, unlike the double-gated scrape-attempt
+ * export controller: that one serves untrusted page text over HTTP at runtime, while this only
+ * touches rows at startup under a profile someone has to type, and only ever deletes rows carrying
+ * its own {@link #SEED_MARKER} prefix.
  *
  * <p><b>Safety around real data.</b> Exchange rates are inserted only where a {@code (quote, asOf)}
  * row is absent and only for dates at least two days old, so the startup FX refresh still runs and
@@ -53,12 +59,15 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Slf4j
 @Component
-@Profile("seed")
+@Profile({DevDataSeeder.SEED_PROFILE, DevDataSeeder.CLEAN_PROFILE})
 @RequiredArgsConstructor
 public class DevDataSeeder implements CommandLineRunner {
 
     /** Reserved description prefix: what this seeder writes, it may delete. */
     static final String SEED_MARKER = "[dev-seed] ";
+
+    static final String SEED_PROFILE = "seed";
+    static final String CLEAN_PROFILE = "seed-clean";
 
     private static final String ILS = "ILS";
     private static final String USD = "USD";
@@ -111,16 +120,32 @@ public class DevDataSeeder implements CommandLineRunner {
     private final ProductRepository productRepository;
     private final ExchangeRateRepository exchangeRateRepository;
     private final Clock clock;
+    private final Environment environment;
 
     @Override
     @Transactional
     public void run(String... args) {
+        boolean seed = environment.matchesProfiles(SEED_PROFILE);
+        boolean clean = environment.matchesProfiles(CLEAN_PROFILE);
+        if (seed && clean) {
+            throw new IllegalStateException("Profiles '" + SEED_PROFILE + "' and '" + CLEAN_PROFILE
+                    + "' are mutually exclusive — '" + SEED_PROFILE + "' rewrites exactly what '"
+                    + CLEAN_PROFILE + "' removes. Pick one.");
+        }
+
         Instant now = clock.instant();
 
         List<Product> existingSeedProducts = productRepository.findByDescriptionStartingWith(SEED_MARKER);
         if (!existingSeedProducts.isEmpty()) {
             productRepository.deleteAll(existingSeedProducts);
             productRepository.flush();
+        }
+
+        if (clean) {
+            log.info(
+                    "Dev seed cleanup complete: removed {} product(s). Seeded FX and audit rows remain — see README.",
+                    existingSeedProducts.size());
+            return;
         }
 
         int insertedRateCount = seedExchangeRates(LocalDate.ofInstant(now, ZoneOffset.UTC));

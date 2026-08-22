@@ -81,6 +81,9 @@ cd backend
 
 # …or with demo data (recommended for a first look at the dashboard):
 ./mvnw spring-boot:run -Dspring-boot.run.profiles=seed
+
+# …or remove the demo data and carry on with just your real tracked items:
+./mvnw spring-boot:run -Dspring-boot.run.profiles=seed-clean
 ```
 
 The `seed` profile writes 22 back-dated demo products (two dashboard pages)
@@ -91,6 +94,25 @@ product with no listings — plus 35 days of exchange rates. It is safe to
 re-run (it replaces only its own `[dev-seed]` rows and never deletes real
 FX data), and its `*.seed.invalid` URLs are blocklisted so the scheduler
 never scrapes them. Ollama is not needed for it.
+
+The `seed-clean` profile is the way back out (issue #212). Turning the `seed`
+profile off does **not** remove the demo data — the purge runs only on a boot
+that immediately rewrites it — so `seed-clean` performs that purge and stops,
+leaving the app running against your real tracked items. It removes the demo
+**products** with their listings and price history; three things deliberately
+survive it:
+
+- **Seeded exchange rates**, which have no provenance column and so cannot be
+  told apart from real ECB rows. They stay *operationally live*: historical
+  conversion resolves the nearest-earlier rate, so a real foreign-currency
+  listing's normalized series can be computed from a synthetic one.
+- **`scrape_attempt` rows**, an append-only evidence table designed to outlive
+  the `tracked_item` it came from.
+- **`scheduled_job_run_item` rows**, which are history of runs that really
+  happened; deleting them would desynchronise their parent run's counts.
+
+`seed` and `seed-clean` together are refused at startup — they request
+opposite outcomes.
 
 Verify it's up:
 
