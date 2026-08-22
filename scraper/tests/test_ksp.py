@@ -342,7 +342,16 @@ def _html(*, fire_sse=True, stock_button=False):
 
 
 def _make_handler(
-    html, sse_body, mlay_body, sse_delay, redirect_to, mlay_status=200, mlay_reqs=None
+    html,
+    sse_body,
+    mlay_body,
+    sse_delay,
+    redirect_to,
+    mlay_status=200,
+    mlay_reqs=None,
+    sse_status=200,
+    sse_content_type="text/event-stream; charset=utf-8",
+    sse_headers=None,
 ):
     mlay_reqs = mlay_reqs if mlay_reqs is not None else []
 
@@ -355,7 +364,10 @@ def _make_handler(
                 if sse_delay:
                     await asyncio.sleep(sse_delay)
                 await route.fulfill(
-                    status=200, content_type="text/event-stream; charset=utf-8", body=sse_body
+                    status=sse_status,
+                    content_type=sse_content_type,
+                    headers=sse_headers or {},
+                    body=sse_body,
                 )
         elif "/m_action/api/mlay/" in url:
             headers = await route.request.all_headers()
@@ -404,9 +416,21 @@ async def _run_extract(
     sse_delay=0.0,
     redirect_to=None,
     mlay_reqs=None,
+    sse_status=200,
+    sse_content_type="text/event-stream; charset=utf-8",
+    sse_headers=None,
 ):
     handler = _make_handler(
-        html or _html(), sse_body, mlay_body, sse_delay, redirect_to, mlay_status, mlay_reqs
+        html or _html(),
+        sse_body,
+        mlay_body,
+        sse_delay,
+        redirect_to,
+        mlay_status,
+        mlay_reqs,
+        sse_status,
+        sse_content_type,
+        sse_headers,
     )
     await page.route("**/*", handler)
     cap = ksp.attach_sse_capture(page)  # before goto, per the intercept-not-replay rule
@@ -544,6 +568,58 @@ async def test_extract_none_when_sse_beyond_cap(page):
     assert await _run_extract(page, sse_delay=1.5) is None
 
 
+# --- bug 4: a walled price stream is not "this item has no price" ------------------------------
+def _reply(status=200, challenged=False, body=""):
+    return ksp.PriceStreamReply(status=status, challenged=challenged, body=body)
+
+
+async def _drain(*replies, uin=_UIN):
+    q = asyncio.Queue()
+    for r in replies:
+        q.put_nowait(r)
+    return await ksp._drain_item(q, uin)
+
+
+async def test_drain_reports_refusal_on_403():
+    # The #210 bug 4 repro: Cloudflare 403s the stream and returns a challenge page. Without the
+    # status this is indistinguishable from an item that genuinely has no price.
+    outcome = await _drain(_reply(status=403, body="<html>Just a moment...</html>"))
+    assert outcome.item is None
+    assert outcome.refusal == "ksp-price-stream-refused:status=403"
+
+
+async def test_drain_reports_refusal_on_cf_mitigated_200():
+    outcome = await _drain(_reply(status=200, challenged=True, body="<html>nope</html>"))
+    assert outcome.refusal == "ksp-price-stream-refused:status=200"
+
+
+async def test_drain_price_wins_over_an_earlier_refusal():
+    # A refused reply followed by a good reconnect must still yield the price — the refusal is
+    # only ever the answer when no item was found at all.
+    outcome = await _drain(_reply(status=403), _reply(body=_SSE_OK))
+    assert outcome.item.price == 349.0
+    assert outcome.refusal is None
+
+
+async def test_drain_reads_the_body_even_when_the_content_type_is_unexpected():
+    # Refusal keys on status/cf-mitigated ONLY. If a wrong content-type also skipped the body read
+    # it would guarantee item is None, and a stream KSP re-typed would take every scrape to BLOCKED
+    # with the price sitting there unparsed.
+    outcome = await _drain(_reply(status=200, body=_SSE_OK))
+    assert outcome.item.price == 349.0
+
+
+async def test_extract_returns_blocked_when_the_stream_is_refused(page):
+    result = await _run_extract(
+        page,
+        sse_status=403,
+        sse_content_type="text/html; charset=utf-8",
+        sse_body="<html><title>Just a moment...</title></html>",
+    )
+    assert result.extractionSource is ExtractionSource.BLOCKED
+    assert result.blockedReason == "ksp-price-stream-refused:status=403"
+
+
 async def test_extract_handles_redirect_to_item(page):
     # A non-item KSP URL that 302s to /web/item/<uin>: attach-on-host + uin from final page.url.
     result = await _run_extract(page, url="https://ksp.co.il/go", redirect_to=_ITEM_URL)
@@ -638,20 +714,43 @@ async def _scrape_with_ksp_extract(monkeypatch, fake_extract):
             await real.close()
 
 
-async def test_scrape_falls_back_to_generic_when_ksp_returns_none(monkeypatch):
-    # KSP item page but the handler yields no price -> scrape() falls through to the generic
-    # waterfall (not STRUCTURED) rather than returning nothing.
+async def test_scrape_blocks_when_ksp_finds_no_price(monkeypatch):
+    # #210 bug 3: a KSP item the handler can't read must NOT reach the generic waterfall — that
+    # waterfall is documented to return a wrong KSP price, and a confidently-wrong price is worse
+    # than a gap for a tracker (false drop alerts, corrupted history, passes the delta check).
     async def _none(page, queue):
         return None
 
     result = await _scrape_with_ksp_extract(monkeypatch, _none)
-    assert result.extractionSource is not ExtractionSource.STRUCTURED
+    assert result.extractionSource is ExtractionSource.BLOCKED
+    assert result.blockedReason == "ksp-price-unavailable"
 
 
-async def test_scrape_falls_back_to_generic_when_ksp_raises(monkeypatch):
-    # An exception in the KSP handler must not crash the scrape — it falls through to generic.
+async def test_scrape_blocks_when_ksp_raises(monkeypatch):
+    # A handler defect must fail loudly rather than degrade into the wrong-price path. The reason
+    # carries the exception TYPE only — blockedReason reaches the API's ProblemDetail.
     async def _raise(page, queue):
         raise RuntimeError("boom")
 
     result = await _scrape_with_ksp_extract(monkeypatch, _raise)
-    assert result.extractionSource is not ExtractionSource.STRUCTURED
+    assert result.extractionSource is ExtractionSource.BLOCKED
+    assert result.blockedReason == "ksp-handler-failed:exc=RuntimeError"
+
+
+async def test_scrape_blocks_a_ksp_category_page(monkeypatch):
+    # The case that motivated gating on the host rather than the item path: a tracked item whose
+    # URL now lands on a category page (deleted/discontinued product) would otherwise skip the
+    # handler entirely and run the carousel-price waterfall on ksp.co.il.
+    import main
+
+    handler = _make_handler(_html(), _SSE_OK, _MLAY_INSTOCK, 0.0, None)
+    async with async_playwright() as p:
+        real = await p.chromium.launch(headless=True, args=["--no-sandbox"])
+        monkeypatch.setattr(main, "browser", _RoutedBrowser(real, handler))
+        try:
+            result = await main.scrape(main.ScrapeRequest(url="https://ksp.co.il/web/cat/573"))
+        finally:
+            await real.close()
+
+    assert result.extractionSource is ExtractionSource.BLOCKED
+    assert result.blockedReason == "ksp-price-unavailable"
