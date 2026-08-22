@@ -184,7 +184,7 @@ class DevDataSeederCleanupTest {
                 .build();
         product.getTrackedItems().add(item);
 
-        PriceRecord record = PriceRecord.builder()
+        PriceRecord priceRecord = PriceRecord.builder()
                 .price(new BigDecimal("99.9900"))
                 .currency("ILS")
                 .availability(AvailabilityStatus.AVAILABLE)
@@ -192,7 +192,7 @@ class DevDataSeederCleanupTest {
                 .timestamp(NOW)
                 .trackedItem(item)
                 .build();
-        item.getPriceHistory().add(record);
+        item.getPriceHistory().add(priceRecord);
 
         return productRepository.save(product).getId();
     }
