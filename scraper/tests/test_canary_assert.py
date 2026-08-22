@@ -73,8 +73,29 @@ def test_main_non_object_json_fails(monkeypatch):
 
 
 def test_main_blocked_passes_end_to_end(monkeypatch):
-    raw = json.dumps({"extractionSource": "blocked", "blockedReason": "x"})
+    raw = json.dumps(
+        {"extractionSource": "blocked", "blockedReason": "cloudflare-managed:cf-ray=abc-IAD"}
+    )
     assert _run_main(monkeypatch, raw, ["--name", "string6"]) == 0
+
+
+def test_aws_waf_block_is_environmental(monkeypatch):
+    raw = json.dumps(
+        {"extractionSource": "blocked", "blockedReason": "aws-waf-challenge:status=202"}
+    )
+    assert _run_main(monkeypatch, raw, ["--name", "amazon"]) == 0
+
+
+def test_plain_403_block_is_fatal(monkeypatch):
+    # #210 added bare-403 detection. Such a canary used to fail RED by falling through to a
+    # non-structured tier; it must not become green-with-warning now that it reports as blocked.
+    raw = json.dumps({"extractionSource": "blocked", "blockedReason": "http-403"})
+    assert _run_main(monkeypatch, raw, ["--name", "string6"]) == 1
+
+
+def test_ksp_extraction_failure_block_is_fatal(monkeypatch):
+    raw = json.dumps({"extractionSource": "blocked", "blockedReason": "ksp-price-unavailable"})
+    assert _run_main(monkeypatch, raw, ["--name", "ksp"]) == 1
 
 
 def test_main_defaults_expect_source_to_structured(monkeypatch):

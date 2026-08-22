@@ -538,9 +538,9 @@ async def test_strip_preserves_non_numeric_strikethrough(page):
     assert "79.00" in snippet
 
 
-# Bot-wall detection — saved Cloudflare managed-challenge fixture. Confirms both
-# the title check and the _cf_chl_opt presence check fire, and that the reason
-# carries the cf-ray from the response headers when available.
+# Bot-wall detection — saved Cloudflare managed-challenge fixture (403 + cf-mitigated + challenge
+# title + #challenge-stage). Self-resolving: a rendered interstitial is the one thing worth waiting
+# out. The reason carries the cf-ray so a live block wave is traceable back through Cloudflare.
 async def test_detect_cloudflare_challenge_html(page):
     html = (_FIXTURES / "cloudflare_challenge.html").read_text()
     await page.set_content(html)
@@ -551,10 +551,60 @@ async def test_detect_cloudflare_challenge_html(page):
             "cf-ray": "9fcfc0abcd123456-TLV",
         },
     )
-    blocked, reason = await _detect_block(page, response)
-    assert blocked is True
-    assert reason is not None
-    assert "9fcfc0abcd123456-TLV" in reason
+    wall = await _detect_block(page, response)
+    assert wall is not None
+    assert wall.self_resolving is True
+    assert "9fcfc0abcd123456-TLV" in wall.reason
+
+
+# cf-mitigated on a NON-403 status must still block — the header is authoritative regardless of
+# status. Not self-resolving: no interstitial is rendered, so there is nothing to watch clear.
+async def test_detect_cf_mitigated_on_200_blocks_without_waiting(page):
+    await page.set_content("<html><head><title>KSP</title></head><body>x</body></html>")
+    response = _FakeResponse(status=200, headers={"cf-mitigated": "challenge"})
+    wall = await _detect_block(page, response)
+    assert wall is not None
+    assert wall.self_resolving is False
+
+
+# The #210 regression: Cloudflare injects _cf_chl_opt into healthy 200 pages, so its presence must
+# not block. Real product content, real title, no challenge markers.
+async def test_detect_healthy_page_with_cf_chl_opt_is_not_blocked(page):
+    html = (_FIXTURES / "cloudflare_instrumented_ok.html").read_text()
+    await page.set_content(html)
+    assert await _detect_block(page, _FakeResponse(status=200, headers={})) is None
+
+
+# A page whose title merely STARTS WITH the interstitial title is an ordinary product page. Pins
+# the whole-title match — both the old substring check and a bare startswith would block this.
+async def test_detect_title_starting_with_challenge_phrase_is_not_blocked(page):
+    await page.set_content(
+        "<html><head><title>Just A Moment Away Gift Card</title></head>"
+        "<body><p>Price: $50</p></body></html>"
+    )
+    assert await _detect_block(page, _FakeResponse(status=200, headers={})) is None
+
+
+# Cloudflare's error-1020 firewall denial is terminal — waiting it out is the #210 bug 2 symptom
+# under a new predicate. Carries a challenge DOM node so `not denial` is genuinely under test.
+async def test_detect_cf_denial_title_never_self_resolves(page):
+    await page.set_content(
+        "<html><head><title>Attention Required! | Cloudflare</title></head>"
+        "<body><div id='challenge-stage'></div></body></html>"
+    )
+    wall = await _detect_block(page, _FakeResponse(status=403, headers={}))
+    assert wall is not None
+    assert wall.reason.startswith("cloudflare-denied")
+    assert wall.self_resolving is False
+
+
+# A challenge DOM node on a 200 is a rendered interstitial — block, and it IS worth waiting out.
+async def test_detect_challenge_dom_on_200_is_self_resolving(page):
+    await page.set_content("<html><body><div id='challenge-stage'></div></body></html>")
+    wall = await _detect_block(page, _FakeResponse(status=200, headers={}))
+    assert wall is not None
+    assert wall.reason.startswith("cloudflare-challenge-dom")
+    assert wall.self_resolving is True
 
 
 # Bot-wall detection — saved AWS WAF Bot Control challenge fixture. Status 202
@@ -566,15 +616,31 @@ async def test_detect_aws_waf_challenge_html(page):
     html = (_FIXTURES / "aws_waf_challenge.html").read_text()
     await page.set_content(html)
     response = _FakeResponse(status=202, headers={})
-    blocked, reason = await _detect_block(page, response)
-    assert blocked is True
-    assert reason is not None
-    assert reason.startswith("aws-waf-challenge")
+    wall = await _detect_block(page, response)
+    assert wall is not None
+    assert wall.reason.startswith("aws-waf-challenge")
+    assert wall.self_resolving is False
 
 
-# Bot-wall detection — normal product page must not false-positive. No CF
-# headers, no challenge title, no _cf_chl_opt — _detect_block must return
-# (False, None) so we don't BLOCK legitimate pages.
+# A bare 403 with no Cloudflare markers blocks, and its reason stays provider-agnostic — spelling
+# it cloudflare-shaped would misread in logs and scrape_attempt.failure_detail.
+async def test_detect_plain_403_blocks_with_provider_agnostic_reason(page):
+    await page.set_content("<html><head><title>Forbidden</title></head><body>no</body></html>")
+    wall = await _detect_block(page, _FakeResponse(status=403, headers={}))
+    assert wall is not None
+    assert wall.reason == "http-403"
+    assert wall.self_resolving is False
+
+
+# The post-wait confirmation calls _detect_block with response=None, so every status-based rule has
+# to tolerate its absence. The challenge fixture still blocks on its DOM/title alone.
+async def test_detect_without_response_still_sees_page_signals(page):
+    html = (_FIXTURES / "cloudflare_challenge.html").read_text()
+    await page.set_content(html)
+    assert await _detect_block(page, None) is not None
+
+
+# Bot-wall detection — normal product page must not false-positive.
 async def test_detect_normal_page_html(page):
     html = """
     <html><head><title>Soldano SLO-30 Classic | Wild Guitars</title></head>
@@ -582,9 +648,7 @@ async def test_detect_normal_page_html(page):
     """
     await page.set_content(html)
     response = _FakeResponse(status=200, headers={})
-    blocked, reason = await _detect_block(page, response)
-    assert blocked is False
-    assert reason is None
+    assert await _detect_block(page, response) is None
 
 
 # Price-signal fast-path — Tier 1 signal. JSON-LD carrying a price means the

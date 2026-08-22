@@ -4,11 +4,15 @@ Reads a `/scrape` JSON response on stdin and decides whether the canary passes.
 
 Contract (see issue #80):
 
-* ``extractionSource == "blocked"`` is an EXPECTED, non-fatal outcome. GitHub-hosted
-  runners use Azure datacenter IPs, which Cloudflare's managed challenge walls by
-  default — that is environmental, not a regression in our extraction logic. We emit a
-  GitHub ``::warning::`` annotation and exit 0 so the canary does not go red overnight
-  for a cause we cannot fix.
+* ``extractionSource == "blocked"`` is an EXPECTED, non-fatal outcome **when the reason
+  names an anti-bot wall**. GitHub-hosted runners use Azure datacenter IPs, which
+  Cloudflare's managed challenge walls by default — that is environmental, not a
+  regression in our extraction logic. We emit a GitHub ``::warning::`` annotation and
+  exit 0 so the canary does not go red overnight for a cause we cannot fix.
+* Any OTHER blocked reason is fatal. Since #210 the scraper also reports a bare
+  ``http-403`` and KSP-specific extraction failures as blocked; those used to fail the
+  canary red by falling through to a non-structured tier, and must keep doing so rather
+  than becoming green-with-warning.
 * Any other response is held to the real-regression bar and exits non-zero on a miss:
   the scrape must report the expected tier (default ``structured`` — the canary hits the
   scraper directly, which only parses a price on the structured tier) AND carry a
@@ -38,6 +42,10 @@ def _fail(message: str) -> int:
     return 1
 
 
+# Reasons naming an actual anti-bot wall — environmental on a datacenter runner IP (issue #80).
+_ENVIRONMENTAL_REASON_PREFIXES = ("cloudflare-", "aws-waf-")
+
+
 def evaluate(payload: dict, name: str, expect_source: str) -> int:
     """Return a process exit code (0 = pass) for one canary response."""
     source = payload.get("extractionSource")
@@ -48,6 +56,11 @@ def evaluate(payload: dict, name: str, expect_source: str) -> int:
             return _fail(
                 f"Canary {name} FAILED: 'blocked' with no blockedReason — anomalous "
                 f"(scraper always attaches one), treating as a regression — payload={payload}"
+            )
+        if not reason.startswith(_ENVIRONMENTAL_REASON_PREFIXES):
+            return _fail(
+                f"Canary {name} FAILED: blocked with a non-bot-wall reason ({reason}) — "
+                f"a real extraction failure, not an environmental block — payload={payload}"
             )
         _warn(f"Canary {name}: blocked by bot-wall ({reason}) — environmental, not a regression")
         return 0

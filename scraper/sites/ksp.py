@@ -231,36 +231,60 @@ def stock_status(mlay_json) -> AvailabilityStatus:
 
 
 # --- Orchestration (Playwright) --------------------------------------------------------------
-def attach_sse_capture(page) -> asyncio.Queue[str]:
-    """Capture KSP's price SSE bodies onto a queue. MUST be called before page.goto().
+
+
+class PriceStreamReply(NamedTuple):
+    """One captured response from KSP's price stream. ``body`` is None when the response arrived
+    but its body could not be read, so an unread body is never mistaken for an empty one."""
+
+    status: int
+    challenged: bool
+    body: str | None
+
+    @property
+    def refused(self) -> bool:
+        return self.challenged or self.status == 403
+
+
+def attach_sse_capture(page) -> asyncio.Queue[PriceStreamReply]:
+    """Capture KSP's price SSE replies onto a queue. MUST be called before page.goto().
 
     KSP pushes product data over POST /m_action/sse/streams during page load; we intercept the
-    page's own response (replaying it ourselves gets a Cloudflare 403). A Queue is race-free for
-    multiple/late responses — no event-clear bookkeeping. The per-request browser context is
-    closed after the scrape, which disposes this listener, so nothing accumulates across requests.
+    page's own response (replaying it ourselves gets a Cloudflare 403). Status and challenge state
+    ride along with the body so a walled stream is distinguishable from an item that has no price
+    (issue #210). A Queue is race-free for multiple/late responses, and the per-request browser
+    context is closed after the scrape, which disposes this listener.
     """
-    queue: asyncio.Queue[str] = asyncio.Queue()
+    queue: asyncio.Queue[PriceStreamReply] = asyncio.Queue()
 
     async def _on_response(response):
-        # Capture only KSP's OWN SSE responses — verify the host, not just the path, so a
-        # KSP→non-KSP redirect can't feed us a spoofed price (Codex diff-review).
-        if _SSE_URL_FRAGMENT not in response.url or not matches(response.url):
-            return
+        # Whole body guarded: this runs in Playwright's event-callback context, where an escaping
+        # exception surfaces as an unhandled event-loop error rather than anything actionable.
         try:
-            body = await response.text()
+            # Verify the host, not just the path, so a KSP→non-KSP redirect can't feed us a
+            # spoofed price (Codex diff-review).
+            if _SSE_URL_FRAGMENT not in response.url or not matches(response.url):
+                return
+            status = response.status
+            challenged = "challenge" in (response.headers.get("cf-mitigated") or "").lower()
+            try:
+                body = await response.text()
+            except Exception:
+                # Torn down mid-read. Still queue: the status is the evidence that matters.
+                logger.debug("ksp sse read failed url=%s", response.url, exc_info=True)
+                body = None
+            queue.put_nowait(PriceStreamReply(status=status, challenged=challenged, body=body))
         except Exception:
-            # Page/context torn down mid-read (Target closed / navigation). Swallow at debug — it
-            # can't crash the page, and an empty queue just means we fall back to the generic path.
-            logger.debug("ksp sse read failed url=%s", response.url, exc_info=True)
-            return
-        queue.put_nowait(body)
+            logger.debug("ksp sse capture failed", exc_info=True)
 
     page.on("response", _on_response)
     return queue
 
 
-async def _next_sse_body(sse_queue: asyncio.Queue[str], timeout_s: float, wait: bool) -> str | None:
-    """The next captured SSE body, or None when there is nothing (more) to read.
+async def _next_sse_reply(
+    sse_queue: asyncio.Queue[PriceStreamReply], timeout_s: float, wait: bool
+) -> PriceStreamReply | None:
+    """The next captured reply, or None when there is nothing (more) to read.
 
     ``wait=False`` takes only what has already been captured, so a caller that is merely hoping to
     improve on a result it can already use never blocks on the network for it.
@@ -276,28 +300,41 @@ async def _next_sse_body(sse_queue: asyncio.Queue[str], timeout_s: float, wait: 
         return None
 
 
-async def _drain_item(sse_queue: asyncio.Queue[str], uin: str) -> SseItem | None:
-    """Pull SSE bodies off the queue until our uin's item is found or the deadline elapses.
+class PriceStreamOutcome(NamedTuple):
+    """What draining the price stream produced. ``refusal`` is meaningful only when ``item`` is
+    None — a price always wins over a wall seen on some other reply."""
 
-    Mirrors parse_item_from_sse across bodies: a complete item returns at once, while a priced
-    item with no catalog is held as a fallback and we keep looking. Once we hold that fallback the
-    reads stop blocking — an already-captured body is free to inspect, but a missing catalog is not
-    worth waiting on the network for when we already have a usable price.
+    item: SseItem | None
+    refusal: str | None
+
+
+async def _drain_item(sse_queue: asyncio.Queue[PriceStreamReply], uin: str) -> PriceStreamOutcome:
+    """Pull replies off the queue until our uin's item is found or the deadline elapses.
+
+    Mirrors parse_item_from_sse across bodies: a complete item returns at once, while a priced item
+    with no catalog is held as a fallback and we keep looking. Once we hold that fallback the reads
+    stop blocking. A refused reply is recorded but does NOT stop the drain — a 403 followed by a
+    good reconnect must still yield the price.
     """
     deadline = time.monotonic() + _PRICE_DEADLINE_S
     fallback = None
+    refusal = None
     while (remaining := deadline - time.monotonic()) > 0:
-        body = await _next_sse_body(sse_queue, remaining, wait=fallback is None)
-        if body is None:
-            return fallback
-        item = parse_item_from_sse(body, uin)
+        reply = await _next_sse_reply(sse_queue, remaining, wait=fallback is None)
+        if reply is None:
+            break
+        if reply.refused and refusal is None:
+            refusal = f"ksp-price-stream-refused:status={reply.status}"
+        if reply.body is None:
+            continue
+        item = parse_item_from_sse(reply.body, uin)
         if item is None:
             continue
         if item.catalog is not None:
-            return item
+            return PriceStreamOutcome(item, None)
         if fallback is None:
             fallback = item
-    return fallback
+    return PriceStreamOutcome(fallback, None if fallback is not None else refusal)
 
 
 async def _fetch_stock(page, catalog: str, expected_origin: str) -> AvailabilityStatus:
@@ -333,27 +370,32 @@ async def _fetch_stock(page, catalog: str, expected_origin: str) -> Availability
         return AvailabilityStatus.UNKNOWN
 
 
-async def extract(page, sse_queue: asyncio.Queue[str]) -> ScrapeResponse | None:
-    """Return a STRUCTURED ScrapeResponse for a KSP item page, or None to fall back to generic.
+async def extract(page, sse_queue: asyncio.Queue[PriceStreamReply]) -> ScrapeResponse | None:
+    """A STRUCTURED ScrapeResponse for a KSP item page, a BLOCKED one when the price stream was
+    refused, or None when there is simply no price to be had.
 
-    Price first (from the SSE queue): if absent we return None *before* touching the page, so the
-    generic fallback runs on a clean page. uin is parsed from the *final* page.url so KSP→KSP
-    redirects (scheme/subdomain/legacy path) still resolve. Availability is best-effort → UNKNOWN,
-    including when the SSE payload carried no usable catalog id to look stock up by.
+    The caller never falls through to the generic waterfall on None — see main.scrape(). uin is
+    parsed from the *final* page.url so KSP→KSP redirects (scheme/subdomain/legacy path) still
+    resolve. Availability is best-effort → UNKNOWN, including when the SSE payload carried no
+    usable catalog id to look stock up by.
     """
-    # Verify the FINAL page is still a KSP host — a KSP→non-KSP (open) redirect must not yield a
-    # "KSP" structured result from an off-site page (Codex diff-review). The origin captured here
-    # is re-checked inside the page at fetch time, because the drain below gives the page time to
-    # navigate after this check passes (see ksp_branch_stock.js).
+    # A KSP→non-KSP (open) redirect must not yield a "KSP" structured result from an off-site page
+    # (Codex diff-review). The origin captured here is re-checked inside the page at fetch time,
+    # because the drain below gives the page time to navigate after this check passes.
     if not matches(page.url):
         return None
     uin = parse_uin(page.url)
     if uin is None:
         return None
     origin = _origin_of(page.url)
-    item = await _drain_item(sse_queue, uin)
-    if item is None:
+    outcome = await _drain_item(sse_queue, uin)
+    if outcome.item is None:
+        if outcome.refusal is not None:
+            return ScrapeResponse(
+                extractionSource=ExtractionSource.BLOCKED, blockedReason=outcome.refusal
+            )
         return None
+    item = outcome.item
     availability = (
         await _fetch_stock(page, item.catalog, origin)
         if item.catalog is not None

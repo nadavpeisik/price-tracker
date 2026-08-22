@@ -1,8 +1,10 @@
 import contextvars
 import logging
+import re
 import time
 import uuid
 from contextlib import asynccontextmanager
+from typing import NamedTuple
 
 from fastapi import FastAPI, HTTPException, Request
 from playwright.async_api import Browser, async_playwright
@@ -22,6 +24,8 @@ from models import (
 from sites import ksp
 
 browser: Browser | None = None
+
+logger = logging.getLogger(__name__)
 
 _correlation_id: contextvars.ContextVar[str] = contextvars.ContextVar("correlation_id", default="-")
 
@@ -105,7 +109,7 @@ _VISIBLE_TEXT_LEN_SCRIPT = load_script("visible_text_len")
 # polls: at a 500ms cadence a brief chrome-only phase (e.g. KSP's ₪499 promo banner ~250-500ms,
 # before the ₪349 product at ~750ms) can't produce two equal consecutive samples, so it can't
 # false-settle on chrome. POLL_MS also bounds how often the layout-forcing innerText read runs.
-_RENDER_WAIT_MS = 8000  # overall cap, alongside the goto (30000) / CF-wait (15000) timeouts
+_RENDER_WAIT_MS = 8000  # overall cap, alongside the goto (30000) / _CHALLENGE_WAIT_MS timeouts
 _RENDER_POLL_MS = 500
 _RENDER_STABLE_POLLS = 2
 _RENDER_MIN_CHARS = 20  # floor: never declare an empty/near-empty page settled
@@ -255,10 +259,30 @@ async def _extract_site_name(page) -> ShopNameProposal | None:
     return ShopNameProposal(name=result["name"], strong=bool(result.get("strong")))
 
 
-_CF_CHALLENGE_TITLES = (
-    "just a moment",
-    "attention required! | cloudflare",
-)
+# Whole-title matches, not prefixes: "Just a moment away gift card" starts with the interstitial
+# title and is an ordinary product page. Cloudflare ships both the ASCII and unicode ellipsis.
+_CF_INTERSTITIAL_TITLE_RE = re.compile(r"^just a moment(\.{3}|\u2026|\.)?$")
+_CF_DENIAL_TITLE_RE = re.compile(r"^attention required!\s*\|\s*cloudflare$")
+
+_CHALLENGE_DOM_SELECTOR = "#challenge-stage, #challenge-running, #challenge-form"
+
+# A managed challenge sometimes clears on its own. Bounded so the blocked path (goto 30s + this)
+# stays inside the backend's 40s read timeout.
+_CHALLENGE_WAIT_MS = 8000
+_CHALLENGE_CLEARED_JS = """() => {
+  const t = (document.title || '').trim().toLowerCase();
+  if (/^just a moment(\\.{3}|\u2026|\\.)?$/.test(t)) return false;
+  return !document.querySelector('#challenge-stage, #challenge-running, #challenge-form');
+}"""
+
+
+class BotWall(NamedTuple):
+    """A detected anti-bot wall. `self_resolving` marks a visible interstitial worth waiting out —
+    a header-only verdict, a denial page or an AWS challenge gives nothing to watch clear."""
+
+    reason: str
+    self_resolving: bool
+
 
 # Linux Chrome UA matched to the Docker container's actual OS — sending a
 # Windows/Mac UA from a Linux box creates a JA3/UA mismatch that anti-bot
@@ -270,55 +294,67 @@ _BROWSER_USER_AGENT = (
 )
 
 
-async def _detect_block(page, response) -> tuple[bool, str | None]:
-    # Checks (in order): HTTP 403 + cf-mitigated: challenge header; CF challenge
-    # page title; window._cf_chl_opt presence. Returns (True, reason) on first hit.
-    # `reason` always carries the cf-ray when we can find it, so a live block wave
-    # is debuggable end-to-end from the API response back through Cloudflare logs.
-    cf_ray = "unknown"
+async def _detect_block(page, response) -> BotWall | None:
+    # First wall that matches, or None. Cloudflare reasons carry the cf-ray so a live block wave is
+    # debuggable end-to-end back through Cloudflare's logs. `window._cf_chl_opt` is deliberately NOT
+    # a signal: Cloudflare injects it into healthy 200 pages, and every case where it would fire is
+    # already covered by the header, title, DOM or 403 rules below (issue #210).
+    status = getattr(response, "status", None)
+    headers = {}
     if response is not None:
         try:
-            cf_ray = response.headers.get("cf-ray", "unknown")
+            headers = response.headers or {}
         except Exception:
             pass
-
-    if response is not None and getattr(response, "status", None) == 403:
-        try:
-            mitigated = (response.headers.get("cf-mitigated", "") or "").lower()
-            if "challenge" in mitigated:
-                return True, f"cloudflare-managed:cf-ray={cf_ray}"
-        except Exception:
-            pass
+    cf_ray = headers.get("cf-ray") or "unknown"
+    mitigated = "challenge" in (headers.get("cf-mitigated") or "").lower()
 
     try:
         title = ((await page.title()) or "").strip().lower()
-        if any(title.startswith(t) or t in title for t in _CF_CHALLENGE_TITLES):
-            return True, f"cloudflare-challenge-title:cf-ray={cf_ray}"
     except Exception:
-        pass
-
+        title = ""
+    denial_title = bool(_CF_DENIAL_TITLE_RE.match(title))
+    interstitial_title = bool(_CF_INTERSTITIAL_TITLE_RE.match(title))
     try:
-        has_cf_chl = await page.evaluate("() => typeof window._cf_chl_opt !== 'undefined'")
-        if has_cf_chl:
-            return True, f"cloudflare-managed:_cf_chl_opt-present:cf-ray={cf_ray}"
+        challenge_dom = await page.query_selector(_CHALLENGE_DOM_SELECTOR) is not None
     except Exception:
-        pass
+        challenge_dom = False
 
-    # AWS WAF Bot Control / Captcha challenge interstitial. Served as HTTP 202
-    # with a ~2 KB shell that sets window.gokuProps and window.awsWafCookieDomainList
-    # — both are AWS-internal identifiers, neither appears on normal product pages
-    # (verified against thomann.de, google.com, and a 200-served Amazon PDP).
-    # No retry/wait loop like the CF case: AWS's JS challenge mints aws-waf-token
-    # via heavy obfuscated code that doesn't complete in our stealth context.
-    if response is not None and getattr(response, "status", None) == 202:
+    # Only a rendered interstitial is worth waiting out: a header-only verdict and a denial page
+    # both leave nothing to watch clear, so waiting on them just burns the budget (issue #210).
+    self_resolving = (interstitial_title or challenge_dom) and not denial_title
+
+    if mitigated:
+        return BotWall(f"cloudflare-managed:cf-ray={cf_ray}", self_resolving)
+    if denial_title:
+        return BotWall(f"cloudflare-denied:cf-ray={cf_ray}", False)
+    if interstitial_title:
+        return BotWall(f"cloudflare-challenge-title:cf-ray={cf_ray}", True)
+    if challenge_dom:
+        return BotWall(f"cloudflare-challenge-dom:cf-ray={cf_ray}", True)
+
+    # AWS WAF Bot Control interstitial: HTTP 202 with a shell setting window.gokuProps and
+    # window.awsWafCookieDomainList, neither of which appears on a normal product page. Never
+    # self-resolving — its JS challenge doesn't complete in our stealth context.
+    if status == 202:
         try:
             html = await page.content()
             if "gokuProps" in html or "awsWafCookieDomainList" in html:
-                return True, "aws-waf-challenge:status=202"
+                return BotWall("aws-waf-challenge:status=202", False)
         except Exception:
             pass
 
-    return False, None
+    # Provider-agnostic: a bare 403 on a non-Cloudflare host must not spell a Cloudflare-shaped
+    # reason, so the ray is appended only when the header is actually present.
+    if status == 403:
+        ray = f":cf-ray={cf_ray}" if headers.get("cf-ray") else ""
+        return BotWall(f"http-403{ray}", False)
+
+    return None
+
+
+def _blocked(reason: str) -> ScrapeResponse:
+    return ScrapeResponse(extractionSource=ExtractionSource.BLOCKED, blockedReason=reason)
 
 
 async def _wait_for_render(
@@ -408,66 +444,42 @@ async def scrape(request: ScrapeRequest):
 
         response = await page.goto(request.url, wait_until="domcontentloaded", timeout=30000)
 
-        # Bot-wall detection. AWS WAF challenges fail fast — their JS challenge
-        # mints aws-waf-token via heavy obfuscated code that doesn't complete in
-        # our stealth context, so waiting is pointless. CF managed challenges
-        # sometimes self-resolve in our stealth context, so we give them up to
-        # 15s before short-circuiting. Either way, BLOCKED skips tiers 1/2/3.
-        blocked, reason = await _detect_block(page, response)
-        if blocked:
-            if reason and reason.startswith("aws-waf-challenge"):
-                logging.getLogger(__name__).info(
-                    "scrape blocked url=%s reason=%s", request.url, reason
-                )
-                return ScrapeResponse(
-                    extractionSource=ExtractionSource.BLOCKED,
-                    blockedReason=reason,
-                )
-            try:
-                await page.wait_for_function(
-                    "() => !window._cf_chl_opt "
-                    "&& !document.title.toLowerCase().startsWith('just a moment')",
-                    timeout=15000,
-                )
-            except Exception:
-                # wait_for_function also throws if the challenge navigates the
-                # page on success (execution context destroyed). Re-check DOM
-                # signals before concluding we're still blocked.
-                still_blocked, _ = await _detect_block(page, None)
-                if still_blocked:
-                    logging.getLogger(__name__).info(
-                        "scrape blocked url=%s reason=%s", request.url, reason
-                    )
-                    return ScrapeResponse(
-                        extractionSource=ExtractionSource.BLOCKED,
-                        blockedReason=reason,
-                    )
+        # Bot-wall detection. Only a visible interstitial is waited out — a header-only verdict,
+        # a denial page or an AWS challenge has nothing to watch clear, so it returns immediately.
+        # The original reason is reported either way: the post-wait re-detect has no response to
+        # read the cf-ray from. BLOCKED skips tiers 1/2/3.
+        wall = await _detect_block(page, response)
+        if wall is not None:
+            if wall.self_resolving:
+                try:
+                    await page.wait_for_function(_CHALLENGE_CLEARED_JS, timeout=_CHALLENGE_WAIT_MS)
+                except Exception:
+                    pass
+                if await _detect_block(page, None) is None:
+                    wall = None
+            if wall is not None:
+                logger.info("scrape blocked url=%s reason=%s", request.url, wall.reason)
+                return _blocked(wall.reason)
 
-        # KSP handler-first (lean): KSP is a network/API extractor — it needs neither
-        # chrome-hide nor the generic render gate, so we try it right after bot-wall
-        # detection. Dispatch on the FINAL page.url host (post-redirect), so a non-KSP URL
-        # that landed on KSP is handled and a non-KSP page never runs the handler (no
-        # misleading "no price" warning). On success we return STRUCTURED before any
-        # generic work; a clean None (no price on a KSP item page) or an
-        # exception falls through to the generic waterfall — logged, so silent KSP degradation is
-        # observable.
-        if ksp.matches(page.url):
+        # KSP handler-first: KSP is a network/API extractor, so it needs neither chrome-hide nor
+        # the generic render gate. Once this branch is entered NOTHING reaches the generic
+        # waterfall — that waterfall is documented in sites/ksp.py to return a wrong KSP price
+        # (Eilat/promo/carousel), so a miss must be an honest failure, not a guess (issue #210).
+        # Either end of the request being KSP is enough: a tracked item that redirects to a KSP
+        # category page must not escape the handler, and a shortener landing on KSP must reach it.
+        if ksp.matches(request.url) or ksp.matches(page.url):
             try:
                 ksp_result = await ksp.extract(page, ksp_cap)
-                if ksp_result is not None:
-                    return ksp_result
-                logging.getLogger(__name__).warning(
-                    "ksp handler returned no price requested=%s final=%s; falling back to generic",
-                    request.url,
-                    page.url,
+            except Exception as e:
+                # type(e).__name__, never str(e): blockedReason reaches the API's ProblemDetail.
+                logger.exception("ksp handler failed requested=%s final=%s", request.url, page.url)
+                return _blocked(f"ksp-handler-failed:exc={type(e).__name__}")
+            if ksp_result is None:
+                logger.info(
+                    "ksp handler found no price requested=%s final=%s", request.url, page.url
                 )
-            except Exception:
-                logging.getLogger(__name__).warning(
-                    "ksp handler failed requested=%s final=%s; falling back",
-                    request.url,
-                    page.url,
-                    exc_info=True,
-                )
+                return _blocked("ksp-price-unavailable")
+            return ksp_result
 
         # Hide chrome (nav/footer/cookie/banner/ads) BEFORE the render-wait so the
         # stabilization signal tracks product content, not chrome that renders early and
