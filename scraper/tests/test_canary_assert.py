@@ -109,3 +109,9 @@ def test_main_honors_explicit_expect_source(monkeypatch):
     raw = json.dumps({"extractionSource": "snippet", "priceData": {"price": 10}})
     assert _run_main(monkeypatch, raw, ["--name", "x"]) == 1
     assert _run_main(monkeypatch, raw, ["--name", "x", "--expect-source", "snippet"]) == 0
+
+
+def test_non_string_reason_fails_cleanly(monkeypatch):
+    # A truthy non-string reason must exit 1 through _fail, not raise out of startswith.
+    raw = json.dumps({"extractionSource": "blocked", "blockedReason": 42})
+    assert _run_main(monkeypatch, raw, ["--name", "string6"]) == 1

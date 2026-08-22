@@ -632,6 +632,15 @@ async def test_detect_plain_403_blocks_with_provider_agnostic_reason(page):
     assert wall.self_resolving is False
 
 
+# The cf-ray suffix is appended only when the header is actually there, so pin both halves — a
+# regression that always appended ":cf-ray=unknown" would pass on the bare case alone.
+async def test_detect_plain_403_keeps_the_ray_when_present(page):
+    await page.set_content("<html><head><title>Forbidden</title></head><body>no</body></html>")
+    wall = await _detect_block(page, _FakeResponse(status=403, headers={"cf-ray": "abc123-TLV"}))
+    assert wall is not None
+    assert wall.reason == "http-403:cf-ray=abc123-TLV"
+
+
 # The post-wait confirmation calls _detect_block with response=None, so every status-based rule has
 # to tolerate its absence. The challenge fixture still blocks on its DOM/title alone.
 async def test_detect_without_response_still_sees_page_signals(page):

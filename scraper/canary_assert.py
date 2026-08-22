@@ -57,7 +57,7 @@ def evaluate(payload: dict, name: str, expect_source: str) -> int:
                 f"Canary {name} FAILED: 'blocked' with no blockedReason — anomalous "
                 f"(scraper always attaches one), treating as a regression — payload={payload}"
             )
-        if not reason.startswith(_ENVIRONMENTAL_REASON_PREFIXES):
+        if not isinstance(reason, str) or not reason.startswith(_ENVIRONMENTAL_REASON_PREFIXES):
             return _fail(
                 f"Canary {name} FAILED: blocked with a non-bot-wall reason ({reason}) — "
                 f"a real extraction failure, not an environmental block — payload={payload}"

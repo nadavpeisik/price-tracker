@@ -269,11 +269,16 @@ _CHALLENGE_DOM_SELECTOR = "#challenge-stage, #challenge-running, #challenge-form
 # A managed challenge sometimes clears on its own. Bounded so the blocked path (goto 30s + this)
 # stays inside the backend's 40s read timeout.
 _CHALLENGE_WAIT_MS = 8000
-_CHALLENGE_CLEARED_JS = """() => {
-  const t = (document.title || '').trim().toLowerCase();
-  if (/^just a moment(\\.{3}|\u2026|\\.)?$/.test(t)) return false;
-  return !document.querySelector('#challenge-stage, #challenge-running, #challenge-form');
-}"""
+
+# Built FROM the detection constants rather than repeating them: a drifting copy would let the wait
+# report "cleared" on a page _detect_block still calls a wall, or the reverse.
+_CHALLENGE_CLEARED_JS = (
+    "() => {\n"
+    "  const t = (document.title || '').trim().toLowerCase();\n"
+    f"  if (/{_CF_INTERSTITIAL_TITLE_RE.pattern}/.test(t)) return false;\n"
+    f"  return !document.querySelector('{_CHALLENGE_DOM_SELECTOR}');\n"
+    "}"
+)
 
 
 class BotWall(NamedTuple):
@@ -351,6 +356,12 @@ async def _detect_block(page, response) -> BotWall | None:
         return BotWall(f"http-403{ray}", False)
 
     return None
+
+
+def _log_safe(url: str) -> str:
+    # URLs reach us caller-supplied and only scheme-checked, so a CR/LF inside one would forge log
+    # lines (CWE-117). Strip them at the log boundary rather than trusting the caller.
+    return url.replace("\r", "").replace("\n", "")
 
 
 def _blocked(reason: str) -> ScrapeResponse:
@@ -458,7 +469,7 @@ async def scrape(request: ScrapeRequest):
                 if await _detect_block(page, None) is None:
                     wall = None
             if wall is not None:
-                logger.info("scrape blocked url=%s reason=%s", request.url, wall.reason)
+                logger.info("scrape blocked url=%s reason=%s", _log_safe(request.url), wall.reason)
                 return _blocked(wall.reason)
 
         # KSP handler-first: KSP is a network/API extractor, so it needs neither chrome-hide nor
@@ -472,11 +483,17 @@ async def scrape(request: ScrapeRequest):
                 ksp_result = await ksp.extract(page, ksp_cap)
             except Exception as e:
                 # type(e).__name__, never str(e): blockedReason reaches the API's ProblemDetail.
-                logger.exception("ksp handler failed requested=%s final=%s", request.url, page.url)
+                logger.exception(
+                    "ksp handler failed requested=%s final=%s",
+                    _log_safe(request.url),
+                    _log_safe(page.url),
+                )
                 return _blocked(f"ksp-handler-failed:exc={type(e).__name__}")
             if ksp_result is None:
                 logger.info(
-                    "ksp handler found no price requested=%s final=%s", request.url, page.url
+                    "ksp handler found no price requested=%s final=%s",
+                    _log_safe(request.url),
+                    _log_safe(page.url),
                 )
                 return _blocked("ksp-price-unavailable")
             return ksp_result
