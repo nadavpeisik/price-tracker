@@ -314,6 +314,8 @@ def _fast_ksp_timeouts(monkeypatch):
 
 @pytest_asyncio.fixture
 async def page():
+    # Every real-browser launch in this file deliberately uses the default headless shell,
+    # not the production channel — see the page fixture in test_main.py.
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
         try:

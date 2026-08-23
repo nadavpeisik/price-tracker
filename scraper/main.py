@@ -1,5 +1,6 @@
 import contextvars
 import logging
+import platform
 import re
 import time
 import uuid
@@ -114,6 +115,13 @@ _RENDER_POLL_MS = 500
 _RENDER_STABLE_POLLS = 2
 _RENDER_MIN_CHARS = 20  # floor: never declare an empty/near-empty page settled
 
+# The full Chromium build, not Playwright's default chromium-headless-shell. The shell
+# announces `"HeadlessChrome";v="145"` in its Sec-CH-UA client hints; the full build sends
+# only Chromium. Measured, and it explains the block: KSP's page loaded 200 while its
+# /m_action/* price and stock calls were refused (issue #211). Same binary
+# `playwright install chromium` already fetches, so this costs no image change.
+_BROWSER_CHANNEL = "chromium"
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -129,6 +137,11 @@ async def lifespan(app: FastAPI):
         # --no-sandbox + --disable-dev-shm-usage stay; they're container hygiene, not stealth.
         browser = await p.chromium.launch(
             headless=True,
+            # Closes one of two leaks of the same token; _BROWSER_USER_AGENT below
+            # closes the other. Sec-CH-UA is a forbidden header name, so neither JS nor
+            # the user_agent override can touch it — spoofing the UA alone leaves
+            # HeadlessChrome announced in a header we cannot forge.
+            channel=_BROWSER_CHANNEL,
             args=[
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
@@ -136,6 +149,14 @@ async def lifespan(app: FastAPI):
             ],
         )
         try:
+            # Records what was asked for: both builds report the same version, and
+            # Browser exposes no channel or executable path.
+            logger.info(
+                "browser launched channel=%s version=%s process_arch=%s",
+                _BROWSER_CHANNEL,
+                browser.version,
+                platform.machine(),
+            )
             yield
         finally:
             # Null the global before awaiting close() so a close() failure can't leave
@@ -289,10 +310,14 @@ class BotWall(NamedTuple):
     self_resolving: bool
 
 
-# Linux Chrome UA matched to the Docker container's actual OS — sending a
-# Windows/Mac UA from a Linux box creates a JA3/UA mismatch that anti-bot
-# walls fingerprint on. Pinned UA string will drift from real Chrome over
-# time; bump when CF-protected sites start blocking again.
+# Linux Chrome UA matched to the Docker container's actual OS — sending a Windows/Mac UA
+# from a Linux box creates a JA3/UA mismatch that anti-bot walls fingerprint on.
+# Never drop this override: the native UA carries the literal HeadlessChrome token, which
+# 403s the main document before any tier runs. This is the UA half of a pair —
+# _BROWSER_CHANNEL is the Sec-CH-UA half — and the token has to go from both (issue #211).
+# The version is an empirical value, NOT the binary's: 130 against a 145 Chromium is
+# deliberate, and matching them measured worse (5/8 vs 11/12 clean). Re-measure before
+# changing it; don't assume newer or matching is better.
 _BROWSER_USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
