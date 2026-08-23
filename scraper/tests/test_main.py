@@ -889,8 +889,11 @@ class _LaunchedBrowser:
 
     version = "0.0.0.0"
 
+    def __init__(self):
+        self.closed = False
+
     async def close(self):
-        return None
+        self.closed = True
 
 
 # lifespan launches a real Chromium on entry and tears it down on exit. Inside the
@@ -920,7 +923,8 @@ async def test_lifespan_launches_with_full_chromium_channel(monkeypatch):
 
         async def launch(self, **kwargs):
             recorded.update(kwargs)
-            return _LaunchedBrowser()
+            recorded["browser"] = _LaunchedBrowser()
+            return recorded["browser"]
 
         async def __aenter__(self):
             return self
@@ -933,6 +937,9 @@ async def test_lifespan_launches_with_full_chromium_channel(monkeypatch):
         pass
 
     assert recorded["channel"] == "chromium"
+    # The fake's close() is a no-op, so without this the test would still pass if
+    # lifespan's finally stopped awaiting it.
+    assert recorded["browser"].closed is True
 
 
 # Pre-startup / post-shutdown window: browser is None → deterministic 503, not an

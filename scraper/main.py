@@ -135,7 +135,9 @@ async def lifespan(app: FastAPI):
         # --no-sandbox + --disable-dev-shm-usage stay; they're container hygiene, not stealth.
         browser = await p.chromium.launch(
             headless=True,
-            # Half the fix; _BROWSER_USER_AGENT below is the other half.
+            # Works only together with _BROWSER_USER_AGENT below: this chooses the
+            # headless build, that hides the HeadlessChrome token. Either one alone is
+            # still refused.
             channel=_BROWSER_CHANNEL,
             args=[
                 "--no-sandbox",
