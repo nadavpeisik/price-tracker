@@ -937,8 +937,8 @@ async def test_lifespan_launches_with_full_chromium_channel(monkeypatch):
         pass
 
     assert recorded["channel"] == "chromium"
-    # The fake's close() is a no-op, so without this the test would still pass if
-    # lifespan's finally stopped awaiting it.
+    # The fake's close() sets the flag, so this assertion is what catches lifespan's
+    # finally no longer awaiting it.
     assert recorded["browser"].closed is True
 
 
