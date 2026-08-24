@@ -11,6 +11,7 @@ import com.np.pricehunt.backend.domain.AvailabilityStatus;
 import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.domain.ShopNameSource;
 import com.np.pricehunt.backend.dto.*;
+import com.np.pricehunt.backend.service.ProductCatalogService;
 import com.np.pricehunt.backend.service.ProductQueryService;
 import com.np.pricehunt.backend.service.ProductTrackingService;
 import com.np.pricehunt.backend.service.fx.ExchangeRateService;
@@ -40,6 +41,9 @@ class ProductControllerTest {
     private MockMvc mvc;
 
     private final ObjectMapper mapper = new ObjectMapper();
+
+    @MockitoBean
+    private ProductCatalogService catalogService;
 
     @MockitoBean
     private ProductTrackingService trackingService;
@@ -177,13 +181,13 @@ class ProductControllerTest {
     @Test
     void deleteProduct_returnsNoContent() throws Exception {
         mvc.perform(delete("/api/products/1")).andExpect(status().isNoContent());
-        verify(trackingService).deleteProduct(1L);
+        verify(catalogService).deleteProduct(1L);
     }
 
     @Test
     void deleteProduct_notFound_returns404() throws Exception {
         doThrow(new ResponseStatusException(HttpStatus.NOT_FOUND))
-                .when(trackingService)
+                .when(catalogService)
                 .deleteProduct(99L);
 
         mvc.perform(delete("/api/products/99")).andExpect(status().isNotFound());
@@ -192,13 +196,13 @@ class ProductControllerTest {
     @Test
     void deleteTrackedItem_returnsNoContent() throws Exception {
         mvc.perform(delete("/api/products/1/tracked-items/2")).andExpect(status().isNoContent());
-        verify(trackingService).deleteTrackedItem(1L, 2L);
+        verify(catalogService).deleteTrackedItem(1L, 2L);
     }
 
     @Test
     void deleteTrackedItem_wrongProduct_returns404() throws Exception {
         doThrow(new ResponseStatusException(HttpStatus.NOT_FOUND))
-                .when(trackingService)
+                .when(catalogService)
                 .deleteTrackedItem(1L, 99L);
 
         mvc.perform(delete("/api/products/1/tracked-items/99")).andExpect(status().isNotFound());
@@ -206,7 +210,7 @@ class ProductControllerTest {
 
     @Test
     void updateProduct_returnsLightweightResponse() throws Exception {
-        when(trackingService.updateProduct(eq(1L), any())).thenReturn(new ProductResponse(1L, "New Name", null));
+        when(catalogService.updateProduct(eq(1L), any())).thenReturn(new ProductResponse(1L, "New Name", null));
 
         mvc.perform(patch("/api/products/1")
                         .contentType(MediaType.APPLICATION_JSON)

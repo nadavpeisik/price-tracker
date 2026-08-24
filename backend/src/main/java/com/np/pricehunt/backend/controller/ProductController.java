@@ -1,6 +1,7 @@
 package com.np.pricehunt.backend.controller;
 
 import com.np.pricehunt.backend.dto.*;
+import com.np.pricehunt.backend.service.ProductCatalogService;
 import com.np.pricehunt.backend.service.ProductQueryService;
 import com.np.pricehunt.backend.service.ProductTrackingService;
 import com.np.pricehunt.backend.service.trend.PriceTrendService;
@@ -17,6 +18,7 @@ import org.springframework.web.bind.annotation.*;
 @RequiredArgsConstructor
 public class ProductController {
 
+    private final ProductCatalogService catalogService;
     private final ProductTrackingService trackingService;
     private final ProductQueryService queryService;
     private final PriceTrendService trendService;
@@ -24,7 +26,7 @@ public class ProductController {
 
     @PostMapping
     public ResponseEntity<CreateProductResponse> createProduct(@RequestBody CreateProductRequest request) {
-        CreateProductResponse response = trackingService.createProduct(request);
+        CreateProductResponse response = catalogService.createProduct(request);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
@@ -74,18 +76,18 @@ public class ProductController {
     @PatchMapping("/{id}")
     public ResponseEntity<ProductResponse> updateProduct(
             @PathVariable Long id, @RequestBody UpdateProductRequest request) {
-        return ResponseEntity.ok(trackingService.updateProduct(id, request));
+        return ResponseEntity.ok(catalogService.updateProduct(id, request));
     }
 
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> deleteProduct(@PathVariable Long id) {
-        trackingService.deleteProduct(id);
+        catalogService.deleteProduct(id);
         return ResponseEntity.noContent().build();
     }
 
     @DeleteMapping("/{id}/tracked-items/{itemId}")
     public ResponseEntity<Void> deleteTrackedItem(@PathVariable Long id, @PathVariable Long itemId) {
-        trackingService.deleteTrackedItem(id, itemId);
+        catalogService.deleteTrackedItem(id, itemId);
         return ResponseEntity.noContent().build();
     }
 
