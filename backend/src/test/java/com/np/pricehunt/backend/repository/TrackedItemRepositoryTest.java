@@ -177,4 +177,25 @@ class TrackedItemRepositoryTest {
         em.flush();
         return item.getId();
     }
+
+    @Test
+    void findRefreshViewByIdAndProductId_projectsTheListing() {
+        Long id = persistItem("Example", ShopNameSource.DETECTED);
+
+        assertThat(repo.findRefreshViewByIdAndProductId(id, product.getId()))
+                .get()
+                .satisfies(view -> {
+                    assertThat(view.id()).isEqualTo(id);
+                    assertThat(view.url()).startsWith("https://example.com/");
+                    assertThat(view.lastChecked()).isNull();
+                });
+    }
+
+    @Test
+    void findRefreshViewByIdAndProductId_isAbsentUnderAnotherProduct() {
+        Long id = persistItem("Example", ShopNameSource.DETECTED);
+        Product other = em.persist(Product.builder().name("Other").build());
+
+        assertThat(repo.findRefreshViewByIdAndProductId(id, other.getId())).isEmpty();
+    }
 }

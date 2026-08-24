@@ -50,6 +50,17 @@ public interface TrackedItemRepository extends JpaRepository<TrackedItem, Long> 
            """)
     List<TrackedItemRefreshView> findStaleItems(@Param("cutoff") Instant cutoff);
 
+    // Same narrow shape for a single user-driven refresh; the product filter is the ownership check,
+    // so a listing under another product reads as absent rather than as a separate 404 branch.
+    @Query(
+            """
+           SELECT new com.np.pricehunt.backend.repository.projection.TrackedItemRefreshView(t.id, t.url, t.lastChecked)
+           FROM TrackedItem t
+           WHERE t.id = :id AND t.product.id = :productId
+           """)
+    Optional<TrackedItemRefreshView> findRefreshViewByIdAndProductId(
+            @Param("id") Long id, @Param("productId") Long productId);
+
     /**
      * Every listing in the catalogue, flattened to what the dashboard's whole-set pass reads (issue
      * #146): one query, no entities, no lazy associations.

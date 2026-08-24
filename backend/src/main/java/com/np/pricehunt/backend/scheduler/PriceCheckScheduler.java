@@ -73,7 +73,7 @@ public class PriceCheckScheduler {
                     JobStatus itemStatus;
                     String itemError = null;
                     try {
-                        trackingService.scheduledRefresh(item.id());
+                        trackingService.scheduledRefresh(item);
                         itemStatus = JobStatus.SUCCESS;
                         success++;
                     } catch (Exception e) {

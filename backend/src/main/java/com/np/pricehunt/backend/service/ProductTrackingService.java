@@ -13,6 +13,7 @@ import com.np.pricehunt.backend.observability.ScrapeAttemptRecorder;
 import com.np.pricehunt.backend.repository.PriceRecordRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
+import com.np.pricehunt.backend.repository.projection.TrackedItemRefreshView;
 import com.np.pricehunt.backend.service.ratelimit.RefreshCooldownLimiter;
 import com.np.pricehunt.backend.util.WireMoney;
 import com.np.pricehunt.backend.validator.UrlValidator;
@@ -42,25 +43,19 @@ public class ProductTrackingService {
     private final UrlValidator urlValidator;
     private final PriceTrackingProperties trackingProperties;
     private final ShopNameResolver shopNameResolver;
-    // Volatile, per-process half of the refresh cooldown: catches rapid retries (incl. after a
-    // failed scrape, which never bumps DB lastChecked). The durable half is the lastChecked check
-    // below. Single-instance only, pre-Phase-2; a Redis-backed impl swaps in behind this interface.
     private final RefreshCooldownLimiter cooldownLimiter;
     private final Clock clock;
-    // Failure-first audit (issue #131). Best-effort: every call here is isolated so a recorder hiccup
-    // can never mask the real failure or convert a 502 into a 500.
+    // Best-effort audit: a recorder failure must never mask the original tracking failure.
     private final ScrapeAttemptRecorder scrapeAttemptRecorder;
-    // Price-acceptance policy (#131): returns a Rejection (code + audit detail) or null. Extracted so the
-    // rules unit-test in isolation, separate from this orchestration.
     private final PriceValidator priceValidator;
 
-    private record ItemSnapshot(Long id, String url) {}
+    // The listing whose price is about to be checked — ids and URL only, never the managed entity.
+    private record PriceCheckTarget(Long id, String url) {}
 
-    // Result of the persist transaction, surfaced so trackAndPersist can record a validation rejection
-    // AFTER the transaction closes (never a REQUIRES_NEW recorder call nested inside the template). A
-    // non-null rejection IS the rejection — no separate boolean to keep in sync; response is the usable
-    // last-known-good (rejection) or freshly-saved (accepted) price either way.
-    private record TrackPersistenceResult(TrackResponse response, PriceValidator.Rejection rejection) {}
+    // Carries the rejection outside the persistence transaction so its REQUIRES_NEW audit runs only
+    // after that transaction closes. A non-null rejection IS the rejection; the response is usable
+    // either way (last known-good on rejection, freshly saved on acceptance).
+    private record PriceCheckOutcome(TrackResponse response, PriceValidator.Rejection rejection) {}
 
     @Transactional
     public CreateProductResponse createProduct(CreateProductRequest request) {
@@ -70,75 +65,52 @@ public class ProductTrackingService {
     }
 
     public TrackResponse trackUrl(Long productId, TrackRequest request) {
-        // Guard a null body (POST with literal JSON `null`) before dereferencing request.url() — an
-        // empty body is already a 400 via Spring's message-not-readable handling.
+        // A literal JSON `null` body reaches here; an empty body is already a 400 upstream.
         if (request == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Request body is required");
         }
-        // Cheap existence check BEFORE the DNS-based validation, so a request for a non-existent product
-        // 404s without consuming a bounded DNS-resolver slot or paying resolution latency (the txn below
-        // re-checks under the managed entity).
+        // Cheap 404 before the DNS-based validation; admission re-checks under the product lock.
         if (!productRepository.existsById(productId)) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found");
         }
-        // Full validation (blocklist + SSRF + parser-differential) BEFORE storing a row, so a bad URL
-        // 400s without persisting a junk TrackedItem.
+        // Validate before admission so a rejected URL is never persisted.
         urlValidator.validate(request.url());
-        // Listing admission, serialized per product: the parent is loaded write-locked and the lock is
-        // held across the existing-URL lookup, the cap count and the insert — all DB-only work, all
-        // released before the scrape below. It replaces the plain findById rather than adding a query.
-        ItemSnapshot snapshot = transactionTemplate.execute(status -> {
+        // Serialize listing admission under the product write lock, released before any network I/O.
+        PriceCheckTarget target = transactionTemplate.execute(status -> {
             Product product = productRepository
                     .findForUpdateById(productId)
                     .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found"));
-            TrackedItem item = resolveTrackedItem(product, request);
-            return new ItemSnapshot(item.getId(), item.getUrl());
+            TrackedItem item = admitOrReuseListing(product, request);
+            return new PriceCheckTarget(item.getId(), item.getUrl());
         });
 
-        // Already validated above → skip the chokepoint re-check (revalidate=false): no double DNS lookup.
-        return trackAndPersist(snapshot.id(), snapshot.url(), false);
+        // The submitted URL was just validated; avoid a second DNS resolution.
+        return checkListingPrice(target, false);
     }
 
     public TrackResponse refreshTrackedItem(Long productId, Long itemId) {
-        // Phase 1: load + authorize the item and apply the durable (DB-persisted) cooldown.
-        ItemSnapshot snapshot = transactionTemplate.execute(status -> {
-            TrackedItem item = trackedItemRepository
-                    .findById(itemId)
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found"));
-            if (!item.getProduct().getId().equals(productId)) {
-                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found for this product");
-            }
-            ensureNotRecentlyChecked(item.getLastChecked());
-            return new ItemSnapshot(item.getId(), item.getUrl());
-        });
+        TrackedItemRefreshView item = trackedItemRepository
+                .findRefreshViewByIdAndProductId(itemId, productId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found"));
+        enforcePersistedRefreshCooldown(item.lastChecked());
 
-        // Volatile cooldown: stamped before the scrape so a failed scrape still consumes the
-        // window. Kept outside the transaction above — no DB connection is held across this check.
-        if (!cooldownLimiter.tryAcquire(snapshot.id())) {
+        // Acquired before scraping, outside any transaction; a failed scrape still consumes the cooldown.
+        if (!cooldownLimiter.tryAcquire(item.id())) {
             throw new ResponseStatusException(
                     HttpStatus.TOO_MANY_REQUESTS, "Item was refreshed recently, try again later");
         }
 
-        // revalidate=true → the SSRF chokepoint re-checks the stored URL (the cooldown is intentionally
-        // consumed first, so a would-be-blocked URL still burns the window like any failed refresh).
-        return trackAndPersist(snapshot.id(), snapshot.url(), true);
+        // Cooldown is consumed before the stored URL is validated, so a rejected refresh burns the window too.
+        return checkListingPrice(new PriceCheckTarget(item.id(), item.url()), true);
     }
 
     // System-initiated refresh: bypasses the rate-limit (the scheduler is the system, not a user).
-    public TrackResponse scheduledRefresh(Long itemId) {
-        ItemSnapshot snapshot = transactionTemplate.execute(status -> {
-            TrackedItem item = trackedItemRepository
-                    .findById(itemId)
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found"));
-            return new ItemSnapshot(item.getId(), item.getUrl());
-        });
-        return trackAndPersist(snapshot.id(), snapshot.url(), true);
+    public TrackResponse scheduledRefresh(TrackedItemRefreshView item) {
+        return checkListingPrice(new PriceCheckTarget(item.id(), item.url()), true);
     }
 
-    // Durable half of the refresh cooldown: a successful refresh persists lastChecked, which
-    // survives a restart. Rejects before any scrape. The volatile half (failed-scrape retries)
-    // is handled by cooldownLimiter in refreshTrackedItem.
-    private void ensureNotRecentlyChecked(Instant persistedLastChecked) {
+    // `lastChecked` is the restart-safe half of the cooldown; failed attempts are covered by cooldownLimiter.
+    private void enforcePersistedRefreshCooldown(Instant persistedLastChecked) {
         Instant cutoff = Instant.now(clock).minus(trackingProperties.minRefreshInterval());
         if (persistedLastChecked != null && persistedLastChecked.isAfter(cutoff)) {
             throw new ResponseStatusException(
@@ -190,27 +162,24 @@ public class ProductTrackingService {
         return new ProductResponse(product.getId(), product.getName(), product.getDescription());
     }
 
-    // Shared pipeline for all three entry points after their own auth/cooldown gating. Three short
-    // DB transactions bracket the two network calls (scrape, then LLM extract) — a transaction is
-    // never held across that I/O. Shop-name resolution is committed before price extraction, so a
-    // price failure never loses the name.
-    private TrackResponse trackAndPersist(Long itemId, String url, boolean revalidate) {
-        // Step 0 — pre-scrape validation chokepoint (refresh / scheduler paths). Rejects a blocklisted /
-        // internal / parser-differential stored URL BEFORE any downstream work (shop-name resolution,
-        // scrape, persistence). Outside any transaction — no DB connection is held across the DNS lookup.
-        // The track path already ran validate() before storing the row, so it passes revalidate=false.
-        // (The scheduler pre-skips blocklisted items, so this normally rejects only newly-internal URLs.)
-        if (revalidate) {
+    // Shared price-check pipeline behind all three entry points. Short DB transactions surround the
+    // network work (scrape, then LLM extract) — none is ever held across that I/O — and shop-name
+    // changes commit before extraction can fail.
+    private TrackResponse checkListingPrice(PriceCheckTarget target, boolean validateStoredUrl) {
+        Long itemId = target.id();
+        String url = target.url();
+
+        // Refresh paths revalidate the stored URL before any downstream work, outside a transaction
+        // because DNS resolution is network I/O.
+        if (validateStoredUrl) {
             urlValidator.validate(url);
         }
 
-        // Step 1 — pre-scrape tx: ensure a name floor (host only fills a blank) and detect whether
-        // the domain resolves to a curated row (authoritative → skip post-scrape name work).
-        // Best-effort like step 3: a name-resolution failure here must never block price tracking,
-        // so it is logged and we proceed (curatedLocked = false).
-        boolean curatedLocked = false;
+        // Commit a host-name floor before scraping. A curated mapping is authoritative and skips the
+        // post-scrape name work; resolution failure must never block price tracking.
+        boolean shopNameCurated = false;
         try {
-            curatedLocked = Boolean.TRUE.equals(transactionTemplate.execute(status -> {
+            shopNameCurated = Boolean.TRUE.equals(transactionTemplate.execute(status -> {
                 ShopNameResolver.Resolved resolved = shopNameResolver.resolve(url, null);
                 trackedItemRepository.applyShopName(itemId, resolved.name(), resolved.source());
                 return resolved.curated();
@@ -219,19 +188,15 @@ public class ProductTrackingService {
             log.warn("Pre-scrape shop-name resolution failed for url={} — proceeding without it", url, e);
         }
 
-        // Step 2 — scrape (network, no tx).
         ScrapeResponse scraped = scraperClient.scrape(url);
         if (scraped == null) {
             log.warn("Scraper returned null response for url={}", url);
         }
 
-        // Step 3 — name tx (DB only): skipped when curated-locked, the scrape failed, or no name was
-        // proposed (the step-1 floor already stands). A strong (site-level) proposal is learned into
-        // the shared mapping first, so the re-resolve promotes it to MAPPING; a weak <title> proposal
-        // stays DETECTED and is never learned. Best-effort: a name-DB failure is logged here, never
-        // aborting the price update that follows.
+        // Learn a strong (site-level) proposal before re-resolving so it promotes to MAPPING; a weak
+        // <title> proposal stays DETECTED and is never learned. Name persistence is best-effort.
         var proposal = scraped == null ? null : scraped.shopNameProposal();
-        if (!curatedLocked && proposal != null && StringUtils.hasText(proposal.name())) {
+        if (!shopNameCurated && proposal != null && StringUtils.hasText(proposal.name())) {
             try {
                 if (proposal.strong()) {
                     shopNameResolver.learn(url, proposal.name());
@@ -245,11 +210,8 @@ public class ProductTrackingService {
             }
         }
 
-        // Step 4 — price extraction (network, may call the LLM). On failure: record the scrape attempt
-        // (best-effort, OUTSIDE any tx) then rethrow the ORIGINAL exception, preserving the 502 +
-        // scheduler accounting. catch RuntimeException, NOT Throwable — a JVM Error must propagate
-        // untouched, never triggering a DB write. A null scrape is deliberately NOT recorded (no
-        // evidence to replay; already a job-run-item + the log above).
+        // Audit an extraction failure best-effort, then rethrow the original exception (preserves the
+        // 502 + scheduler accounting). A null scrape has no evidence to audit.
         PriceInfo info;
         if (scraped == null) {
             info = null;
@@ -257,16 +219,15 @@ public class ProductTrackingService {
             try {
                 info = extractionService.extractPrice(scraped);
             } catch (RuntimeException e) {
-                safeRecordExtractionFailure(itemId, url, scraped, e);
+                recordExtractionFailureBestEffort(itemId, url, scraped, e);
                 throw e;
             }
         }
 
-        // Step 5 — validate + persist in a fresh, short-lived transaction; record a rejection AFTER it
-        // closes (the REQUIRES_NEW recorder must never run nested inside the template).
-        TrackPersistenceResult outcome = persistResultInTxn(itemId, info);
+        // Persist in a short transaction; audit any rejection only after it closes.
+        PriceCheckOutcome outcome = validateAndSavePrice(itemId, info);
         if (outcome.rejection() != null && scraped != null) {
-            safeRecordValidationRejection(
+            recordValidationRejectionBestEffort(
                     itemId,
                     url,
                     scraped,
@@ -276,10 +237,9 @@ public class ProductTrackingService {
         return outcome.response();
     }
 
-    private TrackPersistenceResult persistResultInTxn(Long itemId, PriceInfo rawInfo) {
-        // Normalize once, here, so validation and persistence judge and store the SAME number. The
-        // column is numeric(19,4) and rounds on insert regardless; doing it before the checks is what
-        // stops a price of 0.00004 satisfying "price > 0" and then landing as 0.0000 (issue #175).
+    private PriceCheckOutcome validateAndSavePrice(Long itemId, PriceInfo rawInfo) {
+        // Normalize to the persistence scale before validating, so the checks judge exactly what
+        // numeric(19,4) stores — a 0.00004 must not pass "price > 0" and land as 0.0000.
         PriceInfo info = rawInfo == null
                 ? null
                 : new PriceInfo(
@@ -306,13 +266,12 @@ public class ProductTrackingService {
                             info.currency(),
                             info.extractionSource());
                 }
-                // intentional: return last known good price rather than an error, so the caller always gets a usable
-                // response. info==null means a null scrape (not a validation rejection) → rejection=null.
-                return new TrackPersistenceResult(buildTrackResponse(item.getProduct(), item, latest), rejection);
+                // Missing or rejected extraction: return the last known-good observation rather than an
+                // error. A null scrape is not a validation rejection (rejection stays null).
+                return new PriceCheckOutcome(toTrackResponse(item.getProduct(), item, latest), rejection);
             }
 
-            // Defense at the persistence boundary: availability is optional metadata, so coalesce a
-            // null to UNKNOWN before the NOT NULL write rather than relying on an upstream guarantee.
+            // Availability is optional upstream but NOT NULL in storage.
             AvailabilityStatus availability =
                     info.availability() != null ? info.availability() : AvailabilityStatus.UNKNOWN;
             PriceRecord saved = priceRecordRepository.save(PriceRecord.builder()
@@ -334,20 +293,17 @@ public class ProductTrackingService {
                     info.currency(),
                     availability);
 
-            return new TrackPersistenceResult(buildTrackResponse(item.getProduct(), item, saved), null);
+            return new PriceCheckOutcome(toTrackResponse(item.getProduct(), item, saved), null);
         });
     }
 
     /**
-     * The only request path that creates {@link TrackedItem} rows, which is why the per-product
-     * listing cap lives here — {@code DevDataSeeder} persists them directly and is deliberately
-     * outside it. Re-tracking a URL the product already has is never blocked — the cap governs
-     * admission of a <em>new</em> listing, not refreshes of an existing one.
-     *
-     * <p>Callers must hold the parent product's write lock (see {@code findForUpdateById}); without it
-     * the count and the insert are not serialized against a concurrent admission.
+     * Admits a new listing or reuses the existing one for the URL. The per-product cap applies only
+     * to admission of a new listing, never to re-tracking one the product already has. The caller
+     * must hold the parent product's write lock, or the count and the insert are not serialized
+     * against a concurrent admission.
      */
-    private TrackedItem resolveTrackedItem(Product product, TrackRequest request) {
+    private TrackedItem admitOrReuseListing(Product product, TrackRequest request) {
         return trackedItemRepository
                 .findByUrl(request.url())
                 .map(existing -> {
@@ -374,7 +330,8 @@ public class ProductTrackingService {
                 });
     }
 
-    private void safeRecordExtractionFailure(Long itemId, String url, ScrapeResponse scraped, RuntimeException cause) {
+    private void recordExtractionFailureBestEffort(
+            Long itemId, String url, ScrapeResponse scraped, RuntimeException cause) {
         try {
             scrapeAttemptRecorder.recordExtractionFailure(itemId, url, scraped, cause);
         } catch (RuntimeException recordingError) {
@@ -385,7 +342,7 @@ public class ProductTrackingService {
         }
     }
 
-    private void safeRecordValidationRejection(
+    private void recordValidationRejectionBestEffort(
             Long itemId, String url, ScrapeResponse scraped, ScrapeFailureCode code, String detail) {
         try {
             scrapeAttemptRecorder.recordValidationRejection(itemId, url, scraped, code, detail);
@@ -397,7 +354,7 @@ public class ProductTrackingService {
         }
     }
 
-    private TrackResponse buildTrackResponse(Product product, TrackedItem item, PriceRecord latest) {
+    private TrackResponse toTrackResponse(Product product, TrackedItem item, PriceRecord latest) {
         return new TrackResponse(
                 product.getId(),
                 product.getName(),

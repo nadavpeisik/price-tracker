@@ -39,7 +39,7 @@ import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 
-// Orchestration of the shop-name lifecycle inside trackAndPersist: curated short-circuit, the
+// Orchestration of the shop-name lifecycle inside checkListingPrice: curated short-circuit, the
 // strong-only learn gate, and name-before-price ordering. DB semantics of resolve/apply/upsert are
 // covered by ShopNameResolverTest / TrackedItemRepositoryTest / ShopNameMappingRepositoryTest.
 @ExtendWith(MockitoExtension.class)
