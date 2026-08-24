@@ -24,7 +24,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 import org.springframework.web.server.ResponseStatusException;
@@ -56,13 +55,6 @@ public class ProductTrackingService {
     // after that transaction closes. A non-null rejection IS the rejection; the response is usable
     // either way (last known-good on rejection, freshly saved on acceptance).
     private record PriceCheckOutcome(TrackResponse response, PriceValidator.Rejection rejection) {}
-
-    @Transactional
-    public CreateProductResponse createProduct(CreateProductRequest request) {
-        Product product =
-                productRepository.save(Product.builder().name(request.name()).build());
-        return new CreateProductResponse(product.getId(), product.getName());
-    }
 
     public TrackResponse trackUrl(Long productId, TrackRequest request) {
         // A literal JSON `null` body reaches here; an empty body is already a 400 upstream.
@@ -116,50 +108,6 @@ public class ProductTrackingService {
             throw new ResponseStatusException(
                     HttpStatus.TOO_MANY_REQUESTS, "Item was refreshed recently, try again later");
         }
-    }
-
-    @Transactional
-    public void deleteProduct(Long id) {
-        Product product = productRepository
-                .findById(id)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found"));
-        productRepository.delete(product);
-    }
-
-    @Transactional
-    public void deleteTrackedItem(Long productId, Long itemId) {
-        TrackedItem item = trackedItemRepository
-                .findById(itemId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found"));
-
-        if (!item.getProduct().getId().equals(productId)) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found for this product");
-        }
-
-        trackedItemRepository.delete(item);
-    }
-
-    @Transactional
-    public ProductResponse updateProduct(Long id, UpdateProductRequest request) {
-        if (request.name() == null && request.description() == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "At least one field is required");
-        }
-        if (request.name() != null && !StringUtils.hasText(request.name())) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Name cannot be blank");
-        }
-
-        Product product = productRepository
-                .findById(id)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found"));
-
-        if (StringUtils.hasText(request.name())) {
-            product.setName(request.name());
-        }
-        if (request.description() != null) {
-            product.setDescription(StringUtils.hasText(request.description()) ? request.description() : null);
-        }
-
-        return new ProductResponse(product.getId(), product.getName(), product.getDescription());
     }
 
     // Shared price-check pipeline behind all three entry points. Short DB transactions surround the
