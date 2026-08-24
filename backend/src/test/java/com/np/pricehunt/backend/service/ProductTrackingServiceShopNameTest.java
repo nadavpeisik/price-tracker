@@ -29,9 +29,9 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 
-// How the price-check pipeline drives ShopNameLifecycle: floor before the scrape, refinement after it
-// (fed the page's proposal and the curated flag), and name-before-price ordering. The lifecycle's own
-// choreography is covered by ShopNameLifecycleTest.
+// How the price-check pipeline drives ShopNameAssignment: URL name before the scrape, page name after
+// it unless the URL name was curated, and name-before-price ordering. The assignment's own choreography
+// is covered by ShopNameAssignmentTest.
 @ExtendWith(MockitoExtension.class)
 class ProductTrackingServiceShopNameTest {
 
@@ -62,7 +62,7 @@ class ProductTrackingServiceShopNameTest {
     private UrlValidator urlValidator;
 
     @Mock
-    private ShopNameLifecycle shopNameLifecycle;
+    private ShopNameAssignment shopNameAssignment;
 
     @Mock
     private RefreshCooldownLimiter cooldownLimiter;
@@ -84,7 +84,7 @@ class ProductTrackingServiceShopNameTest {
                 transactionTemplate,
                 urlValidator,
                 TRACKING_PROPERTIES,
-                shopNameLifecycle,
+                shopNameAssignment,
                 cooldownLimiter,
                 Clock.systemUTC(),
                 scrapeAttemptRecorder,
@@ -118,43 +118,56 @@ class ProductTrackingServiceShopNameTest {
     }
 
     @Test
-    void floorIsEstablishedBeforeTheScrape_andRefinedAfterIt_withTheCuratedFlag() {
+    void urlNameBeforeTheScrape_pageNameAfterIt() {
         ScrapeResponse scraped = scrapeWithProposal("Musikhaus Thomann", true);
-        when(shopNameLifecycle.establishFloor(1L, URL)).thenReturn(true);
+        when(shopNameAssignment.applyNameFromUrl(1L, URL)).thenReturn(false);
         when(scraperClient.scrape(URL)).thenReturn(scraped);
         when(extractionService.extractPrice(any())).thenReturn(null);
         stubPersistReadsEmpty();
 
         service.trackUrl(1L, new TrackRequest(URL));
 
-        var order = inOrder(shopNameLifecycle, scraperClient);
-        order.verify(shopNameLifecycle).establishFloor(1L, URL);
+        var order = inOrder(shopNameAssignment, scraperClient);
+        order.verify(shopNameAssignment).applyNameFromUrl(1L, URL);
         order.verify(scraperClient).scrape(URL);
-        order.verify(shopNameLifecycle).refineFromScrape(eq(1L), eq(URL), eq(scraped.shopNameProposal()), eq(true));
+        order.verify(shopNameAssignment).applyNameFromPage(1L, URL, scraped.shopNameProposal());
     }
 
     @Test
-    void nullScrape_skipsRefinement_keepsTheFloor() {
-        when(shopNameLifecycle.establishFloor(1L, URL)).thenReturn(false);
+    void curatedUrlName_wins_pageIsNeverConsulted() {
+        // Even with a strong proposal on the page, a curated mapping is final.
+        when(shopNameAssignment.applyNameFromUrl(1L, URL)).thenReturn(true);
+        when(scraperClient.scrape(URL)).thenReturn(scrapeWithProposal("Strong Site", true));
+        when(extractionService.extractPrice(any())).thenReturn(null);
+        stubPersistReadsEmpty();
+
+        service.trackUrl(1L, new TrackRequest(URL));
+
+        verify(shopNameAssignment, never()).applyNameFromPage(any(), any(), any());
+    }
+
+    @Test
+    void nullScrape_skipsThePageName_keepsTheUrlName() {
+        when(shopNameAssignment.applyNameFromUrl(1L, URL)).thenReturn(false);
         when(scraperClient.scrape(URL)).thenReturn(null);
         stubPersistReadsEmpty();
 
         service.trackUrl(1L, new TrackRequest(URL));
 
-        verify(shopNameLifecycle).establishFloor(1L, URL);
-        verify(shopNameLifecycle, never()).refineFromScrape(any(), any(), any(), anyBoolean());
+        verify(shopNameAssignment).applyNameFromUrl(1L, URL);
+        verify(shopNameAssignment, never()).applyNameFromPage(any(), any(), any());
     }
 
     @Test
-    void nameIsRefinedBeforePriceExtractionFails() {
-        when(shopNameLifecycle.establishFloor(1L, URL)).thenReturn(false);
+    void nameIsAssignedBeforePriceExtractionFails() {
+        when(shopNameAssignment.applyNameFromUrl(1L, URL)).thenReturn(false);
         when(scraperClient.scrape(URL)).thenReturn(scrapeWithProposal("Musikhaus Thomann", true));
         when(extractionService.extractPrice(any())).thenThrow(new RuntimeException("LLM blew up"));
 
         assertThatThrownBy(() -> service.trackUrl(1L, new TrackRequest(URL))).isInstanceOf(RuntimeException.class);
 
         // Both name steps ran before extraction threw — a price failure never loses the name.
-        verify(shopNameLifecycle).establishFloor(1L, URL);
-        verify(shopNameLifecycle).refineFromScrape(eq(1L), eq(URL), any(), eq(false));
+        verify(shopNameAssignment).applyNameFromUrl(1L, URL);
+        verify(shopNameAssignment).applyNameFromPage(eq(1L), eq(URL), any());
     }
 }

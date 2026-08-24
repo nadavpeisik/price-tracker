@@ -40,7 +40,7 @@ public class ProductTrackingService {
     private final TransactionTemplate transactionTemplate;
     private final UrlValidator urlValidator;
     private final PriceTrackingProperties trackingProperties;
-    private final ShopNameLifecycle shopNameLifecycle;
+    private final ShopNameAssignment shopNameAssignment;
     private final RefreshCooldownLimiter cooldownLimiter;
     private final Clock clock;
     // Best-effort audit: a recorder failure must never mask the original tracking failure.
@@ -112,7 +112,7 @@ public class ProductTrackingService {
     // Shared price-check pipeline behind all three entry points:
     //   name floor → scrape → name from page → extract → validate + save → audit.
     // Short DB transactions surround the network work (scrape, then LLM extract) — none is ever held
-    // across that I/O — and the shop name is committed before extraction can fail (ShopNameLifecycle
+    // across that I/O — and the shop name is committed before extraction can fail (ShopNameAssignment
     // explains why naming rides along with the price check at all).
     private TrackResponse checkListingPrice(PriceCheckTarget target, boolean validateStoredUrl) {
         Long itemId = target.id();
@@ -124,13 +124,14 @@ public class ProductTrackingService {
             urlValidator.validate(url);
         }
 
-        boolean shopNameCurated = shopNameLifecycle.establishFloor(itemId, url);
+        boolean shopNameCurated = shopNameAssignment.applyNameFromUrl(itemId, url);
 
         ScrapeResponse scraped = scraperClient.scrape(url);
         if (scraped == null) {
             log.warn("Scraper returned null response for url={}", url);
-        } else {
-            shopNameLifecycle.refineFromScrape(itemId, url, scraped.shopNameProposal(), shopNameCurated);
+        } else if (!shopNameCurated) {
+            // A curated mapping is final; only then does the page get a say.
+            shopNameAssignment.applyNameFromPage(itemId, url, scraped.shopNameProposal());
         }
 
         PriceInfo info = scraped == null ? null : extractPriceWithFailureAudit(itemId, url, scraped);

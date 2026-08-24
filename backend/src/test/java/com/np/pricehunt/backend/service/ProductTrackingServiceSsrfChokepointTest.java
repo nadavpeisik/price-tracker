@@ -68,7 +68,7 @@ class ProductTrackingServiceSsrfChokepointTest {
     private UrlValidator urlValidator;
 
     @Mock
-    private ShopNameLifecycle shopNameLifecycle;
+    private ShopNameAssignment shopNameAssignment;
 
     @Mock
     private RefreshCooldownLimiter cooldownLimiter;
@@ -92,7 +92,7 @@ class ProductTrackingServiceSsrfChokepointTest {
                 transactionTemplate,
                 urlValidator,
                 TRACKING_PROPERTIES,
-                shopNameLifecycle,
+                shopNameAssignment,
                 cooldownLimiter,
                 Clock.systemUTC(),
                 scrapeAttemptRecorder,
@@ -129,7 +129,7 @@ class ProductTrackingServiceSsrfChokepointTest {
         // Rejected at the chokepoint → no scrape, no shop-name resolution, no persistence.
         verify(urlValidator).validate(URL);
         verify(scraperClient, never()).scrape(any());
-        verify(shopNameLifecycle, never()).establishFloor(any(), any());
+        verify(shopNameAssignment, never()).applyNameFromUrl(any(), any());
         verify(priceRecordRepository, never()).save(any());
     }
 

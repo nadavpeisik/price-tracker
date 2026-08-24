@@ -9,16 +9,18 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 
 /**
- * Keeps a listing's shop name as good as the evidence allows, around a scrape. It lives in the
+ * Assigns a listing its shop name, as good as the evidence allows, around a scrape. It lives in the
  * price-check pipeline because the scrape is the only place the strongest evidence (the page's own
  * site name) ever appears — and it runs as two best-effort steps, split around that scrape, so no
  * database transaction is held across the network call and a failed price check still leaves the
  * listing labelled.
  *
- * <p>Transactions, by case: a <b>curated</b> mapping is one (the floor is final); a <b>weak</b>
- * {@code <title>} proposal is two (floor, then re-resolve as {@code DETECTED}); a <b>strong</b>
- * site-level proposal is three (floor, {@link ShopNameResolver#learn} in its own {@code REQUIRES_NEW},
- * then re-resolve so it promotes to {@code MAPPING}). Every write goes through
+ * <p><b>A curated mapping wins.</b> When {@link #applyNameFromUrl} resolves one, the name is final
+ * and the caller skips {@link #applyNameFromPage} — that rule is the pipeline's to enforce, which is
+ * why the page step takes no flag. Transactions, by case: curated is one (the URL name); a
+ * <b>weak</b> {@code <title>} proposal is two (URL name, then the page name as {@code DETECTED}); a
+ * <b>strong</b> site-level proposal is three (URL name, {@link ShopNameResolver#learn} in its own
+ * {@code REQUIRES_NEW}, then the page name promoted to {@code MAPPING}). Every write goes through
  * {@link TrackedItemRepository#applyShopName} — by id, never via a managed entity — so precedence is
  * enforced in one place and a stale entity can never flush over the result. Resolution rules
  * themselves belong to {@link ShopNameResolver}; this class only decides when they run and commits
@@ -27,7 +29,7 @@ import org.springframework.util.StringUtils;
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class ShopNameLifecycle {
+public class ShopNameAssignment {
 
     private final ShopNameResolver resolver;
     private final TrackedItemRepository trackedItemRepository;
@@ -36,10 +38,10 @@ public class ShopNameLifecycle {
     /**
      * Pre-scrape: commit the best name knowable from the URL alone (mapping, else prettified host).
      *
-     * @return true when a curated mapping resolved — the name is authoritative and
-     *     {@link #refineFromScrape} is a no-op. Best-effort: a failure logs and returns false.
+     * @return true when a curated mapping resolved — the name is authoritative. Best-effort: a
+     *     failure logs and returns false.
      */
-    public boolean establishFloor(Long itemId, String url) {
+    public boolean applyNameFromUrl(Long itemId, String url) {
         try {
             return Boolean.TRUE.equals(transactionTemplate.execute(status -> {
                 ShopNameResolver.Resolved resolved = resolver.resolve(url, null);
@@ -53,12 +55,12 @@ public class ShopNameLifecycle {
     }
 
     /**
-     * Post-scrape: apply the page's proposal unless the floor was curated. A strong proposal is
-     * learned into the shared mapping first so the re-resolve promotes it; a weak one is only ever
-     * {@code DETECTED}. Best-effort: a failure logs and keeps the floor.
+     * Post-scrape: apply the page's proposal. A strong proposal is learned into the shared mapping
+     * first so the re-resolve promotes it; a weak one is only ever {@code DETECTED}. A null or blank
+     * proposal is a no-op. Best-effort: a failure logs and keeps the URL name.
      */
-    public void refineFromScrape(Long itemId, String url, ScrapeResponse.ShopNameProposal proposal, boolean curated) {
-        if (curated || proposal == null || !StringUtils.hasText(proposal.name())) {
+    public void applyNameFromPage(Long itemId, String url, ScrapeResponse.ShopNameProposal proposal) {
+        if (proposal == null || !StringUtils.hasText(proposal.name())) {
             return;
         }
         try {

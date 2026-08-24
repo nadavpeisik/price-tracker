@@ -65,7 +65,7 @@ class ProductTrackingServiceValidationTest {
     private UrlValidator urlValidator;
 
     @Mock
-    private ShopNameLifecycle shopNameLifecycle;
+    private ShopNameAssignment shopNameAssignment;
 
     @Mock
     private RefreshCooldownLimiter cooldownLimiter;
@@ -90,7 +90,7 @@ class ProductTrackingServiceValidationTest {
                 transactionTemplate,
                 urlValidator,
                 TRACKING_PROPERTIES,
-                shopNameLifecycle,
+                shopNameAssignment,
                 cooldownLimiter,
                 Clock.systemUTC(),
                 scrapeAttemptRecorder,

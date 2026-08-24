@@ -20,11 +20,12 @@ import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 
-// The shop-name lifecycle's choreography: the curated short-circuit, the strong-only learn gate, and
-// best-effort failure handling. DB semantics of resolve/apply/upsert are covered by
+// The shop-name assignment's choreography: the strong-only learn gate and best-effort failure
+// handling. The "curated wins" gate is the pipeline's (ProductTrackingServiceShopNameTest). DB semantics of
+// resolve/apply/upsert are covered by
 // ShopNameResolverTest / TrackedItemRepositoryTest / ShopNameMappingRepositoryTest.
 @ExtendWith(MockitoExtension.class)
-class ShopNameLifecycleTest {
+class ShopNameAssignmentTest {
 
     private static final String URL = "https://thomannmusic.com/x.htm";
     private static final Long ITEM_ID = 1L;
@@ -38,20 +39,20 @@ class ShopNameLifecycleTest {
     @Mock
     private TransactionTemplate transactionTemplate;
 
-    private ShopNameLifecycle lifecycle;
+    private ShopNameAssignment assignment;
 
     @BeforeEach
     void setUp() {
-        lifecycle = new ShopNameLifecycle(resolver, trackedItemRepository, transactionTemplate);
+        assignment = new ShopNameAssignment(resolver, trackedItemRepository, transactionTemplate);
     }
 
-    private void runFloorTxInline() {
+    private void runUrlTxInline() {
         when(transactionTemplate.execute(any()))
                 .thenAnswer(inv -> ((TransactionCallback<?>) inv.getArgument(0)).doInTransaction(null));
     }
 
     @SuppressWarnings("unchecked")
-    private void runRefineTxInline() {
+    private void runPageTxInline() {
         doAnswer(inv -> {
                     ((Consumer<TransactionStatus>) inv.getArgument(0)).accept(null);
                     return null;
@@ -64,63 +65,55 @@ class ShopNameLifecycleTest {
         return new ScrapeResponse.ShopNameProposal(name, strong);
     }
 
-    // --- establishFloor ---
+    // --- applyNameFromUrl ---
 
     @Test
-    void establishFloor_appliesResolvedName_andReportsCurated() {
-        runFloorTxInline();
+    void applyNameFromUrl_appliesResolvedName_andReportsCurated() {
+        runUrlTxInline();
         when(resolver.resolve(URL, null))
                 .thenReturn(new Resolved("Amazon", ShopNameSource.MAPPING, MappingOrigin.CURATED));
 
-        assertThat(lifecycle.establishFloor(ITEM_ID, URL)).isTrue();
+        assertThat(assignment.applyNameFromUrl(ITEM_ID, URL)).isTrue();
 
         verify(trackedItemRepository).applyShopName(ITEM_ID, "Amazon", ShopNameSource.MAPPING);
     }
 
     @Test
-    void establishFloor_hostFallback_isNotCurated() {
-        runFloorTxInline();
+    void applyNameFromUrl_hostFallback_isNotCurated() {
+        runUrlTxInline();
         when(resolver.resolve(URL, null))
                 .thenReturn(new Resolved("thomannmusic.com", ShopNameSource.HOST_FALLBACK, null));
 
-        assertThat(lifecycle.establishFloor(ITEM_ID, URL)).isFalse();
+        assertThat(assignment.applyNameFromUrl(ITEM_ID, URL)).isFalse();
 
         verify(trackedItemRepository).applyShopName(ITEM_ID, "thomannmusic.com", ShopNameSource.HOST_FALLBACK);
     }
 
     @Test
-    void establishFloor_failure_isSwallowed_andNotCurated() {
-        runFloorTxInline();
+    void applyNameFromUrl_failure_isSwallowed_andNotCurated() {
+        runUrlTxInline();
         when(resolver.resolve(any(), any())).thenThrow(new RuntimeException("name DB down"));
 
-        assertThat(lifecycle.establishFloor(ITEM_ID, URL)).isFalse(); // must not throw
+        assertThat(assignment.applyNameFromUrl(ITEM_ID, URL)).isFalse(); // must not throw
     }
 
-    // --- refineFromScrape ---
+    // --- applyNameFromPage ---
 
     @Test
-    void refineFromScrape_curatedFloor_shortCircuits() {
-        // Even a strong page proposal never touches a curated name: no learn, no resolve, no write.
-        lifecycle.refineFromScrape(ITEM_ID, URL, proposal("Strong Site", true), true);
+    void applyNameFromPage_noProposal_isNoOp() {
+        assignment.applyNameFromPage(ITEM_ID, URL, null);
+        assignment.applyNameFromPage(ITEM_ID, URL, proposal("   ", true));
 
         verifyNoInteractions(resolver, trackedItemRepository, transactionTemplate);
     }
 
     @Test
-    void refineFromScrape_noProposal_isNoOp() {
-        lifecycle.refineFromScrape(ITEM_ID, URL, null, false);
-        lifecycle.refineFromScrape(ITEM_ID, URL, proposal("   ", true), false);
-
-        verifyNoInteractions(resolver, trackedItemRepository, transactionTemplate);
-    }
-
-    @Test
-    void refineFromScrape_strongProposal_isLearnedThenApplied() {
-        runRefineTxInline();
+    void applyNameFromPage_strongProposal_isLearnedThenApplied() {
+        runPageTxInline();
         when(resolver.resolve(URL, "Musikhaus Thomann"))
                 .thenReturn(new Resolved("Musikhaus Thomann", ShopNameSource.MAPPING, MappingOrigin.LEARNED));
 
-        lifecycle.refineFromScrape(ITEM_ID, URL, proposal("Musikhaus Thomann", true), false);
+        assignment.applyNameFromPage(ITEM_ID, URL, proposal("Musikhaus Thomann", true));
 
         var order = inOrder(resolver, trackedItemRepository);
         order.verify(resolver).learn(eq(URL), eq("Musikhaus Thomann"));
@@ -129,21 +122,21 @@ class ShopNameLifecycleTest {
     }
 
     @Test
-    void refineFromScrape_weakProposal_isAppliedButNeverLearned() {
-        runRefineTxInline();
+    void applyNameFromPage_weakProposal_isAppliedButNeverLearned() {
+        runPageTxInline();
         when(resolver.resolve(URL, "Some Title")).thenReturn(new Resolved("Some Title", ShopNameSource.DETECTED, null));
 
-        lifecycle.refineFromScrape(ITEM_ID, URL, proposal("Some Title", false), false);
+        assignment.applyNameFromPage(ITEM_ID, URL, proposal("Some Title", false));
 
         verify(resolver, never()).learn(any(), any());
         verify(trackedItemRepository).applyShopName(ITEM_ID, "Some Title", ShopNameSource.DETECTED);
     }
 
     @Test
-    void refineFromScrape_failure_isSwallowed() {
+    void applyNameFromPage_failure_isSwallowed() {
         doThrow(new RuntimeException("mapping upsert failed")).when(resolver).learn(any(), any());
 
-        lifecycle.refineFromScrape(ITEM_ID, URL, proposal("Musikhaus Thomann", true), false); // must not throw
+        assignment.applyNameFromPage(ITEM_ID, URL, proposal("Musikhaus Thomann", true)); // must not throw
 
         verify(trackedItemRepository, never()).applyShopName(any(), any(), any());
     }
