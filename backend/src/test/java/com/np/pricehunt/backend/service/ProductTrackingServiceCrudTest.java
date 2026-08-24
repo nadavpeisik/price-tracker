@@ -18,6 +18,7 @@ import com.np.pricehunt.backend.observability.ScrapeAttemptRecorder;
 import com.np.pricehunt.backend.repository.PriceRecordRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
+import com.np.pricehunt.backend.repository.projection.TrackedItemRefreshView;
 import com.np.pricehunt.backend.service.ratelimit.RefreshCooldownLimiter;
 import com.np.pricehunt.backend.validator.UrlValidator;
 import java.math.BigDecimal;
@@ -334,6 +335,10 @@ class ProductTrackingServiceCrudTest {
 
     // --- refreshTrackedItem ---
 
+    private static TrackedItemRefreshView viewOf(TrackedItem item) {
+        return new TrackedItemRefreshView(item.getId(), item.getUrl(), item.getLastChecked());
+    }
+
     @Test
     void refreshTrackedItem_recentlyRefreshed_throwsTooManyRequests() {
         TrackedItem recentItem = TrackedItem.builder()
@@ -343,7 +348,7 @@ class ProductTrackingServiceCrudTest {
                 .product(product)
                 .lastChecked(Instant.now().minusSeconds(10))
                 .build();
-        when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(recentItem));
+        when(trackedItemRepository.findRefreshViewByIdAndProductId(1L, 1L)).thenReturn(Optional.of(viewOf(recentItem)));
 
         assertThatThrownBy(() -> service.refreshTrackedItem(1L, 1L))
                 .isInstanceOf(ResponseStatusException.class)
@@ -359,7 +364,7 @@ class ProductTrackingServiceCrudTest {
     void refreshTrackedItem_volatileCooldownActive_throwsTooManyRequests() {
         // DB lastChecked is null (durable check passes), but the in-memory limiter rejects —
         // e.g. a rapid retry after a failed scrape. Must 429 before scraping.
-        when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
+        when(trackedItemRepository.findRefreshViewByIdAndProductId(1L, 1L)).thenReturn(Optional.of(viewOf(item)));
         when(cooldownLimiter.tryAcquire(1L)).thenReturn(false);
 
         assertThatThrownBy(() -> service.refreshTrackedItem(1L, 1L))
@@ -372,7 +377,7 @@ class ProductTrackingServiceCrudTest {
 
     @Test
     void refreshTrackedItem_notFound_throwsException() {
-        when(trackedItemRepository.findById(99L)).thenReturn(Optional.empty());
+        when(trackedItemRepository.findRefreshViewByIdAndProductId(99L, 1L)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.refreshTrackedItem(1L, 99L))
                 .isInstanceOf(ResponseStatusException.class)
@@ -384,14 +389,8 @@ class ProductTrackingServiceCrudTest {
 
     @Test
     void refreshTrackedItem_wrongProduct_throwsException() {
-        Product other = Product.builder().id(99L).name("Other").build();
-        TrackedItem foreignItem = TrackedItem.builder()
-                .id(1L)
-                .url("http://x.com")
-                .shopName("x")
-                .product(other)
-                .build();
-        when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(foreignItem));
+        // Ownership is the query's product filter: an item under another product reads as absent.
+        when(trackedItemRepository.findRefreshViewByIdAndProductId(1L, 1L)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.refreshTrackedItem(1L, 1L))
                 .isInstanceOf(ResponseStatusException.class)
@@ -409,6 +408,7 @@ class ProductTrackingServiceCrudTest {
                 null,
                 null,
                 null);
+        when(trackedItemRepository.findRefreshViewByIdAndProductId(1L, 1L)).thenReturn(Optional.of(viewOf(item)));
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
         when(cooldownLimiter.tryAcquire(1L)).thenReturn(true);
         when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
@@ -435,6 +435,7 @@ class ProductTrackingServiceCrudTest {
     void refreshTrackedItem_secondAttemptAfterFailedScrape_throwsTooManyRequests() {
         // First attempt: scraper returns null. lastChecked never bumped on the entity, but the
         // volatile limiter is stamped before the scrape — so the second attempt is rejected by it.
+        when(trackedItemRepository.findRefreshViewByIdAndProductId(1L, 1L)).thenReturn(Optional.of(viewOf(item)));
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
         when(cooldownLimiter.tryAcquire(1L)).thenReturn(true, false);
         when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
@@ -485,7 +486,7 @@ class ProductTrackingServiceCrudTest {
             return r;
         });
 
-        TrackResponse response = service.scheduledRefresh(1L);
+        TrackResponse response = service.scheduledRefresh(viewOf(recentItem));
 
         verify(scraperClient).scrape(recentItem.getUrl());
         verify(priceRecordRepository).save(any());
@@ -502,6 +503,7 @@ class ProductTrackingServiceCrudTest {
                 null,
                 null,
                 null);
+        when(trackedItemRepository.findRefreshViewByIdAndProductId(1L, 1L)).thenReturn(Optional.of(viewOf(item)));
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
         when(cooldownLimiter.tryAcquire(1L)).thenReturn(true);
         when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))

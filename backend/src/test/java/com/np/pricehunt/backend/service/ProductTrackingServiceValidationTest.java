@@ -118,7 +118,7 @@ class ProductTrackingServiceValidationTest {
         when(productRepository.existsById(1L)).thenReturn(true);
         when(productRepository.findForUpdateById(1L)).thenReturn(Optional.of(product));
         when(trackedItemRepository.findByUrl(any())).thenReturn(Optional.of(item));
-        // findById is hit only inside persistResultInTxn — tests that short-circuit
+        // findById is hit only inside validateAndSavePrice — tests that short-circuit
         // before persistence (e.g. ScrapeBlockedException propagation) skip it.
         lenient().when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
         when(scraperClient.scrape(any())).thenReturn(scrapeResponse);

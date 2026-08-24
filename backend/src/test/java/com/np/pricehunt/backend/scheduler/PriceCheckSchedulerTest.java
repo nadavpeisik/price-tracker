@@ -65,9 +65,9 @@ class PriceCheckSchedulerTest {
 
         scheduler.refreshAll();
 
-        verify(trackingService).scheduledRefresh(1L);
-        verify(trackingService).scheduledRefresh(2L);
-        verify(trackingService).scheduledRefresh(3L);
+        verify(trackingService).scheduledRefresh(items.get(1 - 1));
+        verify(trackingService).scheduledRefresh(items.get(2 - 1));
+        verify(trackingService).scheduledRefresh(items.get(3 - 1));
         verifyNoMoreInteractions(trackingService);
 
         verify(jobRunRecorder).start(PriceCheckScheduler.JOB_NAME);
@@ -84,15 +84,15 @@ class PriceCheckSchedulerTest {
                 new TrackedItemRefreshView(2L, "https://b.com/2", old),
                 new TrackedItemRefreshView(3L, "https://c.com/3", old));
         when(trackedItemRepository.findStaleItems(any(Instant.class))).thenReturn(items);
-        when(trackingService.scheduledRefresh(1L)).thenReturn(null);
-        when(trackingService.scheduledRefresh(3L)).thenReturn(null);
-        when(trackingService.scheduledRefresh(2L)).thenThrow(new RuntimeException("scraper down"));
+        when(trackingService.scheduledRefresh(items.get(1 - 1))).thenReturn(null);
+        when(trackingService.scheduledRefresh(items.get(3 - 1))).thenReturn(null);
+        when(trackingService.scheduledRefresh(items.get(2 - 1))).thenThrow(new RuntimeException("scraper down"));
 
         scheduler.refreshAll();
 
-        verify(trackingService).scheduledRefresh(1L);
-        verify(trackingService).scheduledRefresh(2L);
-        verify(trackingService).scheduledRefresh(3L);
+        verify(trackingService).scheduledRefresh(items.get(1 - 1));
+        verify(trackingService).scheduledRefresh(items.get(2 - 1));
+        verify(trackingService).scheduledRefresh(items.get(3 - 1));
 
         verify(jobRunRecorder).start(PriceCheckScheduler.JOB_NAME);
         verify(jobRunRecorder, times(2))
@@ -106,15 +106,15 @@ class PriceCheckSchedulerTest {
     @Test
     void refreshAll_recordItemFailureDoesNotMiscountSuccessfulWork() {
         Instant old = Instant.now().minusSeconds(60 * 60 * 24);
-        when(trackedItemRepository.findStaleItems(any(Instant.class)))
-                .thenReturn(List.of(new TrackedItemRefreshView(1L, "https://a.com/1", old)));
+        List<TrackedItemRefreshView> items = List.of(new TrackedItemRefreshView(1L, "https://a.com/1", old));
+        when(trackedItemRepository.findStaleItems(any(Instant.class))).thenReturn(items);
         doThrow(new RuntimeException("audit DB blip"))
                 .when(jobRunRecorder)
                 .recordItem(eq(RUN_ID), eq("https://a.com/1"), eq(JobStatus.SUCCESS), anyLong(), isNull());
 
         scheduler.refreshAll();
 
-        verify(trackingService).scheduledRefresh(1L);
+        verify(trackingService).scheduledRefresh(items.get(1 - 1));
         verify(jobRunRecorder).complete(eq(RUN_ID), eq(JobStatus.SUCCESS), eq(1), eq(1), eq(0), isNull());
     }
 
@@ -137,10 +137,10 @@ class PriceCheckSchedulerTest {
         scheduler.refreshAll();
 
         // Skipped items are never refreshed (no request sent) and do NOT count as processed/failed.
-        verify(trackingService).scheduledRefresh(1L);
-        verify(trackingService).scheduledRefresh(3L);
-        verify(trackingService, never()).scheduledRefresh(2L);
-        verify(trackingService, never()).scheduledRefresh(4L);
+        verify(trackingService).scheduledRefresh(items.get(1 - 1));
+        verify(trackingService).scheduledRefresh(items.get(3 - 1));
+        verify(trackingService, never()).scheduledRefresh(items.get(2 - 1));
+        verify(trackingService, never()).scheduledRefresh(items.get(4 - 1));
         verify(jobRunRecorder, never()).recordItem(anyLong(), eq("https://www.amazon.com/2"), any(), anyLong(), any());
         verify(jobRunRecorder, never())
                 .recordItem(anyLong(), eq("https://ivory.seed.invalid/item/1001"), any(), anyLong(), any());

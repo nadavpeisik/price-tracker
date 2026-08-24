@@ -18,6 +18,7 @@ import com.np.pricehunt.backend.observability.ScrapeAttemptRecorder;
 import com.np.pricehunt.backend.repository.PriceRecordRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
+import com.np.pricehunt.backend.repository.projection.TrackedItemRefreshView;
 import com.np.pricehunt.backend.service.ratelimit.RefreshCooldownLimiter;
 import com.np.pricehunt.backend.validator.UrlValidator;
 import java.time.Clock;
@@ -108,6 +109,8 @@ class ProductTrackingServiceSsrfChokepointTest {
                 .build();
     }
 
+    private static final TrackedItemRefreshView VIEW = new TrackedItemRefreshView(1L, URL, null);
+
     private void runCallbacksInline() {
         when(transactionTemplate.execute(any())).thenAnswer(inv -> {
             TransactionCallback<?> cb = inv.getArgument(0);
@@ -117,8 +120,7 @@ class ProductTrackingServiceSsrfChokepointTest {
 
     @Test
     void refreshTrackedItem_validates_beforeAnyDownstreamWork() {
-        runCallbacksInline();
-        when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
+        when(trackedItemRepository.findRefreshViewByIdAndProductId(1L, 1L)).thenReturn(Optional.of(VIEW));
         when(cooldownLimiter.tryAcquire(1L)).thenReturn(true);
         doThrow(new ResponseStatusException(HttpStatus.BAD_REQUEST, "URL host is not allowed"))
                 .when(urlValidator)
@@ -135,8 +137,7 @@ class ProductTrackingServiceSsrfChokepointTest {
 
     @Test
     void refreshTrackedItem_rejection_stillConsumesCooldown() {
-        runCallbacksInline();
-        when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
+        when(trackedItemRepository.findRefreshViewByIdAndProductId(1L, 1L)).thenReturn(Optional.of(VIEW));
         when(cooldownLimiter.tryAcquire(1L)).thenReturn(true);
         doThrow(new ResponseStatusException(HttpStatus.BAD_REQUEST, "URL host is not allowed"))
                 .when(urlValidator)
@@ -151,13 +152,11 @@ class ProductTrackingServiceSsrfChokepointTest {
 
     @Test
     void scheduledRefresh_validates_beforeScrape() {
-        runCallbacksInline();
-        when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
         doThrow(new ResponseStatusException(HttpStatus.BAD_REQUEST, "URL host is not allowed"))
                 .when(urlValidator)
                 .validate(URL);
 
-        assertThatThrownBy(() -> service.scheduledRefresh(1L)).isInstanceOf(ResponseStatusException.class);
+        assertThatThrownBy(() -> service.scheduledRefresh(VIEW)).isInstanceOf(ResponseStatusException.class);
 
         verify(urlValidator).validate(URL);
         verify(scraperClient, never()).scrape(any());
