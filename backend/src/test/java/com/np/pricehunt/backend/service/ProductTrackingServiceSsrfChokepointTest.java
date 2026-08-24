@@ -2,7 +2,6 @@ package com.np.pricehunt.backend.service;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -11,7 +10,6 @@ import static org.mockito.Mockito.when;
 import com.np.pricehunt.backend.client.ScraperClient;
 import com.np.pricehunt.backend.config.PriceTrackingProperties;
 import com.np.pricehunt.backend.domain.Product;
-import com.np.pricehunt.backend.domain.ShopNameSource;
 import com.np.pricehunt.backend.domain.TrackedItem;
 import com.np.pricehunt.backend.dto.TrackRequest;
 import com.np.pricehunt.backend.observability.ScrapeAttemptRecorder;
@@ -70,7 +68,7 @@ class ProductTrackingServiceSsrfChokepointTest {
     private UrlValidator urlValidator;
 
     @Mock
-    private ShopNameResolver shopNameResolver;
+    private ShopNameAssignment shopNameAssignment;
 
     @Mock
     private RefreshCooldownLimiter cooldownLimiter;
@@ -94,7 +92,7 @@ class ProductTrackingServiceSsrfChokepointTest {
                 transactionTemplate,
                 urlValidator,
                 TRACKING_PROPERTIES,
-                shopNameResolver,
+                shopNameAssignment,
                 cooldownLimiter,
                 Clock.systemUTC(),
                 scrapeAttemptRecorder,
@@ -131,7 +129,7 @@ class ProductTrackingServiceSsrfChokepointTest {
         // Rejected at the chokepoint → no scrape, no shop-name resolution, no persistence.
         verify(urlValidator).validate(URL);
         verify(scraperClient, never()).scrape(any());
-        verify(shopNameResolver, never()).resolve(any(), any());
+        verify(shopNameAssignment, never()).applyNameFromUrl(any(), any());
         verify(priceRecordRepository, never()).save(any());
     }
 
@@ -168,8 +166,6 @@ class ProductTrackingServiceSsrfChokepointTest {
         when(productRepository.existsById(1L)).thenReturn(true);
         when(productRepository.findForUpdateById(1L)).thenReturn(Optional.of(product));
         when(trackedItemRepository.findByUrl(URL)).thenReturn(Optional.of(item));
-        when(shopNameResolver.resolve(eq(URL), any()))
-                .thenReturn(new ShopNameResolver.Resolved("example.com", ShopNameSource.HOST_FALLBACK, null));
         when(scraperClient.scrape(URL)).thenReturn(null); // cheapest happy path — no extraction/save
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
         when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
