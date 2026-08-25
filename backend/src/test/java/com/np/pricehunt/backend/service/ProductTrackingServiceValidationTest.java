@@ -13,7 +13,6 @@ import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.domain.PriceRecord;
 import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.domain.ScrapeFailureCode;
-import com.np.pricehunt.backend.domain.ShopNameSource;
 import com.np.pricehunt.backend.domain.TrackedItem;
 import com.np.pricehunt.backend.dto.*;
 import com.np.pricehunt.backend.exception.ScrapeBlockedException;
@@ -66,7 +65,7 @@ class ProductTrackingServiceValidationTest {
     private UrlValidator urlValidator;
 
     @Mock
-    private ShopNameResolver shopNameResolver;
+    private ShopNameAssignment shopNameAssignment;
 
     @Mock
     private RefreshCooldownLimiter cooldownLimiter;
@@ -91,7 +90,7 @@ class ProductTrackingServiceValidationTest {
                 transactionTemplate,
                 urlValidator,
                 TRACKING_PROPERTIES,
-                shopNameResolver,
+                shopNameAssignment,
                 cooldownLimiter,
                 Clock.systemUTC(),
                 scrapeAttemptRecorder,
@@ -122,8 +121,6 @@ class ProductTrackingServiceValidationTest {
         // before persistence (e.g. ScrapeBlockedException propagation) skip it.
         lenient().when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
         when(scraperClient.scrape(any())).thenReturn(scrapeResponse);
-        when(shopNameResolver.resolve(any(), any()))
-                .thenReturn(new ShopNameResolver.Resolved("example.com", ShopNameSource.HOST_FALLBACK, null));
     }
 
     @Test

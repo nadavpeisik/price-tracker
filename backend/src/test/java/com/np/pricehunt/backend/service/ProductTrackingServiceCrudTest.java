@@ -11,7 +11,6 @@ import com.np.pricehunt.backend.domain.AvailabilityStatus;
 import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.domain.PriceRecord;
 import com.np.pricehunt.backend.domain.Product;
-import com.np.pricehunt.backend.domain.ShopNameSource;
 import com.np.pricehunt.backend.domain.TrackedItem;
 import com.np.pricehunt.backend.dto.*;
 import com.np.pricehunt.backend.observability.ScrapeAttemptRecorder;
@@ -65,7 +64,7 @@ class ProductTrackingServiceCrudTest {
     private UrlValidator urlValidator;
 
     @Mock
-    private ShopNameResolver shopNameResolver;
+    private ShopNameAssignment shopNameAssignment;
 
     @Mock
     private RefreshCooldownLimiter cooldownLimiter;
@@ -89,7 +88,7 @@ class ProductTrackingServiceCrudTest {
                 transactionTemplate,
                 urlValidator,
                 TRACKING_PROPERTIES,
-                shopNameResolver,
+                shopNameAssignment,
                 cooldownLimiter,
                 Clock.systemUTC(),
                 scrapeAttemptRecorder,
@@ -136,8 +135,6 @@ class ProductTrackingServiceCrudTest {
         when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
                 .thenReturn(Optional.empty());
         when(scraperClient.scrape(item.getUrl())).thenReturn(null);
-        when(shopNameResolver.resolve(any(), any()))
-                .thenReturn(new ShopNameResolver.Resolved("amazon.com", ShopNameSource.HOST_FALLBACK, null));
 
         service.trackUrl(1L, new TrackRequest(item.getUrl()));
 
@@ -156,8 +153,6 @@ class ProductTrackingServiceCrudTest {
         when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
                 .thenReturn(Optional.empty());
         when(scraperClient.scrape(item.getUrl())).thenReturn(null);
-        when(shopNameResolver.resolve(any(), any()))
-                .thenReturn(new ShopNameResolver.Resolved("amazon.com", ShopNameSource.HOST_FALLBACK, null));
 
         service.trackUrl(1L, new TrackRequest(item.getUrl()));
 
@@ -246,8 +241,6 @@ class ProductTrackingServiceCrudTest {
         when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
                 .thenReturn(Optional.empty());
         when(scraperClient.scrape(item.getUrl())).thenReturn(scraped);
-        when(shopNameResolver.resolve(any(), any()))
-                .thenReturn(new ShopNameResolver.Resolved("amazon.com", ShopNameSource.HOST_FALLBACK, null));
         when(extractionService.extractPrice(scraped))
                 .thenReturn(new PriceInfo(
                         new BigDecimal("899.99"), "USD", AvailabilityStatus.AVAILABLE, ExtractionSource.STRUCTURED));
@@ -273,8 +266,6 @@ class ProductTrackingServiceCrudTest {
         when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
                 .thenReturn(Optional.empty());
         when(scraperClient.scrape(item.getUrl())).thenReturn(null);
-        when(shopNameResolver.resolve(any(), any()))
-                .thenReturn(new ShopNameResolver.Resolved("amazon.com", ShopNameSource.HOST_FALLBACK, null));
 
         TrackResponse first = service.refreshTrackedItem(1L, 1L);
         assertThat(first.currentPrice()).isNull();
@@ -307,8 +298,6 @@ class ProductTrackingServiceCrudTest {
         when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(recentItem))
                 .thenReturn(Optional.empty());
         when(scraperClient.scrape(recentItem.getUrl())).thenReturn(scraped);
-        when(shopNameResolver.resolve(any(), any()))
-                .thenReturn(new ShopNameResolver.Resolved("amazon.com", ShopNameSource.HOST_FALLBACK, null));
         when(extractionService.extractPrice(scraped))
                 .thenReturn(new PriceInfo(
                         new BigDecimal("899.99"), "USD", AvailabilityStatus.AVAILABLE, ExtractionSource.STRUCTURED));
@@ -341,8 +330,6 @@ class ProductTrackingServiceCrudTest {
         when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
                 .thenReturn(Optional.empty());
         when(scraperClient.scrape(item.getUrl())).thenReturn(scraped);
-        when(shopNameResolver.resolve(any(), any()))
-                .thenReturn(new ShopNameResolver.Resolved("amazon.com", ShopNameSource.HOST_FALLBACK, null));
         when(extractionService.extractPrice(scraped))
                 .thenReturn(new PriceInfo(
                         new BigDecimal("100.00"), "usd", AvailabilityStatus.AVAILABLE, ExtractionSource.STRUCTURED));

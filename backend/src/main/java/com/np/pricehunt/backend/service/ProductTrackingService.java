@@ -25,7 +25,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
-import org.springframework.util.StringUtils;
 import org.springframework.web.server.ResponseStatusException;
 
 @Slf4j
@@ -41,7 +40,7 @@ public class ProductTrackingService {
     private final TransactionTemplate transactionTemplate;
     private final UrlValidator urlValidator;
     private final PriceTrackingProperties trackingProperties;
-    private final ShopNameResolver shopNameResolver;
+    private final ShopNameAssignment shopNameAssignment;
     private final RefreshCooldownLimiter cooldownLimiter;
     private final Clock clock;
     // Best-effort audit: a recorder failure must never mask the original tracking failure.
@@ -110,9 +109,11 @@ public class ProductTrackingService {
         }
     }
 
-    // Shared price-check pipeline behind all three entry points. Short DB transactions surround the
-    // network work (scrape, then LLM extract) — none is ever held across that I/O — and shop-name
-    // changes commit before extraction can fail.
+    // Shared price-check pipeline behind all three entry points:
+    //   name floor → scrape → name from page → extract → validate + save → audit.
+    // Short DB transactions surround the network work (scrape, then LLM extract) — none is ever held
+    // across that I/O — and the shop name is committed before extraction can fail (ShopNameAssignment
+    // explains why naming rides along with the price check at all).
     private TrackResponse checkListingPrice(PriceCheckTarget target, boolean validateStoredUrl) {
         Long itemId = target.id();
         String url = target.url();
@@ -123,54 +124,17 @@ public class ProductTrackingService {
             urlValidator.validate(url);
         }
 
-        // Commit a host-name floor before scraping. A curated mapping is authoritative and skips the
-        // post-scrape name work; resolution failure must never block price tracking.
-        boolean shopNameCurated = false;
-        try {
-            shopNameCurated = Boolean.TRUE.equals(transactionTemplate.execute(status -> {
-                ShopNameResolver.Resolved resolved = shopNameResolver.resolve(url, null);
-                trackedItemRepository.applyShopName(itemId, resolved.name(), resolved.source());
-                return resolved.curated();
-            }));
-        } catch (RuntimeException e) {
-            log.warn("Pre-scrape shop-name resolution failed for url={} — proceeding without it", url, e);
-        }
+        boolean shopNameCurated = shopNameAssignment.applyNameFromUrl(itemId, url);
 
         ScrapeResponse scraped = scraperClient.scrape(url);
         if (scraped == null) {
             log.warn("Scraper returned null response for url={}", url);
+        } else if (!shopNameCurated) {
+            // A curated mapping is final; only then does the page get a say.
+            shopNameAssignment.applyNameFromPage(itemId, url, scraped.shopNameProposal());
         }
 
-        // Learn a strong (site-level) proposal before re-resolving so it promotes to MAPPING; a weak
-        // <title> proposal stays DETECTED and is never learned. Name persistence is best-effort.
-        var proposal = scraped == null ? null : scraped.shopNameProposal();
-        if (!shopNameCurated && proposal != null && StringUtils.hasText(proposal.name())) {
-            try {
-                if (proposal.strong()) {
-                    shopNameResolver.learn(url, proposal.name());
-                }
-                transactionTemplate.executeWithoutResult(status -> {
-                    ShopNameResolver.Resolved resolved = shopNameResolver.resolve(url, proposal.name());
-                    trackedItemRepository.applyShopName(itemId, resolved.name(), resolved.source());
-                });
-            } catch (RuntimeException e) {
-                log.warn("Shop-name learn/resolve failed for url={} — keeping the pre-scrape name", url, e);
-            }
-        }
-
-        // Audit an extraction failure best-effort, then rethrow the original exception (preserves the
-        // 502 + scheduler accounting). A null scrape has no evidence to audit.
-        PriceInfo info;
-        if (scraped == null) {
-            info = null;
-        } else {
-            try {
-                info = extractionService.extractPrice(scraped);
-            } catch (RuntimeException e) {
-                recordExtractionFailureBestEffort(itemId, url, scraped, e);
-                throw e;
-            }
-        }
+        PriceInfo info = scraped == null ? null : extractPriceWithFailureAudit(itemId, url, scraped);
 
         // Persist in a short transaction; audit any rejection only after it closes.
         PriceCheckOutcome outcome = validateAndSavePrice(itemId, info);
@@ -185,16 +149,31 @@ public class ProductTrackingService {
         return outcome.response();
     }
 
-    private PriceCheckOutcome validateAndSavePrice(Long itemId, PriceInfo rawInfo) {
-        // Normalize to the persistence scale before validating, so the checks judge exactly what
-        // numeric(19,4) stores — a 0.00004 must not pass "price > 0" and land as 0.0000.
-        PriceInfo info = rawInfo == null
+    // Audit the failure best-effort, then rethrow the original exception (preserves the 502 and the
+    // scheduler's accounting).
+    private PriceInfo extractPriceWithFailureAudit(Long itemId, String url, ScrapeResponse scraped) {
+        try {
+            return extractionService.extractPrice(scraped);
+        } catch (RuntimeException e) {
+            recordExtractionFailureBestEffort(itemId, url, scraped, e);
+            throw e;
+        }
+    }
+
+    // Normalize to the persistence scale before validating, so the checks judge exactly what
+    // numeric(19,4) stores — a 0.00004 must not pass "price > 0" and land as 0.0000.
+    private static PriceInfo normalizeForPersistence(PriceInfo raw) {
+        return raw == null
                 ? null
                 : new PriceInfo(
-                        MoneyPrecision.normalize(rawInfo.price()),
-                        rawInfo.currency(),
-                        rawInfo.availability(),
-                        rawInfo.extractionSource());
+                        MoneyPrecision.normalize(raw.price()),
+                        raw.currency(),
+                        raw.availability(),
+                        raw.extractionSource());
+    }
+
+    private PriceCheckOutcome validateAndSavePrice(Long itemId, PriceInfo rawInfo) {
+        PriceInfo info = normalizeForPersistence(rawInfo);
         return transactionTemplate.execute(status -> {
             TrackedItem item = trackedItemRepository
                     .findById(itemId)
