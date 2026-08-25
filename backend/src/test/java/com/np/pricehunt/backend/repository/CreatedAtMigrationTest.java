@@ -1,7 +1,9 @@
 package com.np.pricehunt.backend.repository;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.sql.SQLException;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -86,6 +88,22 @@ class CreatedAtMigrationTest {
                         + " WHERE table_name IN ('product', 'tracked_item') AND column_name = 'created_at'",
                 Boolean.class);
         assertThat(nullable).containsExactly(false, false);
+
+        // Immutable at the database: a hand-written UPDATE of created_at is rejected by the trigger,
+        // while an UPDATE that leaves it alone (or sets it to the same value) still goes through.
+        for (String table : List.of("product", "tracked_item")) {
+            long id = table.equals("product") ? withHistory : observedItem;
+            assertThatThrownBy(() -> jdbc.update("UPDATE " + table + " SET created_at = now() WHERE id = ?", id))
+                    .hasMessageContaining("created_at is immutable")
+                    .rootCause()
+                    .isInstanceOf(SQLException.class)
+                    .extracting(e -> ((SQLException) e).getSQLState())
+                    .isEqualTo("23514"); // check_violation, the ERRCODE the trigger raises
+            assertThat(jdbc.update("UPDATE " + table + " SET created_at = created_at WHERE id = ?", id))
+                    .isEqualTo(1);
+        }
+        assertThat(jdbc.update("UPDATE product SET name = 'renamed' WHERE id = ?", withHistory))
+                .isEqualTo(1);
     }
 
     private long insertProduct(String name) {
