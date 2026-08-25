@@ -93,6 +93,10 @@ class ProductRepositoryTest {
     @Test
     void createdAtSurvivesAnUpdate() {
         Product saved = repository.saveAndFlush(Product.builder().name("Before").build());
+        // Compare against the stored value, not the in-memory one: Instant.now() carries nanos on
+        // Linux and the column keeps micros, so the two differ there (CI) but not on macOS.
+        em.clear();
+        saved = repository.findById(saved.getId()).orElseThrow();
         Instant stamped = saved.getCreatedAt();
         saved.setCreatedAt(Instant.parse("2000-01-01T00:00:00Z"));
         saved.setName("After");
