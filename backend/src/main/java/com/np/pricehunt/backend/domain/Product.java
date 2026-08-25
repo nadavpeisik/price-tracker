@@ -28,6 +28,7 @@ public class Product {
     @Column(nullable = false, updatable = false)
     private Instant createdAt;
 
+    @Builder.Default
     @OneToMany(mappedBy = "product", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<TrackedItem> trackedItems = new ArrayList<>();
 

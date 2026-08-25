@@ -11,7 +11,9 @@ ALTER TABLE tracked_item ADD COLUMN created_at timestamp with time zone;
 
 UPDATE tracked_item ti
 SET created_at = COALESCE(
-    (SELECT MIN(pr."timestamp") FROM price_record pr WHERE pr.tracked_item_id = ti.id),
+    (SELECT MIN(pr."timestamp")
+     FROM price_record pr
+     WHERE pr.tracked_item_id = ti.id),
     now());
 
 ALTER TABLE tracked_item ALTER COLUMN created_at SET NOT NULL;
@@ -20,7 +22,9 @@ ALTER TABLE product ADD COLUMN created_at timestamp with time zone;
 
 UPDATE product p
 SET created_at = COALESCE(
-    (SELECT MIN(ti.created_at) FROM tracked_item ti WHERE ti.product_id = p.id),
+    (SELECT MIN(ti.created_at)
+     FROM tracked_item ti
+     WHERE ti.product_id = p.id),
     now());
 
 ALTER TABLE product ALTER COLUMN created_at SET NOT NULL;
@@ -29,11 +33,9 @@ ALTER TABLE product ALTER COLUMN created_at SET NOT NULL;
 -- insert must choose one rather than silently get "now". It would not mask a broken @PrePersist
 -- anyway — Hibernate writes the column explicitly, and a default never replaces an explicit NULL.
 
--- Immutable at the database, not just in the entity (updatable = false only governs SQL Hibernate
--- generates). Postgres has no column-level "immutable" constraint, so a BEFORE UPDATE trigger is the
--- mechanism — a plain BEFORE UPDATE, not UPDATE OF created_at, which only fires when the column is
--- named in SET and would miss another trigger rewriting NEW. A deliberate correction needs
--- ALTER TABLE ... DISABLE TRIGGER first — that ceremony is the point.
+-- Immutable at the database too (updatable = false only covers SQL Hibernate generates). Plain
+-- BEFORE UPDATE, not UPDATE OF created_at — that fires only when the column is named in SET.
+-- A deliberate correction needs ALTER TABLE ... DISABLE TRIGGER first; that ceremony is the point.
 CREATE FUNCTION forbid_created_at_change() RETURNS trigger
     LANGUAGE plpgsql AS $$
 BEGIN
