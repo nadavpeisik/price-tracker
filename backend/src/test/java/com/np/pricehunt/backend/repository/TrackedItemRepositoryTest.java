@@ -7,6 +7,7 @@ import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.domain.ShopNameSource;
 import com.np.pricehunt.backend.domain.TrackedItem;
 import com.np.pricehunt.backend.repository.projection.DashboardListingRef;
+import java.time.Instant;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -176,6 +177,24 @@ class TrackedItemRepositoryTest {
         em.persist(item);
         em.flush();
         return item.getId();
+    }
+
+    @Test
+    void touchLastChecked_stampsOnlyThatColumn() {
+        Long id = persistItem("Example", ShopNameSource.DETECTED);
+        Instant at = Instant.parse("2026-08-25T10:00:00Z");
+
+        assertThat(repo.touchLastChecked(id, at)).isTrue();
+
+        TrackedItem reloaded = reload(id);
+        assertThat(reloaded.getLastChecked()).isEqualTo(at);
+        assertThat(reloaded.getShopName()).isEqualTo("Example");
+        assertThat(reloaded.getShopNameSource()).isEqualTo(ShopNameSource.DETECTED);
+    }
+
+    @Test
+    void touchLastChecked_unknownId_reportsFalse() {
+        assertThat(repo.touchLastChecked(999_999L, Instant.now())).isFalse();
     }
 
     @Test

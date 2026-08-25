@@ -167,4 +167,20 @@ public interface TrackedItemRepository extends JpaRepository<TrackedItem, Long> 
             @Param("newSource") ShopNameSource newSource,
             @Param("allowedSources") Collection<ShopNameSource> allowedSources,
             @Param("allowOverwriteNonBlank") boolean allowOverwriteNonBlank);
+
+    /**
+     * Stamps {@code lastChecked} by id — the price step's only write to this row (issue #222). Written
+     * as a statement rather than through the loaded entity so the UPDATE names exactly one column: an
+     * entity flush rewrites every column from the copy it loaded, silently undoing anything another
+     * request committed to the row in between (a shop-name promotion, say).
+     *
+     * @return true if the row exists and was stamped
+     */
+    default boolean touchLastChecked(Long itemId, Instant at) {
+        return stampLastChecked(itemId, at) > 0;
+    }
+
+    @Modifying
+    @Query("UPDATE TrackedItem t SET t.lastChecked = :at WHERE t.id = :id")
+    int stampLastChecked(@Param("id") Long itemId, @Param("at") Instant at);
 }

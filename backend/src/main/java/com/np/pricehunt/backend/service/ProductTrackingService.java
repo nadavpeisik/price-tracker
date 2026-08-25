@@ -209,7 +209,11 @@ public class ProductTrackingService {
                     .trackedItem(item)
                     .build());
 
-            item.setLastChecked(saved.getTimestamp());
+            // By id, never item.setLastChecked(...): a dirty entity flushes every column, so this is the
+            // one write in the pipeline that could overwrite a concurrent shop-name change (#222).
+            if (!trackedItemRepository.touchLastChecked(itemId, saved.getTimestamp())) {
+                log.warn("lastChecked not stamped — tracked item {} vanished mid-check", itemId);
+            }
 
             log.info(
                     "Tracked itemId={} url={} source={} price={} {} availability={}",
