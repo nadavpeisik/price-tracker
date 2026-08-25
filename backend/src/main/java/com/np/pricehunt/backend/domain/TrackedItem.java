@@ -35,6 +35,18 @@ public class TrackedItem {
 
     private Instant lastChecked;
 
+    // When this row was inserted (V12, #225). Never updated; the seeder back-dates it, so @PrePersist
+    // only fills a null.
+    @Column(nullable = false, updatable = false)
+    private Instant createdAt;
+
     @OneToMany(mappedBy = "trackedItem", cascade = CascadeType.ALL)
     private List<PriceRecord> priceHistory;
+
+    @PrePersist
+    protected void onCreate() {
+        if (createdAt == null) {
+            createdAt = Instant.now();
+        }
+    }
 }

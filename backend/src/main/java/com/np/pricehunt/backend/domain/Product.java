@@ -1,6 +1,7 @@
 package com.np.pricehunt.backend.domain;
 
 import jakarta.persistence.*;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import lombok.AllArgsConstructor;
@@ -24,6 +25,18 @@ public class Product {
 
     private String description;
 
+    // When this row was inserted (V12, #225). Never updated; the seeder back-dates it, so @PrePersist
+    // only fills a null.
+    @Column(nullable = false, updatable = false)
+    private Instant createdAt;
+
     @OneToMany(mappedBy = "product", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<TrackedItem> trackedItems = new ArrayList<>();
+
+    @PrePersist
+    protected void onCreate() {
+        if (createdAt == null) {
+            createdAt = Instant.now();
+        }
+    }
 }
