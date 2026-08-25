@@ -251,6 +251,9 @@ class ProductTrackingServiceCrudTest {
             return r;
         });
 
+        when(trackedItemRepository.updateLastCheckedById(eq(1L), any(Instant.class)))
+                .thenReturn(1);
+
         TrackResponse response = service.refreshTrackedItem(1L, 1L);
 
         verify(scraperClient).scrape(item.getUrl());
