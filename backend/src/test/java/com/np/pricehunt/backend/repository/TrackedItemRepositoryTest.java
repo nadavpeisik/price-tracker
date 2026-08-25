@@ -7,6 +7,7 @@ import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.domain.ShopNameSource;
 import com.np.pricehunt.backend.domain.TrackedItem;
 import com.np.pricehunt.backend.repository.projection.DashboardListingRef;
+import java.time.Instant;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -176,6 +177,24 @@ class TrackedItemRepositoryTest {
         em.persist(item);
         em.flush();
         return item.getId();
+    }
+
+    @Test
+    void updateLastCheckedById_writesOnlyThatColumn() {
+        Long id = persistItem("Example", ShopNameSource.DETECTED);
+        Instant at = Instant.parse("2026-08-25T10:00:00Z");
+
+        assertThat(repo.updateLastCheckedById(id, at)).isEqualTo(1);
+
+        TrackedItem reloaded = reload(id);
+        assertThat(reloaded.getLastChecked()).isEqualTo(at);
+        assertThat(reloaded.getShopName()).isEqualTo("Example");
+        assertThat(reloaded.getShopNameSource()).isEqualTo(ShopNameSource.DETECTED);
+    }
+
+    @Test
+    void updateLastCheckedById_unknownId_updatesNothing() {
+        assertThat(repo.updateLastCheckedById(999_999L, Instant.now())).isZero();
     }
 
     @Test

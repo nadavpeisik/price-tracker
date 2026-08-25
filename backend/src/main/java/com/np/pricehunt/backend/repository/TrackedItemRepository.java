@@ -167,4 +167,16 @@ public interface TrackedItemRepository extends JpaRepository<TrackedItem, Long> 
             @Param("newSource") ShopNameSource newSource,
             @Param("allowedSources") Collection<ShopNameSource> allowedSources,
             @Param("allowOverwriteNonBlank") boolean allowOverwriteNonBlank);
+
+    /**
+     * The price step's only write to this row (issue #222). A statement rather than a write through
+     * the loaded entity, so the UPDATE names exactly one column: an entity flush rewrites every column
+     * from the copy it loaded, silently undoing anything another request committed to the row in
+     * between (a shop-name promotion, say).
+     *
+     * @return rows updated — 0 when the item no longer exists, else 1
+     */
+    @Modifying
+    @Query("UPDATE TrackedItem t SET t.lastChecked = :at WHERE t.id = :id")
+    int updateLastCheckedById(@Param("id") Long itemId, @Param("at") Instant at);
 }

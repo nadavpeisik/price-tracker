@@ -3,6 +3,7 @@ package com.np.pricehunt.backend.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 import com.np.pricehunt.backend.client.ScraperClient;
@@ -250,10 +251,17 @@ class ProductTrackingServiceCrudTest {
             return r;
         });
 
+        when(trackedItemRepository.updateLastCheckedById(eq(1L), any(Instant.class)))
+                .thenReturn(1);
+
         TrackResponse response = service.refreshTrackedItem(1L, 1L);
 
         verify(scraperClient).scrape(item.getUrl());
         assertThat(response.currentPrice()).isEqualTo("899.9900");
+        // lastChecked is stamped by id, never through the loaded entity (#222): a dirty entity would
+        // flush every column and could overwrite a concurrent shop-name change.
+        verify(trackedItemRepository).updateLastCheckedById(eq(1L), any(Instant.class));
+        assertThat(item.getLastChecked()).isNull();
     }
 
     @Test
