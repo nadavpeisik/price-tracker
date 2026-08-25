@@ -180,11 +180,11 @@ class TrackedItemRepositoryTest {
     }
 
     @Test
-    void touchLastChecked_stampsOnlyThatColumn() {
+    void updateLastCheckedById_writesOnlyThatColumn() {
         Long id = persistItem("Example", ShopNameSource.DETECTED);
         Instant at = Instant.parse("2026-08-25T10:00:00Z");
 
-        assertThat(repo.touchLastChecked(id, at)).isTrue();
+        assertThat(repo.updateLastCheckedById(id, at)).isEqualTo(1);
 
         TrackedItem reloaded = reload(id);
         assertThat(reloaded.getLastChecked()).isEqualTo(at);
@@ -193,8 +193,8 @@ class TrackedItemRepositoryTest {
     }
 
     @Test
-    void touchLastChecked_unknownId_reportsFalse() {
-        assertThat(repo.touchLastChecked(999_999L, Instant.now())).isFalse();
+    void updateLastCheckedById_unknownId_updatesNothing() {
+        assertThat(repo.updateLastCheckedById(999_999L, Instant.now())).isZero();
     }
 
     @Test

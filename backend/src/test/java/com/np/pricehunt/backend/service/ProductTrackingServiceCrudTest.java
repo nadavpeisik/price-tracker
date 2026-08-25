@@ -257,7 +257,7 @@ class ProductTrackingServiceCrudTest {
         assertThat(response.currentPrice()).isEqualTo("899.9900");
         // lastChecked is stamped by id, never through the loaded entity (#222): a dirty entity would
         // flush every column and could overwrite a concurrent shop-name change.
-        verify(trackedItemRepository).touchLastChecked(eq(1L), any(Instant.class));
+        verify(trackedItemRepository).updateLastCheckedById(eq(1L), any(Instant.class));
         assertThat(item.getLastChecked()).isNull();
     }
 
