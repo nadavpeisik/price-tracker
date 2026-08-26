@@ -197,7 +197,7 @@ Tier 3 (FULLTEXT)   — Regex line-filter        → filterLines() reduces prune
 The scraper response carries an `extractionSource` enum (`STRUCTURED | SNIPPET | FULLTEXT`) so the backend knows which path to take without inspecting the content.
 
 **Domain model:**
-- `Product` — has many `TrackedItem`s (cascade ALL, orphanRemoval)
+- `Product` — has many `TrackedItem`s (cascade ALL, orphanRemoval). `name` is unique, case-insensitive, enforced **only** by the DB index `uq_product_name_ci` on `lower(name)` (V13, #232) — no service pre-check, since a check-then-insert can't see a concurrent create; `GlobalExceptionHandler` maps that index's violation (SQLSTATE 23505 + constraint name) to a `ProblemDetail` 409. Blank/padded input is the service's job (`requireName`: 400, stored stripped).
 - `TrackedItem` — belongs to a `Product`, has a `url` + `shopName`, has many `PriceRecord`s
 - Both `Product` and `TrackedItem` carry `createdAt` (V12, #225): stamped by `@PrePersist` when null, `updatable = false`, not exposed on the wire yet. It is an audit column, not the key for the per-user "most recently added" sort (#226 — that lives on the tenancy join table).
 - `PriceRecord` — immutable price snapshot (BigDecimal, LocalDateTime set via `@PrePersist`, availability flag, `extractionSource`)
