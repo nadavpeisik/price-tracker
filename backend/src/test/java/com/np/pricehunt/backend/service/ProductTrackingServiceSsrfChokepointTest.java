@@ -12,6 +12,8 @@ import com.np.pricehunt.backend.config.PriceTrackingProperties;
 import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.domain.TrackedItem;
 import com.np.pricehunt.backend.dto.TrackRequest;
+import com.np.pricehunt.backend.exception.NotFoundException;
+import com.np.pricehunt.backend.exception.ValidationException;
 import com.np.pricehunt.backend.observability.ScrapeAttemptRecorder;
 import com.np.pricehunt.backend.repository.PriceRecordRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
@@ -27,10 +29,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.http.HttpStatus;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
-import org.springframework.web.server.ResponseStatusException;
 
 /**
  * Verifies the #139 validation chokepoint wiring in {@link ProductTrackingService}: refresh + scheduled
@@ -120,11 +120,11 @@ class ProductTrackingServiceSsrfChokepointTest {
     void refreshTrackedItem_validates_beforeAnyDownstreamWork() {
         when(trackedItemRepository.findRefreshViewByIdAndProductId(1L, 1L)).thenReturn(Optional.of(VIEW));
         when(cooldownLimiter.tryAcquire(1L)).thenReturn(true);
-        doThrow(new ResponseStatusException(HttpStatus.BAD_REQUEST, "URL host is not allowed"))
+        doThrow(new ValidationException("URL host is not allowed"))
                 .when(urlValidator)
                 .validate(URL);
 
-        assertThatThrownBy(() -> service.refreshTrackedItem(1L, 1L)).isInstanceOf(ResponseStatusException.class);
+        assertThatThrownBy(() -> service.refreshTrackedItem(1L, 1L)).isInstanceOf(ValidationException.class);
 
         // Rejected at the chokepoint → no scrape, no shop-name resolution, no persistence.
         verify(urlValidator).validate(URL);
@@ -137,11 +137,11 @@ class ProductTrackingServiceSsrfChokepointTest {
     void refreshTrackedItem_rejection_stillConsumesCooldown() {
         when(trackedItemRepository.findRefreshViewByIdAndProductId(1L, 1L)).thenReturn(Optional.of(VIEW));
         when(cooldownLimiter.tryAcquire(1L)).thenReturn(true);
-        doThrow(new ResponseStatusException(HttpStatus.BAD_REQUEST, "URL host is not allowed"))
+        doThrow(new ValidationException("URL host is not allowed"))
                 .when(urlValidator)
                 .validate(URL);
 
-        assertThatThrownBy(() -> service.refreshTrackedItem(1L, 1L)).isInstanceOf(ResponseStatusException.class);
+        assertThatThrownBy(() -> service.refreshTrackedItem(1L, 1L)).isInstanceOf(ValidationException.class);
 
         // Intentional ordering: the volatile cooldown is consumed BEFORE the chokepoint check, so a blocked
         // refresh still burns the window (locks the ordering against a future reorder).
@@ -150,11 +150,11 @@ class ProductTrackingServiceSsrfChokepointTest {
 
     @Test
     void scheduledRefresh_validates_beforeScrape() {
-        doThrow(new ResponseStatusException(HttpStatus.BAD_REQUEST, "URL host is not allowed"))
+        doThrow(new ValidationException("URL host is not allowed"))
                 .when(urlValidator)
                 .validate(URL);
 
-        assertThatThrownBy(() -> service.scheduledRefresh(VIEW)).isInstanceOf(ResponseStatusException.class);
+        assertThatThrownBy(() -> service.scheduledRefresh(VIEW)).isInstanceOf(ValidationException.class);
 
         verify(urlValidator).validate(URL);
         verify(scraperClient, never()).scrape(any());
@@ -184,10 +184,7 @@ class ProductTrackingServiceSsrfChokepointTest {
         // without consuming a resolver slot.
         when(productRepository.existsById(999L)).thenReturn(false);
 
-        assertThatThrownBy(() -> service.trackUrl(999L, new TrackRequest(URL)))
-                .isInstanceOfSatisfying(ResponseStatusException.class, e -> org.assertj.core.api.Assertions.assertThat(
-                                e.getStatusCode())
-                        .isEqualTo(HttpStatus.NOT_FOUND));
+        assertThatThrownBy(() -> service.trackUrl(999L, new TrackRequest(URL))).isInstanceOf(NotFoundException.class);
 
         verify(urlValidator, never()).validate(any());
         verify(scraperClient, never()).scrape(any());
@@ -195,10 +192,7 @@ class ProductTrackingServiceSsrfChokepointTest {
 
     @Test
     void trackUrl_nullRequest_returns400_withoutValidating() {
-        assertThatThrownBy(() -> service.trackUrl(1L, null))
-                .isInstanceOfSatisfying(ResponseStatusException.class, e -> org.assertj.core.api.Assertions.assertThat(
-                                e.getStatusCode())
-                        .isEqualTo(HttpStatus.BAD_REQUEST));
+        assertThatThrownBy(() -> service.trackUrl(1L, null)).isInstanceOf(ValidationException.class);
 
         verify(urlValidator, never()).validate(any());
     }

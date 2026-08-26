@@ -1,7 +1,5 @@
 package com.np.pricehunt.backend.exception;
 
-import org.springframework.http.HttpStatus;
-
 // Thrown when the scraper detects an anti-bot wall (e.g. Cloudflare managed
 // challenge) and short-circuits with ExtractionSource.BLOCKED. 502 BAD_GATEWAY
 // because the backend is acting as a gateway to the public web — the upstream
@@ -13,6 +11,6 @@ import org.springframework.http.HttpStatus;
 // (issue #131) derives a null model from the BLOCKED source.
 public class ScrapeBlockedException extends PriceExtractionException {
     public ScrapeBlockedException(String reason) {
-        super(HttpStatus.BAD_GATEWAY, "Scrape blocked by anti-bot protection (%s)".formatted(reason), null);
+        super("Scrape blocked by anti-bot protection (%s)".formatted(reason), null);
     }
 }

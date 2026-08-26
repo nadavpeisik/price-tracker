@@ -5,6 +5,9 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.np.pricehunt.backend.config.UrlValidationProperties;
+import com.np.pricehunt.backend.exception.DependencyTimeoutException;
+import com.np.pricehunt.backend.exception.DependencyUnavailableException;
+import com.np.pricehunt.backend.exception.ValidationException;
 import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
@@ -14,8 +17,6 @@ import java.util.concurrent.TimeoutException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
-import org.springframework.http.HttpStatus;
-import org.springframework.web.server.ResponseStatusException;
 
 class UrlValidatorTest {
 
@@ -86,23 +87,22 @@ class UrlValidatorTest {
     @Test
     void validate_malformedUrl_rejected() {
         assertThatThrownBy(() -> validator.validate("not a url"))
-                .isInstanceOf(ResponseStatusException.class)
+                .isInstanceOf(ValidationException.class)
                 .hasMessageContaining("Invalid URL");
     }
 
     @Test
     void validate_mailtoNoHost_rejected() {
         assertThatThrownBy(() -> validator.validate("mailto:foo@bar.com"))
-                .isInstanceOf(ResponseStatusException.class)
+                .isInstanceOf(ValidationException.class)
                 .hasMessageContaining("Invalid URL");
     }
 
     @Test
     void validate_ftpScheme_rejected() {
         assertThatThrownBy(() -> validator.validate("ftp://example.com/file"))
-                .isInstanceOfSatisfying(ResponseStatusException.class, e -> {
-                    assertThat(e.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-                    assertThat(e.getReason()).contains("http or https");
+                .isInstanceOfSatisfying(ValidationException.class, e -> {
+                    assertThat(e.getMessage()).contains("http or https");
                 });
     }
 
@@ -137,9 +137,8 @@ class UrlValidatorTest {
     void validate_uppercasePatternConfig_stillMatchesLowercaseHost() {
         UrlValidator caseInsensitive = validatorWith("(^|\\.)AMAZON\\.[A-Z]{2,3}(\\.[A-Z]{2})?$");
         assertThatThrownBy(() -> caseInsensitive.validate("https://www.amazon.com/dp/B000000000"))
-                .isInstanceOfSatisfying(ResponseStatusException.class, e -> {
-                    assertThat(e.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-                    assertThat(e.getReason()).contains("amazon");
+                .isInstanceOfSatisfying(ValidationException.class, e -> {
+                    assertThat(e.getMessage()).contains("amazon");
                 });
     }
 
@@ -147,9 +146,8 @@ class UrlValidatorTest {
     void validate_customBlocklistEntry_rejected() {
         UrlValidator custom = validatorWith("(^|\\.)example\\.com$");
         assertThatThrownBy(() -> custom.validate("https://www.example.com/foo"))
-                .isInstanceOfSatisfying(ResponseStatusException.class, e -> {
-                    assertThat(e.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-                    assertThat(e.getReason()).contains("www.example.com").contains("not currently supported");
+                .isInstanceOfSatisfying(ValidationException.class, e -> {
+                    assertThat(e.getMessage()).contains("www.example.com").contains("not currently supported");
                 });
     }
 
@@ -278,9 +276,8 @@ class UrlValidatorTest {
             })
     void validate_parserDifferentialHost_rejectedWithoutDns(String url) {
         UrlValidator v = validatorWith(FAIL_IF_CALLED);
-        assertThatThrownBy(() -> v.validate(url)).isInstanceOfSatisfying(ResponseStatusException.class, e -> {
-            assertThat(e.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-            assertThat(e.getReason()).isNotNull();
+        assertThatThrownBy(() -> v.validate(url)).isInstanceOfSatisfying(ValidationException.class, e -> {
+            assertThat(e.getMessage()).isNotNull();
         });
     }
 
@@ -309,9 +306,7 @@ class UrlValidatorTest {
         UrlValidator v = validatorWith(host -> {
             throw new UnknownHostException(host);
         });
-        assertThatThrownBy(() -> v.validate("https://nope.example.com/x"))
-                .isInstanceOfSatisfying(ResponseStatusException.class, e -> assertThat(e.getStatusCode())
-                        .isEqualTo(HttpStatus.BAD_REQUEST));
+        assertThatThrownBy(() -> v.validate("https://nope.example.com/x")).isInstanceOf(ValidationException.class);
     }
 
     @Test
@@ -320,8 +315,7 @@ class UrlValidatorTest {
             throw new TimeoutException("slow");
         });
         assertThatThrownBy(() -> v.validate("https://slow.example.com/x"))
-                .isInstanceOfSatisfying(ResponseStatusException.class, e -> assertThat(e.getStatusCode())
-                        .isEqualTo(HttpStatus.GATEWAY_TIMEOUT));
+                .isInstanceOf(DependencyTimeoutException.class);
     }
 
     @Test
@@ -330,16 +324,13 @@ class UrlValidatorTest {
             throw new HostResolutionUnavailableException("saturated", null);
         });
         assertThatThrownBy(() -> v.validate("https://busy.example.com/x"))
-                .isInstanceOfSatisfying(ResponseStatusException.class, e -> assertThat(e.getStatusCode())
-                        .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE));
+                .isInstanceOf(DependencyUnavailableException.class);
     }
 
     @Test
     void resolverReturnsEmpty_returns400() {
         UrlValidator v = validatorWith(host -> new InetAddress[0]);
-        assertThatThrownBy(() -> v.validate("https://empty.example.com/x"))
-                .isInstanceOfSatisfying(ResponseStatusException.class, e -> assertThat(e.getStatusCode())
-                        .isEqualTo(HttpStatus.BAD_REQUEST));
+        assertThatThrownBy(() -> v.validate("https://empty.example.com/x")).isInstanceOf(ValidationException.class);
     }
 
     // --- SSRF: DNS rebinding / multi-record ---
@@ -347,9 +338,7 @@ class UrlValidatorTest {
     @Test
     void multiRecord_anyInternal_rejected() {
         UrlValidator v = validatorWith(resolverReturning(addr("8.8.8.8"), addr("10.0.0.1")));
-        assertThatThrownBy(() -> v.validate("https://split.example.com/x"))
-                .isInstanceOfSatisfying(ResponseStatusException.class, e -> assertThat(e.getStatusCode())
-                        .isEqualTo(HttpStatus.BAD_REQUEST));
+        assertThatThrownBy(() -> v.validate("https://split.example.com/x")).isInstanceOf(ValidationException.class);
     }
 
     // --- bracket strip + null/blank + two entry points ---
@@ -364,18 +353,16 @@ class UrlValidatorTest {
             return new InetAddress[] {addr("::1")};
         };
         UrlValidator v = validatorWith(onlyKnowsColonColonOne);
-        assertThatThrownBy(() -> v.validate("http://[::1]/"))
-                .isInstanceOfSatisfying(ResponseStatusException.class, e -> {
-                    assertThat(e.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-                    assertThat(e.getReason()).contains("not allowed");
-                });
+        assertThatThrownBy(() -> v.validate("http://[::1]/")).isInstanceOfSatisfying(ValidationException.class, e -> {
+            assertThat(e.getMessage()).contains("not allowed");
+        });
     }
 
     @Test
     void nullOrBlankUrl_return400() {
         UrlValidator v = validatorWith(FAIL_IF_CALLED);
         for (String bad : new String[] {null, "", "   "}) {
-            assertThatThrownBy(() -> v.validate(bad)).isInstanceOf(ResponseStatusException.class);
+            assertThatThrownBy(() -> v.validate(bad)).isInstanceOf(ValidationException.class);
         }
     }
 
@@ -391,9 +378,8 @@ class UrlValidatorTest {
             })
     void validate_reservedName_rejectedWithoutDns(String url) {
         UrlValidator v = validatorWith(FAIL_IF_CALLED, AMAZON_PATTERN);
-        assertThatThrownBy(() -> v.validate(url)).isInstanceOfSatisfying(ResponseStatusException.class, e -> {
-            assertThat(e.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-            assertThat(e.getReason()).isEqualTo("URL host is not allowed");
+        assertThatThrownBy(() -> v.validate(url)).isInstanceOfSatisfying(ValidationException.class, e -> {
+            assertThat(e.getMessage()).isEqualTo("URL host is not allowed");
         });
     }
 
@@ -403,7 +389,7 @@ class UrlValidatorTest {
     void validate_reservedName_rejectedEvenWithTheBlocklistDisabled() {
         UrlValidator v = new UrlValidator(props(false), FAIL_IF_CALLED);
         assertThatThrownBy(() -> v.validate("https://ivory.seed.invalid/item/1001"))
-                .isInstanceOf(ResponseStatusException.class);
+                .isInstanceOf(ValidationException.class);
     }
 
     // A reserved TLD is matched on the LAST label only — a real host merely containing the word is
@@ -471,9 +457,8 @@ class UrlValidatorTest {
         // FAIL_IF_CALLED resolver proves a blocklisted host 400s without a lookup.
         UrlValidator v = validatorWith(FAIL_IF_CALLED, AMAZON_PATTERN);
         assertThatThrownBy(() -> v.validate("https://www.amazon.com/dp/x"))
-                .isInstanceOfSatisfying(ResponseStatusException.class, e -> {
-                    assertThat(e.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-                    assertThat(e.getReason()).contains("not currently supported");
+                .isInstanceOfSatisfying(ValidationException.class, e -> {
+                    assertThat(e.getMessage()).contains("not currently supported");
                 });
     }
 
@@ -482,9 +467,8 @@ class UrlValidatorTest {
     private static void assertResolvedAddrBlocked(InetAddress resolved) {
         UrlValidator v = validatorWith(resolverReturning(resolved));
         assertThatThrownBy(() -> v.validate("https://evil.example.com/x"))
-                .isInstanceOfSatisfying(ResponseStatusException.class, e -> {
-                    assertThat(e.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-                    assertThat(e.getReason()).contains("not allowed");
+                .isInstanceOfSatisfying(ValidationException.class, e -> {
+                    assertThat(e.getMessage()).contains("not allowed");
                 });
     }
 
@@ -535,9 +519,8 @@ class UrlValidatorTest {
     }
 
     private void assertAmazonRejected(String url) {
-        assertThatThrownBy(() -> validator.validate(url)).isInstanceOfSatisfying(ResponseStatusException.class, e -> {
-            assertThat(e.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-            assertThat(e.getReason()).contains("amazon").contains("not currently supported");
+        assertThatThrownBy(() -> validator.validate(url)).isInstanceOfSatisfying(ValidationException.class, e -> {
+            assertThat(e.getMessage()).contains("amazon").contains("not currently supported");
         });
     }
 }

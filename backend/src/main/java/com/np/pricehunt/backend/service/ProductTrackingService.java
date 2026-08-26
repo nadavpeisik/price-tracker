@@ -8,6 +8,11 @@ import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.domain.ScrapeFailureCode;
 import com.np.pricehunt.backend.domain.TrackedItem;
 import com.np.pricehunt.backend.dto.*;
+import com.np.pricehunt.backend.exception.ConflictException;
+import com.np.pricehunt.backend.exception.ErrorCode;
+import com.np.pricehunt.backend.exception.NotFoundException;
+import com.np.pricehunt.backend.exception.RefreshCooldownException;
+import com.np.pricehunt.backend.exception.ValidationException;
 import com.np.pricehunt.backend.money.MoneyPrecision;
 import com.np.pricehunt.backend.observability.ScrapeAttemptRecorder;
 import com.np.pricehunt.backend.repository.PriceRecordRepository;
@@ -22,10 +27,8 @@ import java.time.Instant;
 import java.util.Locale;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
-import org.springframework.web.server.ResponseStatusException;
 
 @Slf4j
 @Service
@@ -58,11 +61,11 @@ public class ProductTrackingService {
     public TrackResponse trackUrl(Long productId, TrackRequest request) {
         // A literal JSON `null` body reaches here; an empty body is already a 400 upstream.
         if (request == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Request body is required");
+            throw new ValidationException("Request body is required");
         }
         // Cheap 404 before the DNS-based validation; admission re-checks under the product lock.
         if (!productRepository.existsById(productId)) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found");
+            throw new NotFoundException("Product not found");
         }
         // Validate before admission so a rejected URL is never persisted.
         urlValidator.validate(request.url());
@@ -70,7 +73,7 @@ public class ProductTrackingService {
         PriceCheckTarget target = transactionTemplate.execute(status -> {
             Product product = productRepository
                     .findForUpdateById(productId)
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found"));
+                    .orElseThrow(() -> new NotFoundException("Product not found"));
             TrackedItem item = admitOrReuseListing(product, request);
             return new PriceCheckTarget(item.getId(), item.getUrl());
         });
@@ -82,13 +85,12 @@ public class ProductTrackingService {
     public TrackResponse refreshTrackedItem(Long productId, Long itemId) {
         TrackedItemRefreshView item = trackedItemRepository
                 .findRefreshViewByIdAndProductId(itemId, productId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found"));
+                .orElseThrow(() -> new NotFoundException("Tracked item not found"));
         enforcePersistedRefreshCooldown(item.lastChecked());
 
         // Acquired before scraping, outside any transaction; a failed scrape still consumes the cooldown.
         if (!cooldownLimiter.tryAcquire(item.id())) {
-            throw new ResponseStatusException(
-                    HttpStatus.TOO_MANY_REQUESTS, "Item was refreshed recently, try again later");
+            throw new RefreshCooldownException("Item was refreshed recently, try again later");
         }
 
         // Cooldown is consumed before the stored URL is validated, so a rejected refresh burns the window too.
@@ -104,8 +106,7 @@ public class ProductTrackingService {
     private void enforcePersistedRefreshCooldown(Instant persistedLastChecked) {
         Instant cutoff = Instant.now(clock).minus(trackingProperties.minRefreshInterval());
         if (persistedLastChecked != null && persistedLastChecked.isAfter(cutoff)) {
-            throw new ResponseStatusException(
-                    HttpStatus.TOO_MANY_REQUESTS, "Item was refreshed recently, try again later");
+            throw new RefreshCooldownException("Item was refreshed recently, try again later");
         }
     }
 
@@ -177,7 +178,7 @@ public class ProductTrackingService {
         return transactionTemplate.execute(status -> {
             TrackedItem item = trackedItemRepository
                     .findById(itemId)
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found"));
+                    .orElseThrow(() -> new NotFoundException("Tracked item not found"));
             PriceRecord latest = priceRecordRepository
                     .findFirstByTrackedItemOrderByTimestampDesc(item)
                     .orElse(null);
@@ -239,8 +240,8 @@ public class ProductTrackingService {
                 .findByUrl(request.url())
                 .map(existing -> {
                     if (!existing.getProduct().getId().equals(product.getId())) {
-                        throw new ResponseStatusException(
-                                HttpStatus.CONFLICT,
+                        throw new ConflictException(
+                                ErrorCode.URL_TRACKED_BY_ANOTHER_PRODUCT,
                                 "URL already tracked under product: "
                                         + existing.getProduct().getName());
                     }
@@ -249,8 +250,8 @@ public class ProductTrackingService {
                 .orElseGet(() -> {
                     long listings = trackedItemRepository.countByProduct(product);
                     if (listings >= trackingProperties.maxListingsPerProduct()) {
-                        throw new ResponseStatusException(
-                                HttpStatus.CONFLICT,
+                        throw new ConflictException(
+                                ErrorCode.PRODUCT_LISTING_LIMIT_REACHED,
                                 "Listings-per-product limit reached (" + trackingProperties.maxListingsPerProduct()
                                         + ")");
                     }

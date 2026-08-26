@@ -1,14 +1,13 @@
 package com.np.pricehunt.backend.controller;
 
 import com.np.pricehunt.backend.config.CurrencyProperties;
+import com.np.pricehunt.backend.exception.ValidationException;
 import com.np.pricehunt.backend.service.fx.ExchangeRateService;
 import java.util.Currency;
 import java.util.Locale;
 import java.util.regex.Pattern;
 import lombok.RequiredArgsConstructor;
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
-import org.springframework.web.server.ResponseStatusException;
 
 /**
  * Turns a {@code ?displayCurrency=} parameter into a validated, supported currency code.
@@ -33,7 +32,7 @@ public class DisplayCurrencyResolver {
     /**
      * @param requested the raw query parameter; null or blank selects the configured default
      * @return an uppercase ISO 4217 code the converter can actually reach
-     * @throws ResponseStatusException 400 for a malformed or unsupported code, from either source
+     * @throws ValidationException for a malformed or unsupported code, from either source
      */
     public String resolve(String requested) {
         // The configured default goes through the SAME normalization and format check as a requested
@@ -45,8 +44,7 @@ public class DisplayCurrencyResolver {
         String resolved = candidate == null ? null : candidate.trim().toUpperCase(Locale.ROOT);
 
         if (!isIsoCurrencyCode(resolved)) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
+            throw new ValidationException(
                     explicitlyRequested
                             ? "displayCurrency must be a 3-letter ISO 4217 code"
                             : "Configured default display currency is not a 3-letter ISO 4217 code");
@@ -56,7 +54,7 @@ public class DisplayCurrencyResolver {
         // request the app can serve perfectly. Checked on the resolved value, so a misconfigured
         // default surfaces the same way a bad parameter does.
         if (rateService.isDefinitelyUnsupported(resolved)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unsupported display currency: " + resolved);
+            throw new ValidationException("Unsupported display currency: " + resolved);
         }
         return resolved;
     }

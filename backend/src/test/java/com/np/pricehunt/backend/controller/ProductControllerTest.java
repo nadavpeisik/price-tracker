@@ -11,6 +11,10 @@ import com.np.pricehunt.backend.domain.AvailabilityStatus;
 import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.domain.ShopNameSource;
 import com.np.pricehunt.backend.dto.*;
+import com.np.pricehunt.backend.exception.ConflictException;
+import com.np.pricehunt.backend.exception.ErrorCode;
+import com.np.pricehunt.backend.exception.NotFoundException;
+import com.np.pricehunt.backend.exception.ValidationException;
 import com.np.pricehunt.backend.service.ProductCatalogService;
 import com.np.pricehunt.backend.service.ProductQueryService;
 import com.np.pricehunt.backend.service.ProductTrackingService;
@@ -28,12 +32,10 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.web.client.RestClientException;
-import org.springframework.web.server.ResponseStatusException;
 
 @WebMvcTest(ProductController.class)
 @Import(DisplayCurrencyResolver.class)
@@ -92,7 +94,7 @@ class ProductControllerTest {
 
     @Test
     void getProduct_notFound_returns404() throws Exception {
-        when(queryService.getProduct(99L)).thenThrow(new ResponseStatusException(HttpStatus.NOT_FOUND));
+        when(queryService.getProduct(99L)).thenThrow(new NotFoundException("not found"));
 
         mvc.perform(get("/api/products/99")).andExpect(status().isNotFound());
     }
@@ -175,8 +177,7 @@ class ProductControllerTest {
     @Test
     void getListings_unknownProduct_propagates404() throws Exception {
         when(rateService.isDefinitelyUnsupported("ILS")).thenReturn(false);
-        when(queryService.getListings(99L, "ILS"))
-                .thenThrow(new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found"));
+        when(queryService.getListings(99L, "ILS")).thenThrow(new NotFoundException("Product not found"));
 
         mvc.perform(get("/api/products/99/listings")).andExpect(status().isNotFound());
     }
@@ -189,9 +190,7 @@ class ProductControllerTest {
 
     @Test
     void deleteProduct_notFound_returns404() throws Exception {
-        doThrow(new ResponseStatusException(HttpStatus.NOT_FOUND))
-                .when(catalogService)
-                .deleteProduct(99L);
+        doThrow(new NotFoundException("not found")).when(catalogService).deleteProduct(99L);
 
         mvc.perform(delete("/api/products/99")).andExpect(status().isNotFound());
     }
@@ -204,9 +203,7 @@ class ProductControllerTest {
 
     @Test
     void deleteTrackedItem_wrongProduct_returns404() throws Exception {
-        doThrow(new ResponseStatusException(HttpStatus.NOT_FOUND))
-                .when(catalogService)
-                .deleteTrackedItem(1L, 99L);
+        doThrow(new NotFoundException("not found")).when(catalogService).deleteTrackedItem(1L, 99L);
 
         mvc.perform(delete("/api/products/1/tracked-items/99")).andExpect(status().isNotFound());
     }
@@ -227,7 +224,47 @@ class ProductControllerTest {
                         .content(mapper.writeValueAsString(new CreateProductRequest("Sony WH-1000XM5"))))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.status").value(409))
-                .andExpect(jsonPath("$.detail").value("A product with that name already exists"));
+                .andExpect(jsonPath("$.detail").value("A product with that name already exists"))
+                .andExpect(jsonPath("$.errorCode").value("PRODUCT_NAME_ALREADY_EXISTS"));
+    }
+
+    // The two track 409s share a status and differ only in remedy; `errorCode` is the contract a
+    // client switches on, `detail` is prose it must not parse (#173).
+    @Test
+    void trackUrl_urlOwnedByAnotherProduct_returns409WithErrorCode() throws Exception {
+        when(trackingService.trackUrl(eq(1L), any()))
+                .thenThrow(new ConflictException(
+                        ErrorCode.URL_TRACKED_BY_ANOTHER_PRODUCT, "URL already tracked under product: Other"));
+
+        mvc.perform(post("/api/products/1/track")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(mapper.writeValueAsString(new TrackRequest("https://amazon.com/dp/1"))))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.errorCode").value("URL_TRACKED_BY_ANOTHER_PRODUCT"))
+                .andExpect(jsonPath("$.detail").value("URL already tracked under product: Other"));
+    }
+
+    @Test
+    void trackUrl_listingCap_returns409WithErrorCode() throws Exception {
+        when(trackingService.trackUrl(eq(1L), any()))
+                .thenThrow(new ConflictException(
+                        ErrorCode.PRODUCT_LISTING_LIMIT_REACHED, "Listings-per-product limit reached (20)"));
+
+        mvc.perform(post("/api/products/1/track")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(mapper.writeValueAsString(new TrackRequest("https://amazon.com/dp/1"))))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.errorCode").value("PRODUCT_LISTING_LIMIT_REACHED"));
+    }
+
+    @Test
+    void uncodedApplicationException_omitsErrorCode() throws Exception {
+        when(queryService.getProduct(99L)).thenThrow(new NotFoundException("Product not found"));
+
+        mvc.perform(get("/api/products/99"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.detail").value("Product not found"))
+                .andExpect(jsonPath("$.errorCode").doesNotExist());
     }
 
     @Test
@@ -399,7 +436,7 @@ class ProductControllerTest {
     void getPriceTrend_unknownProduct_propagates404() throws Exception {
         when(rateService.isDefinitelyUnsupported("ILS")).thenReturn(false);
         when(trendService.getProductTrend(eq(99L), isNull(), eq("ILS")))
-                .thenThrow(new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found"));
+                .thenThrow(new NotFoundException("Product not found"));
 
         mvc.perform(get("/api/products/99/price-trend")).andExpect(status().isNotFound());
     }
@@ -408,7 +445,7 @@ class ProductControllerTest {
     void getPriceTrend_nonPositiveDays_propagates400() throws Exception {
         when(rateService.isDefinitelyUnsupported("ILS")).thenReturn(false);
         when(trendService.getProductTrend(eq(1L), eq(0), eq("ILS")))
-                .thenThrow(new ResponseStatusException(HttpStatus.BAD_REQUEST, "days must be >= 1"));
+                .thenThrow(new ValidationException("days must be >= 1"));
 
         mvc.perform(get("/api/products/1/price-trend").param("days", "0")).andExpect(status().isBadRequest());
     }

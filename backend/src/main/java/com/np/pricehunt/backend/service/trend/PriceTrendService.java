@@ -6,6 +6,8 @@ import com.np.pricehunt.backend.domain.TrackedItem;
 import com.np.pricehunt.backend.dto.BestOfferResponse;
 import com.np.pricehunt.backend.dto.PriceTrendResponse;
 import com.np.pricehunt.backend.dto.TrendPointResponse;
+import com.np.pricehunt.backend.exception.NotFoundException;
+import com.np.pricehunt.backend.exception.ValidationException;
 import com.np.pricehunt.backend.repository.PriceRecordRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
@@ -29,10 +31,8 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.server.ResponseStatusException;
 
 /**
  * Loads what the price-trend engine needs and hands it to {@link PriceTrendCalculator} (issue #145).
@@ -60,9 +60,8 @@ public class PriceTrendService {
      * @param displayCurrency must already be validated by the caller (the controller does this)
      */
     public PriceTrendResponse getProductTrend(Long productId, Integer days, String displayCurrency) {
-        Product product = productRepository
-                .findById(productId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found"));
+        Product product =
+                productRepository.findById(productId).orElseThrow(() -> new NotFoundException("Product not found"));
 
         List<TrackedItem> listings = trackedItemRepository.findByProduct(product);
         ProductTrend trend = computeProductTrends(Map.of(product.getId(), listings), days, displayCurrency)
@@ -183,7 +182,7 @@ public class PriceTrendService {
             return trendProperties.defaultWindowDays();
         }
         if (days < 1) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "days must be >= 1");
+            throw new ValidationException("days must be >= 1");
         }
         if (days > trendProperties.maxWindowDays()) {
             log.info("Price-trend window clamped from {} to {} days", days, trendProperties.maxWindowDays());

@@ -4,6 +4,7 @@ import com.np.pricehunt.backend.config.DashboardProperties;
 import com.np.pricehunt.backend.dto.DashboardQueryRequest;
 import com.np.pricehunt.backend.dto.DashboardResponse;
 import com.np.pricehunt.backend.dto.DashboardSortKey;
+import com.np.pricehunt.backend.exception.ValidationException;
 import com.np.pricehunt.backend.service.dashboard.DashboardQueryService;
 import com.np.pricehunt.backend.util.ShopIdentity;
 import java.util.LinkedHashSet;
@@ -11,14 +12,12 @@ import java.util.List;
 import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.server.ResponseStatusException;
 
 /**
  * The tracked-items dashboard's single endpoint (issue #146).
@@ -120,7 +119,7 @@ public class DashboardController {
     /** 1-based: page 0 is not "the first page", it is a client still on the old convention. */
     private static int validatePage(int page) {
         if (page < 1) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "page must be >= 1 (pagination is 1-based)");
+            throw new ValidationException("page must be >= 1 (pagination is 1-based)");
         }
         return page;
     }
@@ -134,7 +133,7 @@ public class DashboardController {
      */
     private int clampSize(int size) {
         if (size < 1) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "size must be >= 1");
+            throw new ValidationException("size must be >= 1");
         }
         int max = dashboardProperties.maxPageSize();
         if (size > max) {
