@@ -29,8 +29,8 @@ public class ProductCatalogService {
 
     @Transactional
     public CreateProductResponse createProduct(CreateProductRequest request) {
-        Product product =
-                productRepository.save(Product.builder().name(request.name()).build());
+        String name = requireName(request.name());
+        Product product = productRepository.save(Product.builder().name(name).build());
         return new CreateProductResponse(product.getId(), product.getName());
     }
 
@@ -48,13 +48,26 @@ public class ProductCatalogService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found"));
 
         if (StringUtils.hasText(request.name())) {
-            product.setName(request.name());
+            product.setName(request.name().strip());
         }
         if (request.description() != null) {
             product.setDescription(StringUtils.hasText(request.description()) ? request.description() : null);
         }
 
         return new ProductResponse(product.getId(), product.getName(), product.getDescription());
+    }
+
+    /**
+     * Uniqueness itself is not checked here: the {@code uq_product_name_ci} index is the only check
+     * that holds under concurrent writes, and {@code GlobalExceptionHandler} reports its violation as
+     * the 409. What the index cannot see is blank or padded input, so names are validated and stored
+     * stripped — "Sony " would otherwise sit beside "Sony".
+     */
+    private static String requireName(String raw) {
+        if (!StringUtils.hasText(raw)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Name cannot be blank");
+        }
+        return raw.strip();
     }
 
     @Transactional

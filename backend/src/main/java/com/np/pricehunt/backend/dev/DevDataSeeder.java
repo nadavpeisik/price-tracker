@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -149,13 +150,36 @@ public class DevDataSeeder implements CommandLineRunner {
         }
 
         int insertedRateCount = seedExchangeRates(LocalDate.ofInstant(now, ZoneOffset.UTC));
-        List<Product> products = productRepository.saveAll(fixtures(now));
+        List<Product> products = productRepository.saveAll(withoutNameClashes(fixtures(now)));
 
         log.info(
                 "Dev seed complete: replaced {} product(s) with {}, plus {} exchange-rate row(s)",
                 existingSeedProducts.size(),
                 products.size(),
                 insertedRateCount);
+    }
+
+    /**
+     * Product names are unique, case-insensitive (V13), and the fixtures are named after real
+     * products — so a real "Sony WH-1000XM5" tracked after a {@code seed-clean} would otherwise make
+     * the next {@code seed} boot fail on the index. The real product wins; its fixture is skipped.
+     * Whole-table read: acceptable for an explicitly enabled, startup-only dev path — it scales with the
+     * table, so revisit if seeding into a large copied catalogue ever becomes a workflow.
+     */
+    private List<Product> withoutNameClashes(List<Product> fixtures) {
+        Set<String> taken = new HashSet<>();
+        for (Product existing : productRepository.findAll()) {
+            taken.add(existing.getName().toLowerCase(Locale.ROOT));
+        }
+        List<Product> free = new ArrayList<>();
+        for (Product fixture : fixtures) {
+            if (taken.contains(fixture.getName().toLowerCase(Locale.ROOT))) {
+                log.warn("Dev seed: skipping fixture '{}' — a real product already has that name", fixture.getName());
+            } else {
+                free.add(fixture);
+            }
+        }
+        return free;
     }
 
     /**

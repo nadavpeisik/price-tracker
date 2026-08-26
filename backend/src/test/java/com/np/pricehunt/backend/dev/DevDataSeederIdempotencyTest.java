@@ -90,6 +90,23 @@ class DevDataSeederIdempotencyTest {
     }
 
     @Test
+    void aRealProductNamedLikeAFixtureSurvives_andItsFixtureIsSkipped() {
+        // seed-clean, then the user tracks the real thing, then seed again (V13 unique names).
+        Product real = productRepository.saveAndFlush(
+                Product.builder().name("sony wh-1000xm5").description("mine").build());
+
+        seeder.run();
+
+        List<Product> sameName = productRepository.findAll().stream()
+                .filter(p -> p.getName().equalsIgnoreCase("Sony WH-1000XM5"))
+                .toList();
+        assertThat(sameName).extracting(Product::getId).containsExactly(real.getId());
+        assertThat(sameName.get(0).getDescription()).isEqualTo("mine");
+        // Every other fixture still lands.
+        assertThat(productRepository.count()).isEqualTo(10 + DevDataSeeder.FILLER_COUNT);
+    }
+
+    @Test
     void seedsProductsListingsAndHistory() {
         seeder.run();
 

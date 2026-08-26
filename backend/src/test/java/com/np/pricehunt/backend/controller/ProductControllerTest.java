@@ -17,14 +17,17 @@ import com.np.pricehunt.backend.service.ProductTrackingService;
 import com.np.pricehunt.backend.service.fx.ExchangeRateService;
 import com.np.pricehunt.backend.service.trend.PriceTrendService;
 import java.math.BigDecimal;
+import java.sql.SQLException;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import org.hibernate.exception.ConstraintViolationException;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -206,6 +209,25 @@ class ProductControllerTest {
                 .deleteTrackedItem(1L, 99L);
 
         mvc.perform(delete("/api/products/1/tracked-items/99")).andExpect(status().isNotFound());
+    }
+
+    @Test
+    void createProduct_duplicateName_returns409ProblemDetail() throws Exception {
+        // The only uniqueness check is the DB index (V13); its violation reaches the client through
+        // GlobalExceptionHandler. Pins the advice wiring and that ProblemDetail serializes under
+        // this project's Jackson 3 web layer.
+        SQLException unique = new SQLException("duplicate key", "23505");
+        when(catalogService.createProduct(any()))
+                .thenThrow(new DataIntegrityViolationException(
+                        "could not execute statement",
+                        new ConstraintViolationException("dup", unique, "uq_product_name_ci")));
+
+        mvc.perform(post("/api/products")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(mapper.writeValueAsString(new CreateProductRequest("Sony WH-1000XM5"))))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.status").value(409))
+                .andExpect(jsonPath("$.detail").value("A product with that name already exists"));
     }
 
     @Test
