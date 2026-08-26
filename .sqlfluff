@@ -1,0 +1,21 @@
+# SQLFluff config for the Flyway migrations (issue #228). Read by the pre-commit hook, CI and
+# CodeRabbit, so all three agree.
+#
+# A migration is linted once, in the PR that adds it: merged ones are immutable, and V1–V12 predate
+# this config. Nothing lints the whole directory — pre-commit sees staged files, CI sees added files.
+
+[sqlfluff]
+dialect = postgres
+max_line_length = 100
+# Files over large_file_skip_byte_limit (20 KB) are silently skipped by default; a skipped
+# migration must fail the gate, not pass it.
+large_file_skip_fail = true
+
+# SQLFluff's defaults, restated so the SQL indent matches Java and Python (4 spaces).
+[sqlfluff:indentation]
+indent_unit = space
+tab_space_size = 4
+
+# Line length governs SQL, not comments — Spotless doesn't reflow Java comments either.
+[sqlfluff:rules:layout.long_lines]
+ignore_comment_lines = true

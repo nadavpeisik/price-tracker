@@ -10,3 +10,11 @@ repos:
       - id: ruff
         args: [--fix]
       - id: ruff-format
+  # SQL: Flyway migrations only (issue #228), whichever are staged. Pinned to CI's version.
+  - repo: https://github.com/sqlfluff/sqlfluff
+    rev: 4.3.0
+    hooks:
+      - id: sqlfluff-fix
+        files: ^backend/src/main/resources/db/migration/.*\.sql$
+      - id: sqlfluff-lint
+        files: ^backend/src/main/resources/db/migration/.*\.sql$

@@ -40,6 +40,7 @@ CI (`.github/workflows/ci.yml`) fails on formatting violations in **both** langu
 
 - **Java (backend):** `./mvnw spotless:apply` from `backend/`, then re-stage. CI runs `spotless:check` via `./mvnw verify`.
 - **Python (scraper):** ruff. CI runs `ruff check .` + `ruff format --check .`. A **pre-commit hook** (`.pre-commit-config.yaml`, ruff pinned to match CI) auto-fixes on commit — run `pre-commit install` once per clone (`cd scraper && pip install --require-hashes --only-binary=:all: -r requirements-dev.lock` provides `pre-commit`; see "Scraper dependencies are locked" below). When the hook auto-fixes files the commit **aborts**: re-stage (`git add`) the fixed files and commit again. To fix manually instead: `cd scraper && ruff check --fix . && ruff format .`.
+- **SQL (Flyway migrations):** SQLFluff, config in `.sqlfluff` at the repo root (issue #228). Same pre-commit hook as ruff (`sqlfluff-fix` + `sqlfluff-lint` on staged files under `db/migration/`); CI lints only migrations **added** on the branch, so each is linted once, in the PR that adds it (V1–V12 predate the config and are never linted). By hand: `pip install sqlfluff==4.3.0 && sqlfluff lint backend/src/main/resources/db/migration/V13__foo.sql`.
 
 ## Scraper dependencies are locked
 
