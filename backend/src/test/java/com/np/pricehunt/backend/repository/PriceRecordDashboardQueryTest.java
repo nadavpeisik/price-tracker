@@ -14,6 +14,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
@@ -200,10 +201,11 @@ class PriceRecordDashboardQueryTest {
         return AS_OF.minus(days, ChronoUnit.DAYS);
     }
 
+    /** Distinct per call by construction — product names are unique (V13), so the fixture must be too. */
+    private static final AtomicLong NONCE = new AtomicLong();
+
     private TrackedItem seedItem() {
-        // Each item gets its own product, and product names are unique (V13), so key both on the same
-        // nonce.
-        long nonce = System.nanoTime();
+        long nonce = NONCE.incrementAndGet();
         Product product = em.persist(Product.builder().name("Product " + nonce).build());
         return em.persist(TrackedItem.builder()
                 .url("https://shop.invalid/p/" + nonce)
