@@ -17,22 +17,22 @@ import org.springframework.stereotype.Repository;
 public interface PriceRecordRepository extends JpaRepository<PriceRecord, Long> {
 
     // 1. Get the full history for a specific store link, newest first
-    List<PriceRecord> findByTrackedItemOrderByTimestampDesc(TrackedItem trackedItem);
+    List<PriceRecord> findByTrackedItemOrderByObservedAtDesc(TrackedItem trackedItem);
 
     // 2. Get ONLY the very latest price for a store link
-    Optional<PriceRecord> findFirstByTrackedItemOrderByTimestampDesc(TrackedItem trackedItem);
+    Optional<PriceRecord> findFirstByTrackedItemOrderByObservedAtDesc(TrackedItem trackedItem);
 
     // 3. Find prices within a specific date range, newest first
-    List<PriceRecord> findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(
+    List<PriceRecord> findByTrackedItemAndObservedAtBetweenOrderByObservedAtDesc(
             TrackedItem trackedItem, Instant start, Instant end);
 
     /**
      * One batched window fetch across many listings for the price-trend engine (issue #145).
      *
      * <p>Constructor projection (not entities) keeps the lazy {@code trackedItem} association out of
-     * the result set; the {@code (trackedItem, timestamp, id)} ordering lets the calculator walk each
+     * the result set; the {@code (trackedItem, observedAt, id)} ordering lets the calculator walk each
      * listing with a single forward pointer and makes latest-record selection deterministic when
-     * timestamps collide. Covered by {@code idx_price_record_item_timestamp}.
+     * timestamps collide. Covered by {@code idx_price_record_item_observed_at}.
      *
      * <p>Callers must skip this query when {@code itemIds} is empty rather than binding an empty
      * {@code IN} list.
@@ -40,10 +40,10 @@ public interface PriceRecordRepository extends JpaRepository<PriceRecord, Long> 
     @Query(
             """
             SELECT new com.np.pricehunt.backend.repository.projection.TrendRecordView(
-                r.trackedItem.id, r.price, r.currency, r.availability, r.timestamp)
+                r.trackedItem.id, r.price, r.currency, r.availability, r.observedAt)
             FROM PriceRecord r
-            WHERE r.trackedItem.id IN :itemIds AND r.timestamp >= :from AND r.timestamp <= :to
-            ORDER BY r.trackedItem.id ASC, r.timestamp ASC, r.id ASC
+            WHERE r.trackedItem.id IN :itemIds AND r.observedAt >= :from AND r.observedAt <= :to
+            ORDER BY r.trackedItem.id ASC, r.observedAt ASC, r.id ASC
             """)
     List<TrendRecordView> findTrendRecords(
             @Param("itemIds") Collection<Long> itemIds, @Param("from") Instant from, @Param("to") Instant to);
@@ -78,11 +78,10 @@ public interface PriceRecordRepository extends JpaRepository<PriceRecord, Long> 
      * correct: the two sides are independent evaluations that happen to land on the same observation.
      *
      * <p><b>Aliases are quoted deliberately</b> — Postgres folds unquoted identifiers to lowercase,
-     * and the interface projection binds by exact column label. {@code "timestamp"} is quoted for the
-     * other reason: it is the column's real (reserved-word) name from V1.
+     * and the interface projection binds by exact column label.
      *
      * <p>Whole-set by design: single-tenant, so there is no item-id IN list to bind. Served by {@code
-     * idx_price_record_timestamp} (V10); the composite {@code (tracked_item_id, "timestamp")} cannot
+     * idx_price_record_observed_at} (V10); the composite {@code (tracked_item_id, observed_at)} cannot
      * help because its leading column does not appear in the predicate.
      *
      * @param currentFloor oldest observation the CURRENT side may carry forward from (inclusive)
@@ -103,22 +102,22 @@ public interface PriceRecordRepository extends JpaRepository<PriceRecord, Long> 
                            r.side                AS "side"
                     FROM (
                         SELECT c.tracked_item_id, c.id, c.price, c.currency, c.availability_status,
-                               c."timestamp" AS observed_at,
+                               c.observed_at,
                                'CURRENT' AS side,
                                ROW_NUMBER() OVER (
                                    PARTITION BY c.tracked_item_id
-                                   ORDER BY c."timestamp" DESC, c.id DESC) AS rn
+                                   ORDER BY c.observed_at DESC, c.id DESC) AS rn
                         FROM price_record c
-                        WHERE c."timestamp" >= :currentFloor AND c."timestamp" <= :asOf
+                        WHERE c.observed_at >= :currentFloor AND c.observed_at <= :asOf
                         UNION ALL
                         SELECT b.tracked_item_id, b.id, b.price, b.currency, b.availability_status,
-                               b."timestamp" AS observed_at,
+                               b.observed_at,
                                'BASELINE' AS side,
                                ROW_NUMBER() OVER (
                                    PARTITION BY b.tracked_item_id
-                                   ORDER BY b."timestamp" DESC, b.id DESC) AS rn
+                                   ORDER BY b.observed_at DESC, b.id DESC) AS rn
                         FROM price_record b
-                        WHERE b."timestamp" >= :baselineFloor AND b."timestamp" <= :baselineCutoff
+                        WHERE b.observed_at >= :baselineFloor AND b.observed_at <= :baselineCutoff
                     ) r
                     WHERE r.rn = 1
                     """)

@@ -10,13 +10,13 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 @Entity
-// `timestamp DESC` honored by Hibernate 6+ on Postgres; older providers ignore the column order silently.
-// The bare `timestamp` index (V10) serves the dashboard's two-cutoff query, whose predicates are
-// timestamp-only across the whole tracked set — the composite's leading column is absent there.
+// `observed_at DESC` honored by Hibernate 6+ on Postgres; older providers ignore the column order silently.
+// The bare `observed_at` index (V10, renamed V14) serves the dashboard's two-cutoff query, whose predicates
+// are observed_at-only across the whole tracked set — the composite's leading column is absent there.
 @Table(
         indexes = {
-            @Index(name = "idx_price_record_item_timestamp", columnList = "tracked_item_id, timestamp DESC"),
-            @Index(name = "idx_price_record_timestamp", columnList = "timestamp")
+            @Index(name = "idx_price_record_item_observed_at", columnList = "tracked_item_id, observed_at DESC"),
+            @Index(name = "idx_price_record_observed_at", columnList = "observed_at")
         })
 @Data
 @Builder
@@ -35,7 +35,7 @@ public class PriceRecord {
     private String currency;
 
     @Column(nullable = false)
-    private Instant timestamp;
+    private Instant observedAt;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "availability_status", length = 32, nullable = false)
@@ -50,8 +50,8 @@ public class PriceRecord {
 
     @PrePersist
     protected void onCreate() {
-        if (this.timestamp == null) {
-            this.timestamp = Instant.now();
+        if (this.observedAt == null) {
+            this.observedAt = Instant.now();
         }
     }
 }

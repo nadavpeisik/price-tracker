@@ -185,7 +185,7 @@ Guardrails (same model as the diff review and issue #81):
    - Calls `PriceExtractionService` → `PriceExtractionOrchestrator` routes based on `extractionSource` (see waterfall below)
    - Validates the extracted `PriceInfo` before saving (non-zero, delta check, currency consistency)
    - Resolves the `TrackedItem` by URL (reusing it, or admitting a new one) under the parent `Product`'s write lock; the product itself must already exist — `trackUrl` 404s otherwise, it never creates one
-   - Appends a new `PriceRecord` with the extracted price, timestamp, and `extractionSource`
+   - Appends a new `PriceRecord` with the extracted price, `observedAt`, and `extractionSource`
 
 **Price extraction waterfall** (each tier attempted in order; first success short-circuits):
 ```

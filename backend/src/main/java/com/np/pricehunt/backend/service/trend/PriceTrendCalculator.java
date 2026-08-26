@@ -209,7 +209,7 @@ public class PriceTrendCalculator {
             return null;
         }
         if (!TrendEligibility.isEligible(
-                candidate.timestamp(),
+                candidate.observedAt(),
                 candidate.availability(),
                 candidate.price(),
                 eligibilityInstant,
@@ -231,7 +231,7 @@ public class PriceTrendCalculator {
             return null;
         }
         return new BestOfferCandidate(
-                conversion.value(), conversion, listing.trackedItemId(), listing.shopName(), candidate.timestamp());
+                conversion.value(), conversion, listing.trackedItemId(), listing.shopName(), candidate.observedAt());
     }
 
     /** Cheapest wins; equal converted prices are broken by listing id so the winner is stable. */
@@ -256,13 +256,13 @@ public class PriceTrendCalculator {
      * Latest record at or before {@code cutoff}; records are ascending, so scan back from the end.
      *
      * <p>Timestamps are dereferenced without a null check here and in the cursor walk: {@code
-     * price_record.timestamp} is NOT NULL in the schema, so a null would mean the projection or the
+     * price_record.observed_at} is NOT NULL in the schema, so a null would mean the projection or the
      * database is broken, and failing loudly beats silently mis-pricing a listing.
      */
     private static TrendRecordView latestAtOrBefore(List<TrendRecordView> records, Instant cutoff) {
         for (int i = records.size() - 1; i >= 0; i--) {
             TrendRecordView observation = records.get(i);
-            if (!observation.timestamp().isAfter(cutoff)) {
+            if (!observation.observedAt().isAfter(cutoff)) {
                 return observation;
             }
         }
@@ -323,7 +323,7 @@ public class PriceTrendCalculator {
         TrendRecordView advanceAndGetLatestBefore(Instant exclusiveEnd) {
             List<TrendRecordView> records = listing.records();
             while (nextUnpassed < records.size()
-                    && records.get(nextUnpassed).timestamp().isBefore(exclusiveEnd)) {
+                    && records.get(nextUnpassed).observedAt().isBefore(exclusiveEnd)) {
                 nextUnpassed++;
             }
             return nextUnpassed == 0 ? null : records.get(nextUnpassed - 1);

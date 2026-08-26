@@ -208,16 +208,16 @@ class DevDataSeederIdempotencyTest {
 
         TrackedItem withHistory = trackedItemRepository.findAll().stream()
                 .filter(item -> !priceRecordRepository
-                        .findByTrackedItemOrderByTimestampDesc(item)
+                        .findByTrackedItemOrderByObservedAtDesc(item)
                         .isEmpty())
                 .findFirst()
                 .orElseThrow();
-        List<PriceRecord> history = priceRecordRepository.findByTrackedItemOrderByTimestampDesc(withHistory);
+        List<PriceRecord> history = priceRecordRepository.findByTrackedItemOrderByObservedAtDesc(withHistory);
 
-        assertThat(history).allSatisfy(observation -> assertThat(observation.getTimestamp())
+        assertThat(history).allSatisfy(observation -> assertThat(observation.getObservedAt())
                 .isBefore(NOW));
-        assertThat(history.get(history.size() - 1).getTimestamp()).isBefore(NOW.minus(Duration.ofDays(1)));
-        assertThat(withHistory.getLastChecked()).isEqualTo(history.get(0).getTimestamp());
+        assertThat(history.get(history.size() - 1).getObservedAt()).isBefore(NOW.minus(Duration.ofDays(1)));
+        assertThat(withHistory.getLastChecked()).isEqualTo(history.get(0).getObservedAt());
     }
 
     @Test
@@ -231,7 +231,7 @@ class DevDataSeederIdempotencyTest {
         assertThat(allRecords).extracting(PriceRecord::getCurrency).contains("ILS", "USD");
 
         // A sample stamped exactly seven days back — the inclusive baseline boundary.
-        assertThat(allRecords).anySatisfy(observation -> assertThat(observation.getTimestamp())
+        assertThat(allRecords).anySatisfy(observation -> assertThat(observation.getObservedAt())
                 .isEqualTo(NOW.minus(Duration.ofDays(7))));
 
         // A product with no listings, and a listing that was never checked. Map to plain values before

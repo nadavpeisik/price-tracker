@@ -312,34 +312,34 @@ class ProductQueryServiceTest {
     @Test
     void getPriceHistory_noBounds_defaultsToWindowEndingNow() {
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
-        when(priceRecordRepository.findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(
+        when(priceRecordRepository.findByTrackedItemAndObservedAtBetweenOrderByObservedAtDesc(
                         eq(itemA), any(Instant.class), any(Instant.class)))
                 .thenReturn(List.of());
 
         service.getPriceHistory(1L, 1L, null, null);
 
         verify(priceRecordRepository)
-                .findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(itemA, NOW.minus(90, ChronoUnit.DAYS), NOW);
+                .findByTrackedItemAndObservedAtBetweenOrderByObservedAtDesc(itemA, NOW.minus(90, ChronoUnit.DAYS), NOW);
     }
 
     @Test
     void getPriceHistory_fromOnly_defaultsToToNow() {
         Instant from = Instant.parse("2026-01-01T00:00:00Z");
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
-        when(priceRecordRepository.findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(
+        when(priceRecordRepository.findByTrackedItemAndObservedAtBetweenOrderByObservedAtDesc(
                         eq(itemA), any(Instant.class), any(Instant.class)))
                 .thenReturn(List.of());
 
         service.getPriceHistory(1L, 1L, from, null);
 
-        verify(priceRecordRepository).findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(itemA, from, NOW);
+        verify(priceRecordRepository).findByTrackedItemAndObservedAtBetweenOrderByObservedAtDesc(itemA, from, NOW);
     }
 
     @Test
     void getPriceHistory_toOnly_defaultsFromWindowDaysBefore() {
         Instant to = Instant.parse("2026-04-01T00:00:00Z");
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
-        when(priceRecordRepository.findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(
+        when(priceRecordRepository.findByTrackedItemAndObservedAtBetweenOrderByObservedAtDesc(
                         eq(itemA), any(Instant.class), any(Instant.class)))
                 .thenReturn(List.of());
 
@@ -347,7 +347,7 @@ class ProductQueryServiceTest {
 
         ArgumentCaptor<Instant> fromCaptor = ArgumentCaptor.forClass(Instant.class);
         verify(priceRecordRepository)
-                .findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(eq(itemA), fromCaptor.capture(), eq(to));
+                .findByTrackedItemAndObservedAtBetweenOrderByObservedAtDesc(eq(itemA), fromCaptor.capture(), eq(to));
         assertThat(fromCaptor.getValue()).isEqualTo(to.minus(90, ChronoUnit.DAYS));
     }
 
@@ -356,12 +356,12 @@ class ProductQueryServiceTest {
         Instant from = Instant.parse("2026-01-01T00:00:00Z");
         Instant to = Instant.parse("2026-04-01T00:00:00Z");
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
-        when(priceRecordRepository.findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(itemA, from, to))
+        when(priceRecordRepository.findByTrackedItemAndObservedAtBetweenOrderByObservedAtDesc(itemA, from, to))
                 .thenReturn(List.of());
 
         service.getPriceHistory(1L, 1L, from, to);
 
-        verify(priceRecordRepository).findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(itemA, from, to);
+        verify(priceRecordRepository).findByTrackedItemAndObservedAtBetweenOrderByObservedAtDesc(itemA, from, to);
     }
 
     @Test
@@ -370,13 +370,14 @@ class ProductQueryServiceTest {
         Instant farBack = to.minus(365L * 3, ChronoUnit.DAYS);
         Instant expectedFrom = to.minus(365L * 2, ChronoUnit.DAYS);
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
-        when(priceRecordRepository.findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(
+        when(priceRecordRepository.findByTrackedItemAndObservedAtBetweenOrderByObservedAtDesc(
                         eq(itemA), any(Instant.class), any(Instant.class)))
                 .thenReturn(List.of());
 
         service.getPriceHistory(1L, 1L, farBack, to);
 
-        verify(priceRecordRepository).findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(itemA, expectedFrom, to);
+        verify(priceRecordRepository)
+                .findByTrackedItemAndObservedAtBetweenOrderByObservedAtDesc(itemA, expectedFrom, to);
     }
 
     @Test
@@ -411,7 +412,7 @@ class ProductQueryServiceTest {
         Instant from = Instant.parse("2026-01-01T00:00:00Z");
         Instant to = Instant.parse("2026-04-01T00:00:00Z");
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
-        when(priceRecordRepository.findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(itemA, from, to))
+        when(priceRecordRepository.findByTrackedItemAndObservedAtBetweenOrderByObservedAtDesc(itemA, from, to))
                 .thenReturn(List.of(observation));
 
         PriceHistoryResponse response = service.getPriceHistory(1L, 1L, from, to);
@@ -427,7 +428,7 @@ class ProductQueryServiceTest {
         Instant from = Instant.parse("2026-01-01T00:00:00Z");
         Instant to = Instant.parse("2026-04-01T00:00:00Z");
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
-        when(priceRecordRepository.findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(itemA, from, to))
+        when(priceRecordRepository.findByTrackedItemAndObservedAtBetweenOrderByObservedAtDesc(itemA, from, to))
                 .thenReturn(List.of(observation));
 
         PriceHistoryResponse response = service.getPriceHistory(1L, 1L, from, to);
@@ -551,7 +552,7 @@ class ProductQueryServiceTest {
                 .availability(availability)
                 .extractionSource(ExtractionSource.STRUCTURED)
                 .trackedItem(item)
-                .timestamp(observedAt)
+                .observedAt(observedAt)
                 .build();
     }
 }

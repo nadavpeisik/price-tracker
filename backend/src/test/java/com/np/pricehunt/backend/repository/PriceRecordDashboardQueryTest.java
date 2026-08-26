@@ -226,7 +226,7 @@ class PriceRecordDashboardQueryTest {
                 .availability(availability)
                 .extractionSource(ExtractionSource.STRUCTURED)
                 .trackedItem(item)
-                .timestamp(at)
+                .observedAt(at)
                 .build());
         em.flush();
         return seeded;

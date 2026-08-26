@@ -103,7 +103,7 @@ class ProductTrackingServiceShopNameTest {
     // The persist step reads the latest price; "no history" means no PriceRecord is saved.
     private void stubPersistReadsEmpty() {
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(any()))
+        when(priceRecordRepository.findFirstByTrackedItemOrderByObservedAtDesc(any()))
                 .thenReturn(Optional.empty());
     }
 

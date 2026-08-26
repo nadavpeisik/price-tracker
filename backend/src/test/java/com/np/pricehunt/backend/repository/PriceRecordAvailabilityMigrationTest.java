@@ -75,7 +75,7 @@ class PriceRecordAvailabilityMigrationTest {
                 .availability(status)
                 .extractionSource(ExtractionSource.STRUCTURED)
                 .trackedItem(item)
-                .timestamp(Instant.now())
+                .observedAt(Instant.now())
                 .build());
         em.flush();
         em.clear();
@@ -95,7 +95,7 @@ class PriceRecordAvailabilityMigrationTest {
         assertThatThrownBy(() -> {
                     entityManager
                             .createNativeQuery("INSERT INTO price_record"
-                                    + " (price, currency, timestamp, availability_status, extraction_source, tracked_item_id)"
+                                    + " (price, currency, observed_at, availability_status, extraction_source, tracked_item_id)"
                                     + " VALUES (1.00, 'USD', now(), 'BOGUS', 'STRUCTURED', :itemId)")
                             .setParameter("itemId", itemId)
                             .executeUpdate();

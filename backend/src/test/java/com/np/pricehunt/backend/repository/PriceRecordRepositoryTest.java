@@ -93,29 +93,29 @@ class PriceRecordRepositoryTest {
         em.flush();
         em.clear();
 
-        assertThat(priceRecordRepository.findByTrackedItemOrderByTimestampDesc(loaded))
+        assertThat(priceRecordRepository.findByTrackedItemOrderByObservedAtDesc(loaded))
                 .isEmpty();
     }
 
     // --- Date-range query methods ---
 
     @Test
-    void findByTrackedItemOrderByTimestampDesc_returnsAllNewestFirst() {
-        List<PriceRecord> results = priceRecordRepository.findByTrackedItemOrderByTimestampDesc(item);
+    void findByTrackedItemOrderByObservedAtDesc_returnsAllNewestFirst() {
+        List<PriceRecord> results = priceRecordRepository.findByTrackedItemOrderByObservedAtDesc(item);
 
         assertThat(results).hasSize(3);
-        assertThat(results.get(0).getTimestamp()).isEqualTo(t3);
-        assertThat(results.get(2).getTimestamp()).isEqualTo(t1);
+        assertThat(results.get(0).getObservedAt()).isEqualTo(t3);
+        assertThat(results.get(2).getObservedAt()).isEqualTo(t1);
     }
 
     @Test
     void findBetween_returnsOnlyRecordsInRange_orderedDesc() {
         List<PriceRecord> results =
-                priceRecordRepository.findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(item, t1, t2);
+                priceRecordRepository.findByTrackedItemAndObservedAtBetweenOrderByObservedAtDesc(item, t1, t2);
 
         assertThat(results).hasSize(2);
-        assertThat(results.get(0).getTimestamp()).isEqualTo(t2);
-        assertThat(results.get(1).getTimestamp()).isEqualTo(t1);
+        assertThat(results.get(0).getObservedAt()).isEqualTo(t2);
+        assertThat(results.get(1).getObservedAt()).isEqualTo(t1);
     }
 
     // --- Trend engine queries (#145) ---
@@ -125,7 +125,7 @@ class PriceRecordRepositoryTest {
         List<TrendRecordView> results = priceRecordRepository.findTrendRecords(List.of(item.getId()), t1, t3);
 
         assertThat(results).hasSize(3);
-        assertThat(results).extracting(TrendRecordView::timestamp).containsExactly(t1, t2, t3);
+        assertThat(results).extracting(TrendRecordView::observedAt).containsExactly(t1, t2, t3);
         TrendRecordView first = results.get(0);
         assertThat(first.trackedItemId()).isEqualTo(item.getId());
         assertThat(first.price()).isEqualByComparingTo("100.00");
@@ -138,7 +138,7 @@ class PriceRecordRepositoryTest {
         List<TrendRecordView> results =
                 priceRecordRepository.findTrendRecords(List.of(item.getId()), t2, t3.minusSeconds(1));
 
-        assertThat(results).extracting(TrendRecordView::timestamp).containsExactly(t2);
+        assertThat(results).extracting(TrendRecordView::observedAt).containsExactly(t2);
     }
 
     @Test
@@ -188,7 +188,7 @@ class PriceRecordRepositoryTest {
                 .availability(AvailabilityStatus.AVAILABLE)
                 .extractionSource(ExtractionSource.STRUCTURED)
                 .trackedItem(trackedItem)
-                .timestamp(timestamp)
+                .observedAt(timestamp)
                 .build();
     }
 }
