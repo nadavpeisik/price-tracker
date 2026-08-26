@@ -25,6 +25,7 @@ import org.springframework.core.annotation.AnnotatedElementUtils;
 import org.springframework.core.type.filter.AnnotationTypeFilter;
 import org.springframework.data.domain.Page;
 import org.springframework.http.HttpEntity;
+import org.springframework.http.ProblemDetail;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -254,6 +255,9 @@ class MoneyOnTheWireTest {
 
     private static boolean isScalarLeaf(Class<?> type) {
         return type.isEnum()
+                // RFC 9457 error body: an int status plus strings and a free-form properties map.
+                // Nothing this project puts in it is money; the walker cannot see inside a Map anyway.
+                || type == ProblemDetail.class
                 || type == String.class
                 || type == boolean.class
                 || type == Boolean.class

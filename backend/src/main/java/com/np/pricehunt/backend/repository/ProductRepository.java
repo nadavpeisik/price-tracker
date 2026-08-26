@@ -11,9 +11,6 @@ import org.springframework.stereotype.Repository;
 @Repository
 public interface ProductRepository extends JpaRepository<Product, Long> {
 
-    // 1. Find a product by its exact name (Case Insensitive)
-    Optional<Product> findByNameIgnoreCase(String name);
-
     /**
      * Loads a product under a pessimistic row-level write lock, so listing admission can count and
      * insert without racing a concurrent admission to the same product.

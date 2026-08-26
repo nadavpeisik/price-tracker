@@ -201,9 +201,12 @@ class PriceRecordDashboardQueryTest {
     }
 
     private TrackedItem seedItem() {
-        Product product = em.persist(Product.builder().name("Product").build());
+        // Each item gets its own product, and product names are unique (V13), so key both on the same
+        // nonce.
+        long nonce = System.nanoTime();
+        Product product = em.persist(Product.builder().name("Product " + nonce).build());
         return em.persist(TrackedItem.builder()
-                .url("https://shop.invalid/p/" + System.nanoTime())
+                .url("https://shop.invalid/p/" + nonce)
                 .shopName("Shop")
                 .product(product)
                 .build());

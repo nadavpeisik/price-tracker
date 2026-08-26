@@ -1,0 +1,22 @@
+-- A product's name is unique, ignoring case.
+--
+-- The database is the only place this can be guaranteed: an application-side check-then-insert
+-- cannot see a concurrent create, so two requests for "Sony WH-1000XM5" would both pass it and
+-- both insert. GlobalExceptionHandler turns this index's violation into the 409 the client sees.
+--
+-- Expression index on lower(name) rather than a UNIQUE constraint on name: the rule is
+-- case-insensitive, and a constraint cannot take an expression. lower(), not a case-insensitive
+-- collation: Postgres non-deterministic collations cannot be used with LIKE/ILIKE, which the
+-- dashboard search relies on.
+--
+-- Case only — deliberately NOT lower(btrim(name)), and no one-time trim of existing rows.
+-- Surrounding whitespace is the service's job (it strips every name it writes), and a padded
+-- legacy row has no producer: nothing ever sent one. Indexing a trimmed form would add a second
+-- definition of "same name" (Java strip() and btrim() disagree on what whitespace is) to guard
+-- against input that does not occur.
+--
+-- Plain CREATE INDEX holds a SHARE lock for the build (reads continue, writes wait) — same
+-- single-instance startup assumption as V10 (#176 for rolling deploys). On a database that
+-- already holds two products with the same name the build fails naming the duplicated key; there
+-- is no safe automatic merge (which one keeps its listings?), so that is resolved by hand.
+CREATE UNIQUE INDEX uq_product_name_ci ON product (lower(name));

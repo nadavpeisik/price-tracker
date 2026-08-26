@@ -62,6 +62,26 @@ class ProductCatalogServiceTest {
         verify(productRepository, never()).count();
     }
 
+    @Test
+    void createProduct_stripsName_beforeSaving() {
+        // Padding must not sidestep the DB's case-only uniqueness rule: "  Laptop " is "Laptop".
+        when(productRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.createProduct(new CreateProductRequest("  Laptop "));
+
+        verify(productRepository).save(argThat(p -> p.getName().equals("Laptop")));
+    }
+
+    @Test
+    void createProduct_blankName_returns400() {
+        assertThatThrownBy(() -> service.createProduct(new CreateProductRequest("   ")))
+                .isInstanceOf(ResponseStatusException.class)
+                .extracting(e -> ((ResponseStatusException) e).getStatusCode())
+                .isEqualTo(HttpStatus.BAD_REQUEST);
+
+        verifyNoInteractions(productRepository);
+    }
+
     // --- deleteProduct ---
 
     @Test
@@ -143,7 +163,7 @@ class ProductCatalogServiceTest {
     void updateProduct_updatesName() {
         when(productRepository.findById(1L)).thenReturn(Optional.of(product));
 
-        ProductResponse response = service.updateProduct(1L, new UpdateProductRequest("New Name", null));
+        ProductResponse response = service.updateProduct(1L, new UpdateProductRequest(" New Name ", null));
 
         assertThat(product.getName()).isEqualTo("New Name");
         assertThat(response.name()).isEqualTo("New Name");
