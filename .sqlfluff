@@ -7,6 +7,9 @@
 [sqlfluff]
 dialect = postgres
 max_line_length = 100
+# Files over large_file_skip_byte_limit (20 KB) are silently skipped by default; a skipped
+# migration must fail the gate, not pass it.
+large_file_skip_fail = true
 
 # SQLFluff's defaults, restated so the SQL indent matches Java and Python (4 spaces).
 [sqlfluff:indentation]
