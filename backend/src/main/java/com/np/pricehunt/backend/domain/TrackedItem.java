@@ -35,6 +35,16 @@ public class TrackedItem {
 
     private Instant lastChecked;
 
+    @Column(nullable = false, updatable = false)
+    private Instant createdAt;
+
     @OneToMany(mappedBy = "trackedItem", cascade = CascadeType.ALL)
     private List<PriceRecord> priceHistory;
+
+    @PrePersist
+    protected void onCreate() {
+        if (createdAt == null) {
+            createdAt = Instant.now();
+        }
+    }
 }

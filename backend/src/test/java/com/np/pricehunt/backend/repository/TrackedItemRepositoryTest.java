@@ -217,4 +217,31 @@ class TrackedItemRepositoryTest {
 
         assertThat(repo.findRefreshViewByIdAndProductId(id, other.getId())).isEmpty();
     }
+
+    // created_at (#225): stamped once on insert, kept when supplied, and never touched by updates.
+
+    @Test
+    void createdAtIsStampedOnInsertWhenAbsent() {
+        Instant before = Instant.now();
+        TrackedItem saved = repo.saveAndFlush(TrackedItem.builder()
+                .url("https://example.com/new")
+                .product(product)
+                .build());
+        assertThat(saved.getCreatedAt()).isAfterOrEqualTo(before);
+    }
+
+    @Test
+    void createdAtSuppliedByCallerIsKeptAndSurvivesAnUpdate() {
+        Instant backDated = Instant.parse("2025-01-01T00:00:00Z");
+        TrackedItem saved = repo.saveAndFlush(TrackedItem.builder()
+                .url("https://example.com/seeded")
+                .product(product)
+                .createdAt(backDated)
+                .build());
+        saved.setCreatedAt(Instant.parse("2000-01-01T00:00:00Z"));
+        saved.setShopName("renamed");
+        repo.saveAndFlush(saved);
+        em.clear();
+        assertThat(repo.findById(saved.getId()).orElseThrow().getCreatedAt()).isEqualTo(backDated);
+    }
 }

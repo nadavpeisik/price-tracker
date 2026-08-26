@@ -198,6 +198,7 @@ The scraper response carries an `extractionSource` enum (`STRUCTURED | SNIPPET |
 **Domain model:**
 - `Product` — has many `TrackedItem`s (cascade ALL, orphanRemoval)
 - `TrackedItem` — belongs to a `Product`, has a `url` + `shopName`, has many `PriceRecord`s
+- Both `Product` and `TrackedItem` carry `createdAt` (V12, #225): stamped by `@PrePersist` when null, `updatable = false`, not exposed on the wire yet. It is an audit column, not the key for the per-user "most recently added" sort (#226 — that lives on the tenancy join table).
 - `PriceRecord` — immutable price snapshot (BigDecimal, LocalDateTime set via `@PrePersist`, availability flag, `extractionSource`)
 - `PriceInfo` — Java record DTO carrying `price`, `currency`, `available`, and `extractionSource`
 - `ExtractionSource` — shared enum (`STRUCTURED | SNIPPET | FULLTEXT`) used across `ScrapeResponse`, `PriceInfo`, and `PriceRecord`

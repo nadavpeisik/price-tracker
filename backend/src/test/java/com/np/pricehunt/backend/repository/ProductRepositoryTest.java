@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.np.pricehunt.backend.domain.Product;
 import jakarta.persistence.LockModeType;
+import java.time.Instant;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
@@ -68,5 +69,40 @@ class ProductRepositoryTest {
         Product plain = repository.findById(saved.getId()).orElseThrow();
 
         assertThat(em.getEntityManager().getLockMode(plain)).isEqualTo(LockModeType.NONE);
+    }
+
+    // created_at (#225): stamped once on insert, kept when supplied, and never touched by updates.
+
+    @Test
+    void createdAtIsStampedOnInsertWhenAbsent() {
+        Instant before = Instant.now();
+        Product saved = repository.saveAndFlush(Product.builder().name("Fresh").build());
+        assertThat(saved.getCreatedAt()).isAfterOrEqualTo(before);
+    }
+
+    @Test
+    void createdAtSuppliedByCallerIsKept() {
+        Instant backDated = Instant.parse("2025-01-01T00:00:00Z");
+        Product saved = repository.saveAndFlush(
+                Product.builder().name("Seeded").createdAt(backDated).build());
+        em.clear();
+        assertThat(repository.findById(saved.getId()).orElseThrow().getCreatedAt())
+                .isEqualTo(backDated);
+    }
+
+    @Test
+    void createdAtSurvivesAnUpdate() {
+        Product saved = repository.saveAndFlush(Product.builder().name("Before").build());
+        // Compare against the stored value, not the in-memory one: Instant.now() carries nanos on
+        // Linux and the column keeps micros, so the two differ there (CI) but not on macOS.
+        em.clear();
+        saved = repository.findById(saved.getId()).orElseThrow();
+        Instant stamped = saved.getCreatedAt();
+        saved.setCreatedAt(Instant.parse("2000-01-01T00:00:00Z"));
+        saved.setName("After");
+        repository.saveAndFlush(saved);
+        em.clear();
+        assertThat(repository.findById(saved.getId()).orElseThrow().getCreatedAt())
+                .isEqualTo(stamped);
     }
 }

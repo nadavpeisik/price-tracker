@@ -358,10 +358,17 @@ public class DevDataSeeder implements CommandLineRunner {
                 .description(SEED_MARKER + description)
                 .trackedItems(new ArrayList<>())
                 .build();
+        Instant oldestListing = null;
         for (TrackedItem item : items) {
             item.setProduct(product);
             product.getTrackedItems().add(item);
+            if (item.getCreatedAt() != null
+                    && (oldestListing == null || item.getCreatedAt().isBefore(oldestListing))) {
+                oldestListing = item.getCreatedAt();
+            }
         }
+        // A product exists from its first listing on; null (only never-checked listings) leaves it to @PrePersist.
+        product.setCreatedAt(oldestListing);
         return product;
     }
 
@@ -377,6 +384,7 @@ public class DevDataSeeder implements CommandLineRunner {
                 .build();
 
         Instant newest = null;
+        Instant oldest = null;
         for (Observation observation : history) {
             Instant at = observation.instantBefore(now);
             item.getPriceHistory()
@@ -391,9 +399,14 @@ public class DevDataSeeder implements CommandLineRunner {
             if (newest == null || at.isAfter(newest)) {
                 newest = at;
             }
+            if (oldest == null || at.isBefore(oldest)) {
+                oldest = at;
+            }
         }
         // Mirror what the tracking service does after a successful scrape.
         item.setLastChecked(newest);
+        // Back-date to the first observation, so "added N days ago" is as spread out as the history is.
+        item.setCreatedAt(oldest);
         return item;
     }
 
