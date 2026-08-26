@@ -28,7 +28,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.ai.retry.NonTransientAiException;
 import org.springframework.ai.retry.TransientAiException;
-import org.springframework.http.HttpStatus;
 import org.springframework.web.client.ResourceAccessException;
 
 @ExtendWith(MockitoExtension.class)
@@ -231,14 +230,12 @@ class PriceExtractionOrchestratorTest {
     }
 
     @Test
-    void extractPrice_blocked_throwsScrapeBlockedExceptionWith502AndReason() {
+    void extractPrice_blocked_throwsScrapeBlockedExceptionWithReason() {
         String reason = "cloudflare-managed:cf-ray=9fcfc0abcd123456-TLV";
         ScrapeResponse response = new ScrapeResponse(ExtractionSource.BLOCKED, null, null, null, reason);
 
         assertThatThrownBy(() -> orchestrator.extractPrice(response))
                 .isInstanceOf(ScrapeBlockedException.class)
-                .satisfies(e ->
-                        assertThat(((ScrapeBlockedException) e).getStatusCode()).isEqualTo(HttpStatus.BAD_GATEWAY))
                 .hasMessageContaining(reason);
         verifyNoInteractions(ollamaService);
     }
@@ -252,8 +249,6 @@ class PriceExtractionOrchestratorTest {
 
         assertThatThrownBy(() -> orchestrator.extractPrice(response))
                 .isInstanceOf(EmptyExtractionInputException.class)
-                .satisfies(e -> assertThat(((EmptyExtractionInputException) e).getStatusCode())
-                        .isEqualTo(HttpStatus.BAD_GATEWAY))
                 .hasMessageContaining("FULLTEXT")
                 .hasMessageContaining("chars=0");
         verifyNoInteractions(ollamaService);
@@ -280,8 +275,6 @@ class PriceExtractionOrchestratorTest {
 
         assertThatThrownBy(() -> orchestrator.extractPrice(response))
                 .isInstanceOf(EmptyExtractionInputException.class)
-                .satisfies(e -> assertThat(((EmptyExtractionInputException) e).getStatusCode())
-                        .isEqualTo(HttpStatus.BAD_GATEWAY))
                 .hasMessageContaining("SNIPPET")
                 .hasMessageContaining("chars=3");
         verifyNoInteractions(ollamaService);

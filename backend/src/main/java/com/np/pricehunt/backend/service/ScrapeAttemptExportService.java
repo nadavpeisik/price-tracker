@@ -2,12 +2,12 @@ package com.np.pricehunt.backend.service;
 
 import com.np.pricehunt.backend.domain.AvailabilityStatus;
 import com.np.pricehunt.backend.domain.ScrapeAttempt;
+import com.np.pricehunt.backend.exception.NotFoundException;
+import com.np.pricehunt.backend.exception.ValidationException;
 import com.np.pricehunt.backend.repository.ScrapeAttemptRepository;
 import java.util.Locale;
 import lombok.RequiredArgsConstructor;
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
-import org.springframework.web.server.ResponseStatusException;
 
 /**
  * Builds a draft {@code availability-cases.json} fixture from a stored scrape-attempt's exact LLM input
@@ -30,12 +30,10 @@ public class ScrapeAttemptExportService {
      * would be useless and would fail the regression IT).
      */
     public FixtureDraft draftFor(Long id) {
-        ScrapeAttempt attempt = repository
-                .findById(id)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Scrape attempt not found"));
+        ScrapeAttempt attempt =
+                repository.findById(id).orElseThrow(() -> new NotFoundException("Scrape attempt not found"));
         if (attempt.getLlmInput() == null || attempt.getLlmInput().isBlank()) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
+            throw new ValidationException(
                     "Attempt has no LLM input to export (source=" + attempt.getExtractionSource() + ")");
         }
         String name = attempt.getFailureCode().name().toLowerCase(Locale.ROOT) + "_" + attempt.getId();

@@ -14,6 +14,10 @@ import com.np.pricehunt.backend.domain.PriceRecord;
 import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.domain.TrackedItem;
 import com.np.pricehunt.backend.dto.*;
+import com.np.pricehunt.backend.exception.ConflictException;
+import com.np.pricehunt.backend.exception.ErrorCode;
+import com.np.pricehunt.backend.exception.NotFoundException;
+import com.np.pricehunt.backend.exception.RefreshCooldownException;
 import com.np.pricehunt.backend.observability.ScrapeAttemptRecorder;
 import com.np.pricehunt.backend.repository.PriceRecordRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
@@ -31,11 +35,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.http.HttpStatus;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
-import org.springframework.web.server.ResponseStatusException;
 
 @ExtendWith(MockitoExtension.class)
 class ProductTrackingServiceCrudTest {
@@ -118,9 +120,29 @@ class ProductTrackingServiceCrudTest {
         when(trackedItemRepository.countByProduct(product)).thenReturn(20L);
 
         assertThatThrownBy(() -> service.trackUrl(1L, new TrackRequest("https://amazon.com/dp/2")))
-                .isInstanceOf(ResponseStatusException.class)
-                .extracting(e -> ((ResponseStatusException) e).getStatusCode())
-                .isEqualTo(HttpStatus.CONFLICT);
+                .isInstanceOfSatisfying(ConflictException.class, e -> assertThat(e.errorCode())
+                        .isEqualTo(ErrorCode.PRODUCT_LISTING_LIMIT_REACHED));
+
+        verify(trackedItemRepository, never()).save(any());
+        verify(scraperClient, never()).scrape(any());
+    }
+
+    @Test
+    void trackUrl_urlOwnedByAnotherProduct_returns409_withItsOwnCode() {
+        // Same status as the listing cap, different remedy — the code is what tells them apart (#173).
+        Product other = Product.builder().id(2L).name("Other").build();
+        TrackedItem theirs = TrackedItem.builder()
+                .id(7L)
+                .url("https://amazon.com/dp/2")
+                .product(other)
+                .build();
+        when(productRepository.existsById(1L)).thenReturn(true);
+        when(productRepository.findForUpdateById(1L)).thenReturn(Optional.of(product));
+        when(trackedItemRepository.findByUrl("https://amazon.com/dp/2")).thenReturn(Optional.of(theirs));
+
+        assertThatThrownBy(() -> service.trackUrl(1L, new TrackRequest("https://amazon.com/dp/2")))
+                .isInstanceOfSatisfying(ConflictException.class, e -> assertThat(e.errorCode())
+                        .isEqualTo(ErrorCode.URL_TRACKED_BY_ANOTHER_PRODUCT));
 
         verify(trackedItemRepository, never()).save(any());
         verify(scraperClient, never()).scrape(any());
@@ -178,10 +200,7 @@ class ProductTrackingServiceCrudTest {
                 .build();
         when(trackedItemRepository.findRefreshViewByIdAndProductId(1L, 1L)).thenReturn(Optional.of(viewOf(recentItem)));
 
-        assertThatThrownBy(() -> service.refreshTrackedItem(1L, 1L))
-                .isInstanceOf(ResponseStatusException.class)
-                .extracting(e -> ((ResponseStatusException) e).getStatusCode())
-                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThatThrownBy(() -> service.refreshTrackedItem(1L, 1L)).isInstanceOf(RefreshCooldownException.class);
 
         verify(scraperClient, never()).scrape(any());
         // Durable (DB lastChecked) cooldown rejects before the volatile limiter is consulted.
@@ -195,10 +214,7 @@ class ProductTrackingServiceCrudTest {
         when(trackedItemRepository.findRefreshViewByIdAndProductId(1L, 1L)).thenReturn(Optional.of(viewOf(item)));
         when(cooldownLimiter.tryAcquire(1L)).thenReturn(false);
 
-        assertThatThrownBy(() -> service.refreshTrackedItem(1L, 1L))
-                .isInstanceOf(ResponseStatusException.class)
-                .extracting(e -> ((ResponseStatusException) e).getStatusCode())
-                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThatThrownBy(() -> service.refreshTrackedItem(1L, 1L)).isInstanceOf(RefreshCooldownException.class);
 
         verify(scraperClient, never()).scrape(any());
     }
@@ -207,10 +223,7 @@ class ProductTrackingServiceCrudTest {
     void refreshTrackedItem_notFound_throwsException() {
         when(trackedItemRepository.findRefreshViewByIdAndProductId(99L, 1L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.refreshTrackedItem(1L, 99L))
-                .isInstanceOf(ResponseStatusException.class)
-                .extracting(e -> ((ResponseStatusException) e).getStatusCode())
-                .isEqualTo(HttpStatus.NOT_FOUND);
+        assertThatThrownBy(() -> service.refreshTrackedItem(1L, 99L)).isInstanceOf(NotFoundException.class);
 
         verifyNoInteractions(cooldownLimiter);
     }
@@ -220,10 +233,7 @@ class ProductTrackingServiceCrudTest {
         // Ownership is the query's product filter: an item under another product reads as absent.
         when(trackedItemRepository.findRefreshViewByIdAndProductId(1L, 1L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.refreshTrackedItem(1L, 1L))
-                .isInstanceOf(ResponseStatusException.class)
-                .extracting(e -> ((ResponseStatusException) e).getStatusCode())
-                .isEqualTo(HttpStatus.NOT_FOUND);
+        assertThatThrownBy(() -> service.refreshTrackedItem(1L, 1L)).isInstanceOf(NotFoundException.class);
 
         verifyNoInteractions(cooldownLimiter);
     }
@@ -278,10 +288,7 @@ class ProductTrackingServiceCrudTest {
         TrackResponse first = service.refreshTrackedItem(1L, 1L);
         assertThat(first.currentPrice()).isNull();
 
-        assertThatThrownBy(() -> service.refreshTrackedItem(1L, 1L))
-                .isInstanceOf(ResponseStatusException.class)
-                .extracting(e -> ((ResponseStatusException) e).getStatusCode())
-                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        assertThatThrownBy(() -> service.refreshTrackedItem(1L, 1L)).isInstanceOf(RefreshCooldownException.class);
 
         verify(scraperClient, times(1)).scrape(item.getUrl());
     }

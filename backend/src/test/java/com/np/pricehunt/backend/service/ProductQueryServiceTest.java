@@ -20,6 +20,8 @@ import com.np.pricehunt.backend.dto.PriceHistoryResponse;
 import com.np.pricehunt.backend.dto.ProductDetailResponse;
 import com.np.pricehunt.backend.dto.ProductListingResponse;
 import com.np.pricehunt.backend.dto.TrackedItemSummary;
+import com.np.pricehunt.backend.exception.NotFoundException;
+import com.np.pricehunt.backend.exception.ValidationException;
 import com.np.pricehunt.backend.repository.PriceRecordRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
@@ -41,8 +43,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.http.HttpStatus;
-import org.springframework.web.server.ResponseStatusException;
 
 @ExtendWith(MockitoExtension.class)
 class ProductQueryServiceTest {
@@ -94,10 +94,7 @@ class ProductQueryServiceTest {
     void getProduct_notFound_throwsException() {
         when(productRepository.findById(99L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.getProduct(99L))
-                .isInstanceOf(ResponseStatusException.class)
-                .extracting(e -> ((ResponseStatusException) e).getStatusCode())
-                .isEqualTo(HttpStatus.NOT_FOUND);
+        assertThatThrownBy(() -> service.getProduct(99L)).isInstanceOf(NotFoundException.class);
     }
 
     @Test
@@ -154,10 +151,7 @@ class ProductQueryServiceTest {
         void unknownProduct_is404_beforeAnyQueryRuns() {
             when(productRepository.findById(99L)).thenReturn(Optional.empty());
 
-            assertThatThrownBy(() -> service.getListings(99L, ILS))
-                    .isInstanceOf(ResponseStatusException.class)
-                    .extracting(e -> ((ResponseStatusException) e).getStatusCode())
-                    .isEqualTo(HttpStatus.NOT_FOUND);
+            assertThatThrownBy(() -> service.getListings(99L, ILS)).isInstanceOf(NotFoundException.class);
             verifyNoInteractions(trackedItemRepository);
         }
 
@@ -392,9 +386,8 @@ class ProductQueryServiceTest {
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
 
         assertThatThrownBy(() -> service.getPriceHistory(1L, 1L, from, to))
-                .isInstanceOfSatisfying(ResponseStatusException.class, ex -> {
-                    assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-                    assertThat(ex.getReason()).isEqualTo("'from' timestamp cannot be after 'to' timestamp");
+                .isInstanceOfSatisfying(ValidationException.class, ex -> {
+                    assertThat(ex.getMessage()).isEqualTo("'from' timestamp cannot be after 'to' timestamp");
                 });
     }
 
@@ -409,10 +402,7 @@ class ProductQueryServiceTest {
                 .build();
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(foreignItem));
 
-        assertThatThrownBy(() -> service.getPriceHistory(1L, 1L, null, null))
-                .isInstanceOf(ResponseStatusException.class)
-                .extracting(e -> ((ResponseStatusException) e).getStatusCode())
-                .isEqualTo(HttpStatus.NOT_FOUND);
+        assertThatThrownBy(() -> service.getPriceHistory(1L, 1L, null, null)).isInstanceOf(NotFoundException.class);
     }
 
     @Test

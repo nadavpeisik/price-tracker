@@ -1,7 +1,5 @@
 package com.np.pricehunt.backend.exception;
 
-import org.springframework.http.HttpStatus;
-
 // Thrown by OllamaPriceExtractionService when the LLM output couldn't be parsed by the
 // structured-output converter. A dedicated type lets the orchestrator escalate to the heavier
 // model only on genuine bad output, while transport failures and bugs propagate untouched.
@@ -13,7 +11,6 @@ import org.springframework.http.HttpStatus;
 public class MalformedLlmOutputException extends PriceExtractionException {
     public MalformedLlmOutputException(String model, String promptVersion, Throwable cause) {
         super(
-                HttpStatus.BAD_GATEWAY,
                 "LLM returned unparseable output (model=%s)".formatted(model),
                 cause,
                 new ExtractionFailureContext(model, promptVersion));

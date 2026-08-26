@@ -6,14 +6,14 @@ import com.np.pricehunt.backend.dto.CreateProductRequest;
 import com.np.pricehunt.backend.dto.CreateProductResponse;
 import com.np.pricehunt.backend.dto.ProductResponse;
 import com.np.pricehunt.backend.dto.UpdateProductRequest;
+import com.np.pricehunt.backend.exception.NotFoundException;
+import com.np.pricehunt.backend.exception.ValidationException;
 import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
 import lombok.RequiredArgsConstructor;
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
-import org.springframework.web.server.ResponseStatusException;
 
 /**
  * Catalogue lifecycle: creating, editing and deleting products, and removing a listing from one.
@@ -37,15 +37,13 @@ public class ProductCatalogService {
     @Transactional
     public ProductResponse updateProduct(Long id, UpdateProductRequest request) {
         if (request.name() == null && request.description() == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "At least one field is required");
+            throw new ValidationException("At least one field is required");
         }
         if (request.name() != null && !StringUtils.hasText(request.name())) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Name cannot be blank");
+            throw new ValidationException("Name cannot be blank");
         }
 
-        Product product = productRepository
-                .findById(id)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found"));
+        Product product = productRepository.findById(id).orElseThrow(() -> new NotFoundException("Product not found"));
 
         if (StringUtils.hasText(request.name())) {
             product.setName(request.name().strip());
@@ -65,16 +63,14 @@ public class ProductCatalogService {
      */
     private static String requireName(String raw) {
         if (!StringUtils.hasText(raw)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Name cannot be blank");
+            throw new ValidationException("Name cannot be blank");
         }
         return raw.strip();
     }
 
     @Transactional
     public void deleteProduct(Long id) {
-        Product product = productRepository
-                .findById(id)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Product not found"));
+        Product product = productRepository.findById(id).orElseThrow(() -> new NotFoundException("Product not found"));
         productRepository.delete(product);
     }
 
@@ -82,10 +78,10 @@ public class ProductCatalogService {
     public void deleteTrackedItem(Long productId, Long itemId) {
         TrackedItem item = trackedItemRepository
                 .findById(itemId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found"));
+                .orElseThrow(() -> new NotFoundException("Tracked item not found"));
 
         if (!item.getProduct().getId().equals(productId)) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Tracked item not found for this product");
+            throw new NotFoundException("Tracked item not found for this product");
         }
 
         trackedItemRepository.delete(item);

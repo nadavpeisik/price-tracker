@@ -16,6 +16,8 @@ import com.np.pricehunt.backend.domain.AvailabilityStatus;
 import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.domain.TrackedItem;
 import com.np.pricehunt.backend.dto.PriceTrendResponse;
+import com.np.pricehunt.backend.exception.NotFoundException;
+import com.np.pricehunt.backend.exception.ValidationException;
 import com.np.pricehunt.backend.repository.PriceRecordRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
@@ -38,7 +40,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.web.server.ResponseStatusException;
 
 /** Loading, batching, clamping and DTO mapping — the calculator's own maths is covered separately. */
 @ExtendWith(MockitoExtension.class)
@@ -83,7 +84,7 @@ class PriceTrendServiceTest {
         when(productRepository.findById(42L)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.getProductTrend(42L, null, ILS))
-                .isInstanceOf(ResponseStatusException.class)
+                .isInstanceOf(NotFoundException.class)
                 .hasMessageContaining("Product not found");
 
         verifyNoInteractions(priceRecordRepository, rateWindowLoader, calculator);
@@ -163,7 +164,7 @@ class PriceTrendServiceTest {
         when(trackedItemRepository.findByProduct(any())).thenReturn(List.of());
 
         assertThatThrownBy(() -> service.getProductTrend(1L, 0, ILS))
-                .isInstanceOf(ResponseStatusException.class)
+                .isInstanceOf(ValidationException.class)
                 .hasMessageContaining("days must be >= 1");
     }
 

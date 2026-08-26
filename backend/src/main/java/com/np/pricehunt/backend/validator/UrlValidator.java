@@ -1,6 +1,10 @@
 package com.np.pricehunt.backend.validator;
 
 import com.np.pricehunt.backend.config.UrlValidationProperties;
+import com.np.pricehunt.backend.exception.ApplicationException;
+import com.np.pricehunt.backend.exception.DependencyTimeoutException;
+import com.np.pricehunt.backend.exception.DependencyUnavailableException;
+import com.np.pricehunt.backend.exception.ValidationException;
 import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.net.URI;
@@ -13,9 +17,7 @@ import java.util.Set;
 import java.util.concurrent.TimeoutException;
 import java.util.regex.Pattern;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
-import org.springframework.web.server.ResponseStatusException;
 
 /**
  * Validates user-submitted / stored URLs before they reach the scraper.
@@ -76,7 +78,7 @@ public class UrlValidator {
     /**
      * Full validation for every path that reaches the scraper: parser-differential string checks + the
      * operational unsupported-site blocklist + the SSRF/internal-host check. Throws
-     * {@link ResponseStatusException} on any rejection.
+     * an {@link ApplicationException} subtype on any rejection.
      */
     public void validate(String url) {
         HostContext ctx = validateCommon(url);
@@ -114,17 +116,17 @@ public class UrlValidator {
 
     private HostContext validateCommon(String url) {
         if (url == null || url.isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid URL");
+            throw new ValidationException("Invalid URL");
         }
         URI uri = parseOrThrow(url);
         String host = uri.getHost();
         String scheme = uri.getScheme();
         if (host == null || scheme == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid URL");
+            throw new ValidationException("Invalid URL");
         }
         String normalizedScheme = scheme.toLowerCase(Locale.ROOT);
         if (!normalizedScheme.equals("http") && !normalizedScheme.equals("https")) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "URL must be http or https");
+            throw new ValidationException("URL must be http or https");
         }
 
         // Strip IPv6 brackets — URI.getHost() keeps them ("[::1]"); getByName("[::1]") throws.
@@ -136,7 +138,7 @@ public class UrlValidator {
         // No legitimate product host ends in a dot. Also catches octal/hex IP literals hiding a trailing
         // dot (e.g. "0177.0.0.1.") and a dot inside IPv6 brackets ("[::ffff:1.2.3.4.]").
         if (bare.endsWith(".")) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "URL host is not allowed");
+            throw new ValidationException("URL host is not allowed");
         }
 
         String bareLc = bare.toLowerCase(Locale.ROOT);
@@ -145,7 +147,7 @@ public class UrlValidator {
         // letters / digits / dot / hyphen, plus ':' for the IPv6 literal we already de-bracketed. Rejects
         // anything a lenient scraper parser might interpret differently.
         if (!bareLc.matches("[a-z0-9.:-]+")) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "URL host is not allowed");
+            throw new ValidationException("URL host is not allowed");
         }
 
         // (a) Reject ANY userinfo / backslash / percent-encoding in the authority — no legit host needs
@@ -155,7 +157,7 @@ public class UrlValidator {
                 && (rawAuthority.indexOf('@') >= 0
                         || rawAuthority.indexOf('\\') >= 0
                         || rawAuthority.indexOf('%') >= 0)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "URL host is not allowed");
+            throw new ValidationException("URL host is not allowed");
         }
 
         // (b) Reject non-canonical IPv4-literal attempts (octal / hex / integer / short) — whole-host OR
@@ -169,13 +171,13 @@ public class UrlValidator {
             ipv4Literal = tail.indexOf('.') >= 0 ? tail : null; // avoids false-positives on hex groups (0db8)
         }
         if (ipv4Literal != null && isIpv4LiteralAttempt(ipv4Literal) && !isCanonicalDecimalQuad(ipv4Literal)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "URL host is not allowed");
+            throw new ValidationException("URL host is not allowed");
         }
 
         // (c) Reject the reserved names in RESERVED_TLDS WITHOUT DNS — see that constant for why the
         // list stops where it does.
         if (isReservedName(bareLc)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "URL host is not allowed");
+            throw new ValidationException("URL host is not allowed");
         }
 
         return new HostContext(bare, bareLc);
@@ -198,14 +200,13 @@ public class UrlValidator {
         try {
             return new URI(url);
         } catch (URISyntaxException e) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid URL");
+            throw new ValidationException("Invalid URL");
         }
     }
 
     private void rejectUnsupportedSites(String host) {
         if (matchesBlocklist(host)) {
-            throw new ResponseStatusException(
-                    HttpStatus.BAD_REQUEST, "URLs from " + host + " are not currently supported");
+            throw new ValidationException("URLs from " + host + " are not currently supported");
         }
     }
 
@@ -230,21 +231,21 @@ public class UrlValidator {
             addrs = hostResolver.resolve(h);
         } catch (UnknownHostException e) {
             log.debug("SSRF check: host did not resolve: {}", h); // typos/scans are common → DEBUG
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unable to resolve host", e);
+            throw new ValidationException("Unable to resolve host", e);
         } catch (TimeoutException e) {
             log.warn("SSRF check: host resolution timed out: {}", h);
-            throw new ResponseStatusException(HttpStatus.GATEWAY_TIMEOUT, "Host resolution timed out", e);
+            throw new DependencyTimeoutException("Host resolution timed out", e);
         } catch (HostResolutionUnavailableException e) {
             // Keep the cause chain (saturation vs interruption) for diagnosing bulkhead pressure.
             log.warn("SSRF check: resolver unavailable for: {}", h, e);
-            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Host resolution unavailable", e);
+            throw new DependencyUnavailableException("Host resolution unavailable", e);
         }
         if (addrs == null || addrs.length == 0) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Unable to resolve host");
+            throw new ValidationException("Unable to resolve host");
         }
         for (InetAddress a : addrs) {
             if (isBlocked(a)) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "URL host is not allowed");
+                throw new ValidationException("URL host is not allowed");
             }
         }
     }

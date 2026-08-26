@@ -341,7 +341,7 @@ class ProductTrackingServiceValidationTest {
         // scraper returned ExtractionSource.BLOCKED), trackUrl must propagate it
         // unchanged — no PriceRecord saved, no silent "last known" fallback. The
         // transactional boundary rolls back any uncommitted work; the controller
-        // turns the ResponseStatusException into a 502 to the client.
+        // advice turns the PriceExtractionException into a 502 to the client.
         // Note: we override the extractionService stub rather than the scraperClient
         // stub to avoid shadowing the BeforeEach scrape stub (Mockito strict-stubs).
         // The orchestrator test separately verifies BLOCKED → ScrapeBlockedException.

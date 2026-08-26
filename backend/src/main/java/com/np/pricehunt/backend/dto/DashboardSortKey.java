@@ -1,9 +1,8 @@
 package com.np.pricehunt.backend.dto;
 
+import com.np.pricehunt.backend.exception.ValidationException;
 import java.util.Arrays;
 import java.util.stream.Collectors;
-import org.springframework.http.HttpStatus;
-import org.springframework.web.server.ResponseStatusException;
 
 /**
  * The dashboard's sort strategies (issue #146).
@@ -39,7 +38,7 @@ public enum DashboardSortKey {
 
     /**
      * @param raw the {@code ?sort=} value; null or blank selects the default
-     * @throws ResponseStatusException 400, listing every accepted value
+     * @throws ValidationException, listing every accepted value
      */
     public static DashboardSortKey fromParam(String raw) {
         if (raw == null || raw.isBlank()) {
@@ -51,8 +50,7 @@ public enum DashboardSortKey {
                 return key;
             }
         }
-        throw new ResponseStatusException(
-                HttpStatus.BAD_REQUEST, "Unknown sort '%s'; expected one of %s".formatted(raw, acceptedParams()));
+        throw new ValidationException("Unknown sort '%s'; expected one of %s".formatted(raw, acceptedParams()));
     }
 
     private static String acceptedParams() {

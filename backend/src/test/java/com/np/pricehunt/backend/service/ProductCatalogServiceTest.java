@@ -10,6 +10,8 @@ import com.np.pricehunt.backend.domain.TrackedItem;
 import com.np.pricehunt.backend.dto.CreateProductRequest;
 import com.np.pricehunt.backend.dto.ProductResponse;
 import com.np.pricehunt.backend.dto.UpdateProductRequest;
+import com.np.pricehunt.backend.exception.NotFoundException;
+import com.np.pricehunt.backend.exception.ValidationException;
 import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
 import java.util.Optional;
@@ -18,8 +20,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.http.HttpStatus;
-import org.springframework.web.server.ResponseStatusException;
 
 @ExtendWith(MockitoExtension.class)
 class ProductCatalogServiceTest {
@@ -75,9 +75,7 @@ class ProductCatalogServiceTest {
     @Test
     void createProduct_blankName_returns400() {
         assertThatThrownBy(() -> service.createProduct(new CreateProductRequest("   ")))
-                .isInstanceOf(ResponseStatusException.class)
-                .extracting(e -> ((ResponseStatusException) e).getStatusCode())
-                .isEqualTo(HttpStatus.BAD_REQUEST);
+                .isInstanceOf(ValidationException.class);
 
         verifyNoInteractions(productRepository);
     }
@@ -88,10 +86,7 @@ class ProductCatalogServiceTest {
     void deleteProduct_notFound_throwsException() {
         when(productRepository.findById(99L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.deleteProduct(99L))
-                .isInstanceOf(ResponseStatusException.class)
-                .extracting(e -> ((ResponseStatusException) e).getStatusCode())
-                .isEqualTo(HttpStatus.NOT_FOUND);
+        assertThatThrownBy(() -> service.deleteProduct(99L)).isInstanceOf(NotFoundException.class);
 
         verify(productRepository, never()).delete(any());
     }
@@ -111,10 +106,7 @@ class ProductCatalogServiceTest {
     void deleteTrackedItem_notFound_throwsException() {
         when(trackedItemRepository.findById(99L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.deleteTrackedItem(1L, 99L))
-                .isInstanceOf(ResponseStatusException.class)
-                .extracting(e -> ((ResponseStatusException) e).getStatusCode())
-                .isEqualTo(HttpStatus.NOT_FOUND);
+        assertThatThrownBy(() -> service.deleteTrackedItem(1L, 99L)).isInstanceOf(NotFoundException.class);
 
         verify(trackedItemRepository, never()).delete(any());
     }
@@ -130,10 +122,7 @@ class ProductCatalogServiceTest {
                 .build();
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(foreignItem));
 
-        assertThatThrownBy(() -> service.deleteTrackedItem(1L, 1L))
-                .isInstanceOf(ResponseStatusException.class)
-                .extracting(e -> ((ResponseStatusException) e).getStatusCode())
-                .isEqualTo(HttpStatus.NOT_FOUND);
+        assertThatThrownBy(() -> service.deleteTrackedItem(1L, 1L)).isInstanceOf(NotFoundException.class);
 
         verify(trackedItemRepository, never()).delete(any());
     }
@@ -154,9 +143,7 @@ class ProductCatalogServiceTest {
         when(productRepository.findById(99L)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.updateProduct(99L, new UpdateProductRequest("New", null)))
-                .isInstanceOf(ResponseStatusException.class)
-                .extracting(e -> ((ResponseStatusException) e).getStatusCode())
-                .isEqualTo(HttpStatus.NOT_FOUND);
+                .isInstanceOf(NotFoundException.class);
     }
 
     @Test
@@ -172,9 +159,7 @@ class ProductCatalogServiceTest {
     @Test
     void updateProduct_blankName_returns400() {
         assertThatThrownBy(() -> service.updateProduct(1L, new UpdateProductRequest("  ", null)))
-                .isInstanceOf(ResponseStatusException.class)
-                .extracting(e -> ((ResponseStatusException) e).getStatusCode())
-                .isEqualTo(HttpStatus.BAD_REQUEST);
+                .isInstanceOf(ValidationException.class);
 
         verify(productRepository, never()).findById(any());
     }
@@ -182,9 +167,7 @@ class ProductCatalogServiceTest {
     @Test
     void updateProduct_blankNameWithDescription_returns400_noPartialUpdate() {
         assertThatThrownBy(() -> service.updateProduct(1L, new UpdateProductRequest("  ", "A great laptop")))
-                .isInstanceOf(ResponseStatusException.class)
-                .extracting(e -> ((ResponseStatusException) e).getStatusCode())
-                .isEqualTo(HttpStatus.BAD_REQUEST);
+                .isInstanceOf(ValidationException.class);
 
         verify(productRepository, never()).findById(any());
         assertThat(product.getDescription()).isNull();
@@ -230,9 +213,7 @@ class ProductCatalogServiceTest {
     @Test
     void updateProduct_allFieldsNull_returns400() {
         assertThatThrownBy(() -> service.updateProduct(1L, new UpdateProductRequest(null, null)))
-                .isInstanceOf(ResponseStatusException.class)
-                .extracting(e -> ((ResponseStatusException) e).getStatusCode())
-                .isEqualTo(HttpStatus.BAD_REQUEST);
+                .isInstanceOf(ValidationException.class);
 
         verify(productRepository, never()).findById(any());
     }
