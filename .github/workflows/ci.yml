@@ -171,6 +171,19 @@ jobs:
         working-directory: scraper
         run: ruff format --check .
 
+      # Only migrations ADDED on this branch (issue #228): merged ones are immutable and V1–V12
+      # predate .sqlfluff, so a migration is linted once, in the PR that adds it. Pinned to the
+      # pre-commit hook's version; unhashed like the uv bootstrap above.
+      - name: SQLFluff lint new migrations
+        run: |
+          new_migrations=$(git diff --name-only --diff-filter=A "origin/${GITHUB_BASE_REF:-main}...HEAD" -- 'backend/src/main/resources/db/migration/*.sql')
+          if [ -z "$new_migrations" ]; then
+            echo "No new migrations on this branch — nothing to lint."
+            exit 0
+          fi
+          pip install sqlfluff==4.3.0
+          echo "$new_migrations" | xargs sqlfluff lint
+
       - name: Build, lint, and test backend
         working-directory: backend
         env:
