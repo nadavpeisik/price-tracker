@@ -10,4 +10,4 @@ import java.time.Instant;
  * crosses this boundary as a JSON number.
  */
 public record PricePointResponse(
-        String price, String currency, AvailabilityStatus availability, Instant timestamp, String extractionSource) {}
+        String price, String currency, AvailabilityStatus availability, Instant observedAt, String extractionSource) {}

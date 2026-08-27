@@ -84,7 +84,7 @@ public interface TrackedItemRepository extends JpaRepository<TrackedItem, Long> 
      * statement regardless of listing count (issue #157).
      *
      * <p>{@code LEFT JOIN LATERAL … LIMIT 1} rather than a {@code ROW_NUMBER()} window: the lateral
-     * subquery walks the {@code (tracked_item_id, "timestamp")} index and stops after one row per
+     * subquery walks the {@code (tracked_item_id, observed_at)} index and stops after one row per
      * listing, where a window would rank the product's whole price history to pick the same rows.
      * The selection rule — latest at or before the instant, ties broken by higher record id — is the
      * dashboard's ({@code PriceRecordRepository.findCutoffObservations}), so the panel and the row can
@@ -95,8 +95,7 @@ public interface TrackedItemRepository extends JpaRepository<TrackedItem, Long> 
      * stable order across requests.
      *
      * <p>Aliases are quoted because the interface projection binds by exact column label and Postgres
-     * folds unquoted identifiers to lowercase; {@code "timestamp"} is quoted for the other reason — it
-     * is the column's real (reserved-word) name from V1.
+     * folds unquoted identifiers to lowercase.
      */
     @Query(
             nativeQuery = true,
@@ -113,10 +112,10 @@ public interface TrackedItemRepository extends JpaRepository<TrackedItem, Long> 
                            o.observed_at         AS "observedAt"
                     FROM tracked_item t
                     LEFT JOIN LATERAL (
-                        SELECT r.price, r.currency, r.availability_status, r."timestamp" AS observed_at
+                        SELECT r.price, r.currency, r.availability_status, r.observed_at
                         FROM price_record r
-                        WHERE r.tracked_item_id = t.id AND r."timestamp" <= :asOf
-                        ORDER BY r."timestamp" DESC, r.id DESC
+                        WHERE r.tracked_item_id = t.id AND r.observed_at <= :asOf
+                        ORDER BY r.observed_at DESC, r.id DESC
                         LIMIT 1
                     ) o ON true
                     WHERE t.product_id = :productId

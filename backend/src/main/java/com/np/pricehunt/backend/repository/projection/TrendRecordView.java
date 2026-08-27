@@ -14,4 +14,4 @@ import java.time.Instant;
  * Lombok's {@code @Data} makes a foot-gun.
  */
 public record TrendRecordView(
-        Long trackedItemId, BigDecimal price, String currency, AvailabilityStatus availability, Instant timestamp) {}
+        Long trackedItemId, BigDecimal price, String currency, AvailabilityStatus availability, Instant observedAt) {}

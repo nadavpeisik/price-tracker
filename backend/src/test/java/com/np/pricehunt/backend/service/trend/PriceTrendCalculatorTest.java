@@ -657,7 +657,7 @@ class PriceTrendCalculatorTest {
     private static ListingWindow listing(long id, String shop, TrendRecordView... records) {
         List<TrendRecordView> withId = new ArrayList<>();
         for (TrendRecordView r : records) {
-            withId.add(new TrendRecordView(id, r.price(), r.currency(), r.availability(), r.timestamp()));
+            withId.add(new TrendRecordView(id, r.price(), r.currency(), r.availability(), r.observedAt()));
         }
         return new ListingWindow(id, shop, List.copyOf(withId));
     }

@@ -312,8 +312,8 @@ class ProductControllerTest {
 
     @Test
     void getPriceHistory_noParams_returnsFullHistory() throws Exception {
-        PricePointResponse point =
-                new PricePointResponse("999.9900", "USD", AvailabilityStatus.AVAILABLE, Instant.now(), "STRUCTURED");
+        PricePointResponse point = new PricePointResponse(
+                "999.9900", "USD", AvailabilityStatus.AVAILABLE, Instant.parse("2026-03-19T10:15:30Z"), "STRUCTURED");
         PriceHistoryResponse history =
                 new PriceHistoryResponse(1L, "amazon.com", "https://amazon.com/dp/123", List.of(point));
         when(queryService.getPriceHistory(eq(1L), eq(1L), isNull(), isNull())).thenReturn(history);
@@ -324,6 +324,9 @@ class ProductControllerTest {
                 .andExpect(jsonPath("$.history[0].price").value("999.9900"))
                 .andExpect(jsonPath("$.history[0].currency").value("USD"))
                 .andExpect(jsonPath("$.history[0].availability").value("AVAILABLE"))
+                // The wire key is observedAt (#229); the pre-rename `timestamp` key must not survive.
+                .andExpect(jsonPath("$.history[0].observedAt").value("2026-03-19T10:15:30Z"))
+                .andExpect(jsonPath("$.history[0].timestamp").doesNotExist())
                 .andExpect(jsonPath("$.history[0].extractionSource").value("STRUCTURED"));
     }
 

@@ -52,11 +52,10 @@ import org.testcontainers.utility.DockerImageName;
 /**
  * The dashboard endpoint end to end, against the wiring it actually ships with (issue #146).
  *
- * <p><b>Real Postgres, not H2.</b> The two-cutoff query is native SQL, and it must quote {@code
- * "timestamp"} because that is the column's real name from V1. H2 folds unquoted identifiers to
- * upper case, so a schema generated from the entities has {@code TIMESTAMP} and the quoted lowercase
- * reference cannot resolve — the query would be untestable there, or worse, would have to be written
- * differently from the one that runs in production. Testcontainers also means Flyway runs V1–V10 with
+ * <p><b>Real Postgres, not H2.</b> The two-cutoff query is native SQL with quoted projection aliases,
+ * and H2 folds unquoted identifiers to upper case while Postgres folds them to lower — a query written
+ * for one would have to be written differently for the other, and the one that runs in production is
+ * the one worth testing. Testcontainers also means Flyway runs every migration with
  * {@code ddl-auto=validate}, so this is a second gate on the migration.
  *
  * <p><b>What it is really for: equivalence.</b> The dashboard's lean pass and the trend endpoint
@@ -618,7 +617,7 @@ class DashboardQueryIntegrationTest {
                 .availability(availability)
                 .extractionSource(ExtractionSource.STRUCTURED)
                 .trackedItem(item)
-                .timestamp(at)
+                .observedAt(at)
                 .build());
     }
 

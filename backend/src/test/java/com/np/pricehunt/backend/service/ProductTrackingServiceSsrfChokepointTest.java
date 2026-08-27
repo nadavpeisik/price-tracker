@@ -168,7 +168,7 @@ class ProductTrackingServiceSsrfChokepointTest {
         when(trackedItemRepository.findByUrl(URL)).thenReturn(Optional.of(item));
         when(scraperClient.scrape(URL)).thenReturn(null); // cheapest happy path — no extraction/save
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
+        when(priceRecordRepository.findFirstByTrackedItemOrderByObservedAtDesc(item))
                 .thenReturn(Optional.empty());
 
         service.trackUrl(1L, new TrackRequest(URL));

@@ -189,7 +189,7 @@ class DevDataSeederCleanupTest {
                 .currency("ILS")
                 .availability(AvailabilityStatus.AVAILABLE)
                 .extractionSource(ExtractionSource.STRUCTURED)
-                .timestamp(NOW)
+                .observedAt(NOW)
                 .trackedItem(item)
                 .build();
         item.getPriceHistory().add(priceRecord);

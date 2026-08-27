@@ -155,7 +155,7 @@ class ProductTrackingServiceCrudTest {
         when(productRepository.findForUpdateById(1L)).thenReturn(Optional.of(product));
         when(trackedItemRepository.findByUrl(item.getUrl())).thenReturn(Optional.of(item));
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
+        when(priceRecordRepository.findFirstByTrackedItemOrderByObservedAtDesc(item))
                 .thenReturn(Optional.empty());
         when(scraperClient.scrape(item.getUrl())).thenReturn(null);
 
@@ -173,7 +173,7 @@ class ProductTrackingServiceCrudTest {
         when(productRepository.findForUpdateById(1L)).thenReturn(Optional.of(product));
         when(trackedItemRepository.findByUrl(item.getUrl())).thenReturn(Optional.of(item));
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
+        when(priceRecordRepository.findFirstByTrackedItemOrderByObservedAtDesc(item))
                 .thenReturn(Optional.empty());
         when(scraperClient.scrape(item.getUrl())).thenReturn(null);
 
@@ -249,7 +249,7 @@ class ProductTrackingServiceCrudTest {
         when(trackedItemRepository.findRefreshViewByIdAndProductId(1L, 1L)).thenReturn(Optional.of(viewOf(item)));
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
         when(cooldownLimiter.tryAcquire(1L)).thenReturn(true);
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
+        when(priceRecordRepository.findFirstByTrackedItemOrderByObservedAtDesc(item))
                 .thenReturn(Optional.empty());
         when(scraperClient.scrape(item.getUrl())).thenReturn(scraped);
         when(extractionService.extractPrice(scraped))
@@ -257,7 +257,7 @@ class ProductTrackingServiceCrudTest {
                         new BigDecimal("899.99"), "USD", AvailabilityStatus.AVAILABLE, ExtractionSource.STRUCTURED));
         when(priceRecordRepository.save(any())).thenAnswer(inv -> {
             PriceRecord r = inv.getArgument(0);
-            ReflectionTestUtils.setField(r, "timestamp", Instant.now());
+            ReflectionTestUtils.setField(r, "observedAt", Instant.now());
             return r;
         });
 
@@ -281,7 +281,7 @@ class ProductTrackingServiceCrudTest {
         when(trackedItemRepository.findRefreshViewByIdAndProductId(1L, 1L)).thenReturn(Optional.of(viewOf(item)));
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
         when(cooldownLimiter.tryAcquire(1L)).thenReturn(true, false);
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
+        when(priceRecordRepository.findFirstByTrackedItemOrderByObservedAtDesc(item))
                 .thenReturn(Optional.empty());
         when(scraperClient.scrape(item.getUrl())).thenReturn(null);
 
@@ -310,7 +310,7 @@ class ProductTrackingServiceCrudTest {
                 null,
                 null);
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(recentItem));
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(recentItem))
+        when(priceRecordRepository.findFirstByTrackedItemOrderByObservedAtDesc(recentItem))
                 .thenReturn(Optional.empty());
         when(scraperClient.scrape(recentItem.getUrl())).thenReturn(scraped);
         when(extractionService.extractPrice(scraped))
@@ -318,7 +318,7 @@ class ProductTrackingServiceCrudTest {
                         new BigDecimal("899.99"), "USD", AvailabilityStatus.AVAILABLE, ExtractionSource.STRUCTURED));
         when(priceRecordRepository.save(any())).thenAnswer(inv -> {
             PriceRecord r = inv.getArgument(0);
-            ReflectionTestUtils.setField(r, "timestamp", Instant.now());
+            ReflectionTestUtils.setField(r, "observedAt", Instant.now());
             return r;
         });
 
@@ -342,7 +342,7 @@ class ProductTrackingServiceCrudTest {
         when(trackedItemRepository.findRefreshViewByIdAndProductId(1L, 1L)).thenReturn(Optional.of(viewOf(item)));
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
         when(cooldownLimiter.tryAcquire(1L)).thenReturn(true);
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
+        when(priceRecordRepository.findFirstByTrackedItemOrderByObservedAtDesc(item))
                 .thenReturn(Optional.empty());
         when(scraperClient.scrape(item.getUrl())).thenReturn(scraped);
         when(extractionService.extractPrice(scraped))
@@ -350,7 +350,7 @@ class ProductTrackingServiceCrudTest {
                         new BigDecimal("100.00"), "usd", AvailabilityStatus.AVAILABLE, ExtractionSource.STRUCTURED));
         when(priceRecordRepository.save(any())).thenAnswer(inv -> {
             PriceRecord r = inv.getArgument(0);
-            ReflectionTestUtils.setField(r, "timestamp", Instant.now());
+            ReflectionTestUtils.setField(r, "observedAt", Instant.now());
             return r;
         });
 

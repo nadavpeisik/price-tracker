@@ -25,7 +25,7 @@
         {
           "datasource": {"type": "postgres", "uid": "pricehunt-postgres"},
           "format": "table",
-          "rawSql": "SELECT p.name AS \"Product\", ti.shop_name AS \"Shop\", ti.url AS \"URL\", pr.price AS \"Latest price\", pr.currency AS \"Currency\", pr.availability_status AS \"Availability\", pr.timestamp AS \"Last checked\" FROM tracked_item ti JOIN product p ON ti.product_id = p.id LEFT JOIN LATERAL (SELECT price, currency, availability_status, timestamp FROM price_record WHERE tracked_item_id = ti.id ORDER BY timestamp DESC LIMIT 1) pr ON TRUE ORDER BY p.name, ti.shop_name",
+          "rawSql": "SELECT p.name AS \"Product\", ti.shop_name AS \"Shop\", ti.url AS \"URL\", pr.price AS \"Latest price\", pr.currency AS \"Currency\", pr.availability_status AS \"Availability\", pr.observed_at AS \"Last checked\" FROM tracked_item ti JOIN product p ON ti.product_id = p.id LEFT JOIN LATERAL (SELECT price, currency, availability_status, observed_at FROM price_record WHERE tracked_item_id = ti.id ORDER BY observed_at DESC LIMIT 1) pr ON TRUE ORDER BY p.name, ti.shop_name",
           "refId": "A"
         }
       ],
@@ -50,7 +50,7 @@
         {
           "datasource": {"type": "postgres", "uid": "pricehunt-postgres"},
           "format": "table",
-          "rawSql": "SELECT ti.shop_name AS \"Shop\", ti.url AS \"URL\", pr.price AS \"Latest price\", pr.currency AS \"Currency\", pr.availability_status AS \"Availability\", pr.timestamp AS \"Last checked\" FROM tracked_item ti LEFT JOIN LATERAL (SELECT price, currency, availability_status, timestamp FROM price_record WHERE tracked_item_id = ti.id ORDER BY timestamp DESC LIMIT 1) pr ON TRUE WHERE ti.product_id = $product_id ORDER BY ti.shop_name",
+          "rawSql": "SELECT ti.shop_name AS \"Shop\", ti.url AS \"URL\", pr.price AS \"Latest price\", pr.currency AS \"Currency\", pr.availability_status AS \"Availability\", pr.observed_at AS \"Last checked\" FROM tracked_item ti LEFT JOIN LATERAL (SELECT price, currency, availability_status, observed_at FROM price_record WHERE tracked_item_id = ti.id ORDER BY observed_at DESC LIMIT 1) pr ON TRUE WHERE ti.product_id = $product_id ORDER BY ti.shop_name",
           "refId": "A"
         }
       ],
@@ -88,7 +88,7 @@
         {
           "datasource": {"type": "postgres", "uid": "pricehunt-postgres"},
           "format": "table",
-          "rawSql": "SELECT pr.timestamp AS \"When\", p.name AS \"Product\", ti.shop_name AS \"Shop\", pr.currency AS \"Currency\", prev.price AS \"Prev\", pr.price AS \"Now\", ROUND((pr.price - prev.price) * 100.0 / NULLIF(prev.price, 0), 2) AS \"% change\" FROM price_record pr JOIN tracked_item ti ON pr.tracked_item_id = ti.id JOIN product p ON ti.product_id = p.id LEFT JOIN LATERAL (SELECT price, currency FROM price_record WHERE tracked_item_id = pr.tracked_item_id AND timestamp < pr.timestamp ORDER BY timestamp DESC LIMIT 1) prev ON TRUE WHERE $__timeFilter(pr.timestamp) AND prev.price IS NOT NULL AND prev.currency = pr.currency AND prev.price <> pr.price ORDER BY pr.timestamp DESC LIMIT 50",
+          "rawSql": "SELECT pr.observed_at AS \"When\", p.name AS \"Product\", ti.shop_name AS \"Shop\", pr.currency AS \"Currency\", prev.price AS \"Prev\", pr.price AS \"Now\", ROUND((pr.price - prev.price) * 100.0 / NULLIF(prev.price, 0), 2) AS \"% change\" FROM price_record pr JOIN tracked_item ti ON pr.tracked_item_id = ti.id JOIN product p ON ti.product_id = p.id LEFT JOIN LATERAL (SELECT price, currency FROM price_record WHERE tracked_item_id = pr.tracked_item_id AND observed_at < pr.observed_at ORDER BY observed_at DESC LIMIT 1) prev ON TRUE WHERE $__timeFilter(pr.observed_at) AND prev.price IS NOT NULL AND prev.currency = pr.currency AND prev.price <> pr.price ORDER BY pr.observed_at DESC LIMIT 50",
           "refId": "A"
         }
       ],
@@ -108,7 +108,7 @@
         {
           "datasource": {"type": "postgres", "uid": "pricehunt-postgres"},
           "format": "time_series",
-          "rawSql": "SELECT timestamp AS time, price AS value, currency AS metric FROM price_record WHERE tracked_item_id = $tracked_item_id AND $__timeFilter(timestamp) ORDER BY timestamp",
+          "rawSql": "SELECT observed_at AS time, price AS value, currency AS metric FROM price_record WHERE tracked_item_id = $tracked_item_id AND $__timeFilter(observed_at) ORDER BY observed_at",
           "refId": "A"
         }
       ],

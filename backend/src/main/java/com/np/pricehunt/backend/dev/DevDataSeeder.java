@@ -417,7 +417,7 @@ public class DevDataSeeder implements CommandLineRunner {
                             .currency(currency)
                             .availability(observation.availability())
                             .extractionSource(ExtractionSource.STRUCTURED)
-                            .timestamp(at)
+                            .observedAt(at)
                             .trackedItem(item)
                             .build());
             if (newest == null || at.isAfter(newest)) {

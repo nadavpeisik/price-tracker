@@ -88,7 +88,7 @@ class DashboardSnapshotServiceTest {
                 .singleElement()
                 .extracting(ListingWindow::records)
                 .satisfies(records -> assertThat(records)
-                        .extracting(TrendRecordView::timestamp)
+                        .extracting(TrendRecordView::observedAt)
                         .containsExactly(daysBefore(8), daysBefore(1)));
     }
 

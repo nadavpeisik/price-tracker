@@ -118,7 +118,7 @@ public class ProductQueryService {
             effectiveFrom = maxFrom;
         }
 
-        List<PriceRecord> records = priceRecordRepository.findByTrackedItemAndTimestampBetweenOrderByTimestampDesc(
+        List<PriceRecord> records = priceRecordRepository.findByTrackedItemAndObservedAtBetweenOrderByObservedAtDesc(
                 item, effectiveFrom, effectiveTo);
 
         List<PricePointResponse> history = records.stream()
@@ -126,7 +126,7 @@ public class ProductQueryService {
                         WireMoney.decimalString(r.getPrice()),
                         r.getCurrency(),
                         r.getAvailability(),
-                        r.getTimestamp(),
+                        r.getObservedAt(),
                         r.getExtractionSource().name()))
                 .toList();
 

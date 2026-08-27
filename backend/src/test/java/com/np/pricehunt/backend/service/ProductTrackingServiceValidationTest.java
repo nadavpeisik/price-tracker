@@ -125,14 +125,14 @@ class ProductTrackingServiceValidationTest {
 
     @Test
     void trackUrl_validPrice_noHistory_savesPriceRecord() {
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
+        when(priceRecordRepository.findFirstByTrackedItemOrderByObservedAtDesc(item))
                 .thenReturn(Optional.empty());
         when(extractionService.extractPrice(scrapeResponse))
                 .thenReturn(new PriceInfo(
                         new BigDecimal("100.00"), "USD", AvailabilityStatus.AVAILABLE, ExtractionSource.STRUCTURED));
         when(priceRecordRepository.save(any())).thenAnswer(inv -> {
             PriceRecord r = inv.getArgument(0);
-            ReflectionTestUtils.setField(r, "timestamp", Instant.now());
+            ReflectionTestUtils.setField(r, "observedAt", Instant.now());
             return r;
         });
 
@@ -147,14 +147,14 @@ class ProductTrackingServiceValidationTest {
 
     @Test
     void trackUrl_validPrice_noHistory_savesExtractionSource() {
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
+        when(priceRecordRepository.findFirstByTrackedItemOrderByObservedAtDesc(item))
                 .thenReturn(Optional.empty());
         when(extractionService.extractPrice(scrapeResponse))
                 .thenReturn(new PriceInfo(
                         new BigDecimal("100.00"), "USD", AvailabilityStatus.AVAILABLE, ExtractionSource.STRUCTURED));
         when(priceRecordRepository.save(any())).thenAnswer(inv -> {
             PriceRecord r = inv.getArgument(0);
-            ReflectionTestUtils.setField(r, "timestamp", Instant.now());
+            ReflectionTestUtils.setField(r, "observedAt", Instant.now());
             return r;
         });
 
@@ -167,7 +167,7 @@ class ProductTrackingServiceValidationTest {
 
     @Test
     void trackUrl_zeroPrice_skipsSave() {
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
+        when(priceRecordRepository.findFirstByTrackedItemOrderByObservedAtDesc(item))
                 .thenReturn(Optional.empty());
         when(extractionService.extractPrice(scrapeResponse))
                 .thenReturn(
@@ -187,7 +187,7 @@ class ProductTrackingServiceValidationTest {
         // The bug this closes: 0.00004 satisfies "price > 0" as extracted, but numeric(19,4) stores
         // it as 0.0000 — and that zero then becomes a delta baseline that rejects every later scrape,
         // freezing the listing for good. Normalizing before validation makes it non-positive (#175).
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
+        when(priceRecordRepository.findFirstByTrackedItemOrderByObservedAtDesc(item))
                 .thenReturn(Optional.empty());
         when(extractionService.extractPrice(scrapeResponse))
                 .thenReturn(new PriceInfo(
@@ -205,7 +205,7 @@ class ProductTrackingServiceValidationTest {
     void trackUrl_overScalePrice_isStoredRoundedToTheColumnScale() {
         // The other half of normalizing early: an over-scale price that does NOT round to zero is
         // persisted as the column would hold it, so the entity and the row never disagree.
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
+        when(priceRecordRepository.findFirstByTrackedItemOrderByObservedAtDesc(item))
                 .thenReturn(Optional.empty());
         when(extractionService.extractPrice(scrapeResponse))
                 .thenReturn(new PriceInfo(
@@ -215,7 +215,7 @@ class ProductTrackingServiceValidationTest {
                         ExtractionSource.STRUCTURED));
         when(priceRecordRepository.save(any(PriceRecord.class))).thenAnswer(inv -> {
             PriceRecord r = inv.getArgument(0);
-            ReflectionTestUtils.setField(r, "timestamp", Instant.now());
+            ReflectionTestUtils.setField(r, "observedAt", Instant.now());
             return r;
         });
 
@@ -228,7 +228,7 @@ class ProductTrackingServiceValidationTest {
 
     @Test
     void trackUrl_negativePrice_skipsSave() {
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
+        when(priceRecordRepository.findFirstByTrackedItemOrderByObservedAtDesc(item))
                 .thenReturn(Optional.empty());
         when(extractionService.extractPrice(scrapeResponse))
                 .thenReturn(new PriceInfo(
@@ -241,7 +241,7 @@ class ProductTrackingServiceValidationTest {
 
     @Test
     void trackUrl_nullCurrency_noHistory_skipsSave() {
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
+        when(priceRecordRepository.findFirstByTrackedItemOrderByObservedAtDesc(item))
                 .thenReturn(Optional.empty());
         when(extractionService.extractPrice(scrapeResponse))
                 .thenReturn(new PriceInfo(
@@ -255,7 +255,7 @@ class ProductTrackingServiceValidationTest {
     @Test
     void trackUrl_nullCurrency_withHistory_skipsSave() {
         PriceRecord previous = priceRecord("100.00", "USD");
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
+        when(priceRecordRepository.findFirstByTrackedItemOrderByObservedAtDesc(item))
                 .thenReturn(Optional.of(previous));
         when(extractionService.extractPrice(scrapeResponse))
                 .thenReturn(new PriceInfo(
@@ -269,14 +269,14 @@ class ProductTrackingServiceValidationTest {
     @Test
     void trackUrl_currencyChanged_skipsDeltaCheckAndSaves() {
         PriceRecord previous = priceRecord("100.00", "USD");
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
+        when(priceRecordRepository.findFirstByTrackedItemOrderByObservedAtDesc(item))
                 .thenReturn(Optional.of(previous));
         when(extractionService.extractPrice(scrapeResponse))
                 .thenReturn(new PriceInfo(
                         new BigDecimal("90.00"), "EUR", AvailabilityStatus.AVAILABLE, ExtractionSource.STRUCTURED));
         when(priceRecordRepository.save(any())).thenAnswer(inv -> {
             PriceRecord r = inv.getArgument(0);
-            ReflectionTestUtils.setField(r, "timestamp", Instant.now());
+            ReflectionTestUtils.setField(r, "observedAt", Instant.now());
             return r;
         });
 
@@ -289,14 +289,14 @@ class ProductTrackingServiceValidationTest {
     @Test
     void trackUrl_priceWithinUpperDelta_saves() {
         PriceRecord previous = priceRecord("100.00", "USD");
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
+        when(priceRecordRepository.findFirstByTrackedItemOrderByObservedAtDesc(item))
                 .thenReturn(Optional.of(previous));
         when(extractionService.extractPrice(scrapeResponse))
                 .thenReturn(new PriceInfo(
                         new BigDecimal("250.00"), "USD", AvailabilityStatus.AVAILABLE, ExtractionSource.STRUCTURED));
         when(priceRecordRepository.save(any())).thenAnswer(inv -> {
             PriceRecord r = inv.getArgument(0);
-            ReflectionTestUtils.setField(r, "timestamp", Instant.now());
+            ReflectionTestUtils.setField(r, "observedAt", Instant.now());
             return r;
         });
 
@@ -308,7 +308,7 @@ class ProductTrackingServiceValidationTest {
     @Test
     void trackUrl_priceExceedsUpperDelta_skipsSave() {
         PriceRecord previous = priceRecord("100.00", "USD");
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
+        when(priceRecordRepository.findFirstByTrackedItemOrderByObservedAtDesc(item))
                 .thenReturn(Optional.of(previous));
         // 400 is 4x previous, exceeds 200% delta (max is 3x)
         when(extractionService.extractPrice(scrapeResponse))
@@ -323,7 +323,7 @@ class ProductTrackingServiceValidationTest {
     @Test
     void trackUrl_priceBelowLowerDelta_skipsSave() {
         PriceRecord previous = priceRecord("100.00", "USD");
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
+        when(priceRecordRepository.findFirstByTrackedItemOrderByObservedAtDesc(item))
                 .thenReturn(Optional.of(previous));
         // 10 is 1/10 of previous; lower bound is 100/3 ≈ 33.33, so 10 is below it
         when(extractionService.extractPrice(scrapeResponse))
@@ -381,7 +381,7 @@ class ProductTrackingServiceValidationTest {
     @Test
     void trackUrl_nullScrapeResponse_skipsSaveReturnsLastKnown() {
         PriceRecord previous = priceRecord("99.00", "USD");
-        when(priceRecordRepository.findFirstByTrackedItemOrderByTimestampDesc(item))
+        when(priceRecordRepository.findFirstByTrackedItemOrderByObservedAtDesc(item))
                 .thenReturn(Optional.of(previous));
         when(scraperClient.scrape(any())).thenReturn(null);
 
