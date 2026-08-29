@@ -31,10 +31,11 @@ Every successful extraction is appended as an immutable `PriceRecord`, building 
                           HTTP     │        │   Spring AI
                                    ▼        ▼
                   ┌────────────────────┐  ┌─────────────────────┐
-                  │ Python Scraper     │  │ Ollama (11434)      │
-                  │ FastAPI+Playwright │  │ local, you run it   │
-                  │ port 8001          │  └─────────────────────┘
-                  └────────────────────┘
+                  │ Python Scraper     │  │ Groq Cloud          │
+                  │ FastAPI+Playwright │  │ hosted, gpt-oss     │
+                  │ port 8001          │  │ (or local Ollama    │
+                  └────────────────────┘  │  via 'ollama' prof) │
+                                          └─────────────────────┘
 ```
 
 ### Extraction waterfall
@@ -62,7 +63,7 @@ price-tracker/
 
 ## Quickstart
 
-Prerequisites: Java 21, Docker, [Ollama](https://ollama.com/) running locally with a model pulled (e.g. `llama3.2`).
+Prerequisites: Java 21, Docker, and a [Groq](https://console.groq.com/) API key (the free tier is enough — no card required; it allows roughly 7 LLM extractions a minute and ~185 a day, and most tracked pages never need one). Prefer to stay fully local? Skip the key and use the Ollama fallback shown below.
 
 ```bash
 git clone git@github.com:nadavpeisik/price-tracker.git
@@ -71,9 +72,8 @@ cd price-tracker
 # Postgres credentials — required (compose.yaml refuses to start without them)
 cp .env.example .env
 
-# Run Ollama in a separate terminal
-ollama serve
-ollama pull llama3.2
+# Price extraction runs on Groq — the app fails fast at boot without this
+export GROQ_API_KEY='gsk_your_key_here'
 
 # Start the backend — Spring Boot auto-starts postgres + scraper via Docker Compose
 cd backend
@@ -84,6 +84,9 @@ cd backend
 
 # …or remove the demo data and carry on with just your real tracked items:
 ./mvnw spring-boot:run -Dspring-boot.run.profiles=seed-clean
+
+# Offline / no API key? Run a local model instead (needs `ollama serve` + the qwen models pulled)
+SPRING_PROFILES_ACTIVE=ollama ./mvnw spring-boot:run
 ```
 
 The `seed` profile writes 22 back-dated demo products (two dashboard pages)
@@ -158,7 +161,7 @@ Base path: `/api/products`
 - **Backend:** Java 21, Spring Boot 4.0.3, Spring AI 2.0.0-M2, Spring Data JPA, Lombok
 - **Scraper:** Python 3.12, FastAPI 0.135, Playwright 1.58 (chromium), pytest
 - **Storage:** PostgreSQL 17
-- **LLM:** Ollama (local) — model is configurable; tier 1 keeps most requests off the LLM entirely
+- **LLM:** Groq Cloud (`openai/gpt-oss-20b` / `-120b`, strict schema-enforced JSON); local Ollama fallback under the `ollama` profile. Tier 1 keeps most requests off the LLM entirely
 - **Orchestration:** Docker Compose (postgres + scraper); Spring Boot's `spring-boot-docker-compose` starts them on `./mvnw spring-boot:run`
 - **CI:** GitHub Actions
 

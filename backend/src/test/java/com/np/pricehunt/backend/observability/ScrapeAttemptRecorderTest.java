@@ -3,7 +3,8 @@ package com.np.pricehunt.backend.observability;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.verify;
 
-import com.np.pricehunt.backend.config.OllamaChatOptionsProperties;
+import com.np.pricehunt.backend.config.GroqChatOptionsProperties;
+import com.np.pricehunt.backend.config.GroqExtractionLlmProvider;
 import com.np.pricehunt.backend.config.PriceExtractionProperties;
 import com.np.pricehunt.backend.config.ScrapeAuditProperties;
 import com.np.pricehunt.backend.domain.ExtractionSource;
@@ -17,7 +18,7 @@ import com.np.pricehunt.backend.exception.ScrapeBlockedException;
 import com.np.pricehunt.backend.repository.ScrapeAttemptRepository;
 import com.np.pricehunt.backend.service.ExtractionConfigFingerprint;
 import com.np.pricehunt.backend.service.LlmInputResolver;
-import com.np.pricehunt.backend.service.OllamaPriceExtractionService;
+import com.np.pricehunt.backend.service.LlmPriceExtractionService;
 import com.np.pricehunt.backend.util.Hashing;
 import java.time.Clock;
 import java.time.Duration;
@@ -43,7 +44,7 @@ class ScrapeAttemptRecorderTest {
 
     private final ScrapeAuditProperties auditProps = new ScrapeAuditProperties(RETENTION, "0 15 3 * * *", 8000, false);
     private final ExtractionConfigFingerprint configFingerprint =
-            new ExtractionConfigFingerprint(new OllamaChatOptionsProperties(0.0, "json", 4096));
+            new ExtractionConfigFingerprint(new GroqExtractionLlmProvider(new GroqChatOptionsProperties(0.0, "low")));
 
     private ScrapeAttemptRecorder recorder;
 
@@ -133,7 +134,7 @@ class ScrapeAttemptRecorderTest {
         ScrapeAttempt a = captureSaved();
         assertThat(a.getFailureCode()).isEqualTo(ScrapeFailureCode.EXTRACTION_ERROR);
         assertThat(a.getModelName()).isEqualTo(SNIPPET_MODEL);
-        assertThat(a.getPromptVersion()).isEqualTo(OllamaPriceExtractionService.PROMPT_VERSION);
+        assertThat(a.getPromptVersion()).isEqualTo(LlmPriceExtractionService.PROMPT_VERSION);
     }
 
     @Test

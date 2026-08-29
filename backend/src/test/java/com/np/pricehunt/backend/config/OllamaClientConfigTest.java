@@ -44,12 +44,20 @@ class OllamaClientConfigTest {
     @Test
     void ollamaApiBean_overridesAutoconfig_andReceivesTimedFactory() {
         new ApplicationContextRunner()
+                // OllamaClientConfig is @Profile("ollama") since #121 (Groq is the default provider),
+                // so the profile must be active or the configuration under test never applies and the
+                // autoconfig's Reactor Netty client silently wins. The profile also has to be set
+                // before bean registration — the runner evaluates @Profile on registered beans too,
+                // including the OllamaClientProperties supplied below.
+                .withPropertyValues("spring.profiles.active=ollama")
                 .withConfiguration(AutoConfigurations.of(
                         RestClientAutoConfiguration.class,
                         WebClientAutoConfiguration.class,
                         OllamaApiAutoConfiguration.class))
                 .withUserConfiguration(OllamaClientConfig.class)
                 .withBean(OllamaClientProperties.class, () -> PROPS)
+                // Also declared by this configuration since #121; unrelated to the transport under test.
+                .withBean(OllamaChatOptionsProperties.class, () -> new OllamaChatOptionsProperties(0.0, "json", 4096))
                 .run(context -> {
                     // Exactly one OllamaApi => the autoconfig's @ConditionalOnMissingBean backed off.
                     assertThat(context).hasSingleBean(OllamaApi.class);

@@ -56,7 +56,8 @@ import org.testcontainers.utility.DockerImageName;
         properties = {
             "spring.docker.compose.enabled=false",
             "price.scheduler.enabled=false",
-            "spring.ai.ollama.init.pull-model-strategy=never",
+            // Shadows ${GROQ_API_KEY} (#121) so the context boots with no secret; extraction is never called here.
+            "spring.ai.openai.api-key=test-key",
             "pricehunt.currency.fx.refresh-cron=-",
             "scrape.audit.purge-cron=-",
         })

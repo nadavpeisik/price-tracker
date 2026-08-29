@@ -9,28 +9,34 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.AdvisorParams;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.converter.BeanOutputConverter;
-import org.springframework.ai.ollama.api.OllamaChatOptions;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClientException;
 
+/**
+ * Extracts a price from page text with an LLM, for the SNIPPET and FULLTEXT tiers of the extraction
+ * waterfall. Provider-neutral: the prompt, the structured-output schema and the failure translation
+ * live here, while the concrete chat-options type comes from the injected
+ * {@link ExtractionLlmProvider} (Groq by default, Ollama under the {@code ollama} profile — #121).
+ */
 @Slf4j
 @Service
-public class OllamaPriceExtractionService {
+public class LlmPriceExtractionService {
 
     // Upper bound on the exception cause-chain walk in isStructuredOutputParseFailure — guarantees
     // termination even on a (pathological) cyclic chain. Real chains are only a few links deep.
     private static final int MAX_CAUSE_DEPTH = 50;
 
-    // Whether each call sends the generated JSON schema to Ollama as a native grammar constraint
-    // (format=json_schema), constraining the enum to its members at decode time. SINGLE source of truth:
-    // both the advisor below and ExtractionConfigFingerprint read this, so extraction_config_hash (#131)
-    // can never drift from what extractPriceFromText actually sends.
+    // Whether each call sends the generated JSON schema to the provider as a native grammar constraint
+    // (Ollama: format=json_schema; Groq/OpenAI: response_format=json_schema with strict=true),
+    // constraining the enum to its members at decode time. SINGLE source of truth: both the advisor
+    // below and ExtractionConfigFingerprint read this, so extraction_config_hash (#131) can never drift
+    // from what extractPriceFromText actually sends.
     public static final boolean NATIVE_STRUCTURED_OUTPUT = true;
 
     // The extraction prompt, split into the system preamble and the per-call user template. Extracted
     // to constants (issue #131) so PROMPT_VERSION can be derived from them — moving the text does NOT
     // change it (text blocks strip to the same content). EDITING either string is a prompt change: run
-    // scripts/run-ollama-prompt-regression.sh (CLAUDE.md hard rule); PROMPT_VERSION then changes
+    // scripts/run-prompt-regression.sh (CLAUDE.md hard rule); PROMPT_VERSION then changes
     // automatically, so a replay corpus never conflates two different prompts.
     static final String SYSTEM_PROMPT =
             """
@@ -105,7 +111,11 @@ public class OllamaPriceExtractionService {
     // Replaces injecting the global ObjectMapper to avoid ambiguity in the hybrid Jackson 2 + Jackson 3 environment.
     private final BeanOutputConverter<PriceLlmResult> outputConverter;
 
-    public OllamaPriceExtractionService(ChatClient.Builder builder) {
+    // Supplies the provider-specific chat-options type. See ExtractionLlmProvider for why this can't
+    // be the portable ChatOptions builder.
+    private final ExtractionLlmProvider provider;
+
+    public LlmPriceExtractionService(ChatClient.Builder builder, ExtractionLlmProvider provider) {
         ObjectMapper mapper = com.fasterxml.jackson.databind.json.JsonMapper.builder()
                 .enable(com.fasterxml.jackson.databind.MapperFeature.ACCEPT_CASE_INSENSITIVE_ENUMS)
                 .enable(
@@ -114,27 +124,28 @@ public class OllamaPriceExtractionService {
                 .build();
         this.outputConverter = new BeanOutputConverter<>(PriceLlmResult.class, mapper);
         this.chatClient = builder.defaultSystem(SYSTEM_PROMPT).build();
-        // Log the prompt fingerprint at startup so any stored prompt_version (issue #131) can be tied
-        // back to a build/commit via the deploy logs.
-        log.info("Ollama price-extraction prompt_version={}", PROMPT_VERSION);
+        this.provider = provider;
+        // Log the provider + prompt fingerprint at startup so any stored prompt_version (issue #131)
+        // can be tied back to a build/commit via the deploy logs.
+        log.info("LLM price-extraction provider={} prompt_version={}", provider.name(), PROMPT_VERSION);
     }
 
     public PriceLlmResult extractPriceFromText(String text, String model) {
         log.debug("LLM input text ({} chars): {}", text.length(), text);
         long start = System.currentTimeMillis();
 
-        // Per-call options only set `model`; Spring AI merges with bean-level defaults
-        // (temperature, format=json, num-ctx) from spring.ai.ollama.chat.options.* in application.properties.
+        // Per-call options only set `model`; Spring AI merges with the bean-level defaults for the
+        // active provider (Groq: temperature + reasoning-effort; Ollama: temperature, format=json,
+        // num-ctx) from spring.ai.{openai,ollama}.chat.options.* in the profile's properties.
         PriceLlmResult result;
         try {
             var spec = chatClient.prompt();
             if (NATIVE_STRUCTURED_OUTPUT) {
-                // Send the generated JSON schema to Ollama as a native grammar constraint (format=json_schema)
-                // rather than only the prompt's format=json — the enum is constrained to its 3 members at decode
-                // time.
+                // Send the generated JSON schema to the provider as a native grammar constraint rather
+                // than only a prompt instruction — the enum is constrained to its 3 members at decode time.
                 spec = spec.advisors(AdvisorParams.ENABLE_NATIVE_STRUCTURED_OUTPUT);
             }
-            result = spec.options(OllamaChatOptions.builder().model(model).build())
+            result = spec.options(provider.optionsForModel(model))
                     .user(u -> u.text(USER_PROMPT_TEMPLATE).param("text", text))
                     .call()
                     .entity(outputConverter);
@@ -149,6 +160,16 @@ public class OllamaPriceExtractionService {
             throw e;
         }
 
+        // Null = the provider returned no content to bind. On Groq/OpenAI that is a REFUSAL (content=null,
+        // reason in a separate `refusal` field); the converter returns null rather than throwing, so
+        // without this the orchestrator would NPE with no model attribution. (Ollama's format=json
+        // always returns some content — unreachable before #121.) Treat it as malformed output so
+        // 502, audit attribution and SNIPPET→heavy-model escalation all behave as for bad JSON.
+        if (result == null) {
+            log.warn("LLM model={} returned no parseable content (refusal or empty message)", model);
+            throw new MalformedLlmOutputException(model, PROMPT_VERSION, null);
+        }
+
         long durationMs = System.currentTimeMillis() - start;
         log.info(
                 "LLM extraction model={} inputChars={} durationMs={} result={}",
@@ -161,9 +182,13 @@ public class OllamaPriceExtractionService {
 
     // A genuine structured-output parse failure carries a Jackson JsonProcessingException in its cause
     // chain AND no RestClientException. The full, order-independent scan matters: Jackson can also fail
-    // while decoding Ollama's HTTP response, surfacing as a RestClientException wrapping a
+    // while decoding the provider's HTTP response, surfacing as a RestClientException wrapping a
     // JsonProcessingException — a transport/protocol failure that must propagate, not escalate to the
     // heavy model. A RestClientException anywhere therefore vetoes, even after a parse error is seen.
+    // Provider-agnostic: both the Ollama and OpenAI/Groq clients are RestClient-based, so raw transport
+    // failures surface the same way. Spring AI's Transient/NonTransientAiException (thrown by the retry
+    // error handler for HTTP 4xx/5xx) carries no JsonProcessingException, so it returns false here and
+    // propagates untouched — exactly the intent.
     // MAX_CAUSE_DEPTH bounds the walk so a cyclic chain can't loop. Package-private for direct testing.
     static boolean isStructuredOutputParseFailure(Throwable t) {
         boolean sawParseError = false;

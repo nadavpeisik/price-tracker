@@ -1,6 +1,6 @@
 package com.np.pricehunt.backend.exception;
 
-// Thrown by OllamaPriceExtractionService when the LLM output couldn't be parsed by the
+// Thrown by LlmPriceExtractionService when the LLM output couldn't be parsed by the
 // structured-output converter. A dedicated type lets the orchestrator escalate to the heavier
 // model only on genuine bad output, while transport failures and bugs propagate untouched.
 // 502 BAD_GATEWAY (like EmptyExtractionInputException): the upstream LLM payload is malformed.
