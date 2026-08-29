@@ -86,7 +86,7 @@ class PricePropertiesBindingTest {
     void scheduler_defaultsParseToDurations() {
         scheduler.run(ctx -> {
             PriceSchedulerProperties props = ctx.getBean(PriceSchedulerProperties.class);
-            assertThat(props.fixedDelay()).isEqualTo(Duration.ofHours(6));
+            assertThat(props.fixedDelay()).isEqualTo(Duration.ofHours(12));
             assertThat(props.initialDelay()).isEqualTo(Duration.ofMinutes(1));
         });
     }
