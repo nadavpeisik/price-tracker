@@ -56,6 +56,17 @@
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-actuator</artifactId>
 		</dependency>
+		<!--
+			Two chat providers on the classpath at once (issue #121). Groq is the default and is reached
+			through the OpenAI starter (Groq exposes an OpenAI-compatible endpoint); Ollama stays as the
+			key-free local fallback under the "ollama" profile. Both starters' autoconfigs default to ON
+			(matchIfMissing=true), so `spring.ai.model.chat` MUST select exactly one per profile or the
+			context fails on two ChatModel beans — see application.properties.
+		-->
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-starter-model-openai</artifactId>
+		</dependency>
 		<dependency>
 			<groupId>org.springframework.ai</groupId>
 			<artifactId>spring-ai-starter-model-ollama</artifactId>
@@ -96,12 +107,6 @@
 		<dependency>
 			<groupId>org.flywaydb</groupId>
 			<artifactId>flyway-database-postgresql</artifactId>
-		</dependency>
-		<dependency>
-			<groupId>org.springframework.ai</groupId>
-			<artifactId>spring-ai-spring-boot-docker-compose</artifactId>
-			<scope>runtime</scope>
-			<optional>true</optional>
 		</dependency>
 		<dependency>
 			<groupId>org.projectlombok</groupId>

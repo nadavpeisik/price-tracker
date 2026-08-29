@@ -13,7 +13,7 @@ of a working symlink; verify with `cat AGENTS.md` after checkout if in doubt.
 
 ```text
 price-tracker/
-├── compose.yaml      ← orchestrates postgres, scraper, and grafana (Ollama runs natively, not via Compose)
+├── compose.yaml      ← orchestrates postgres, scraper, and grafana (the LLM is hosted; local Ollama runs natively)
 ├── backend/          ← Spring Boot backend
 ├── scraper/          ← Python FastAPI + Playwright scraper
 └── infra/grafana/    ← provisioned Grafana datasource + dashboards
@@ -32,7 +32,7 @@ price-tracker/
 ./mvnw package                # Create JAR
 ```
 
-`compose.yaml` lives at the repo root (`../compose.yaml`). Spring Boot finds it via `spring.docker.compose.file=../compose.yaml` in `application.properties`. It spins up PostgreSQL (5432), the Python scraper (8001), and Grafana (3000) automatically — no manual `docker-compose up` needed. Ollama (11434) runs **natively** (not via Docker Compose) — start it separately (`ollama serve`) before relying on LLM-based price extraction.
+`compose.yaml` lives at the repo root (`../compose.yaml`). Spring Boot finds it via `spring.docker.compose.file=../compose.yaml` in `application.properties`. It spins up PostgreSQL (5432), the Python scraper (8001), and Grafana (3000) automatically — no manual `docker-compose up` needed. Price extraction calls **Groq Cloud**, so a `GROQ_API_KEY` must be exported (issue #121); the app fails fast at boot without it. To work offline instead, run `ollama serve` natively (11434, never via Compose) and start with `--spring.profiles.active=ollama`.
 
 ## Code style & linting
 
@@ -213,28 +213,48 @@ The scraper response carries an `extractionSource` enum (`STRUCTURED | SNIPPET |
 
 **AI integration:**
 - `PriceExtractionService` is an interface; `PriceExtractionOrchestrator` is the sole implementation (routes the waterfall)
-- `OllamaPriceExtractionService` is a plain `@Service` (not the interface impl) — called only for SNIPPET and FULLTEXT paths
+- `LlmPriceExtractionService` is a plain `@Service` (not the interface impl) — called only for SNIPPET and FULLTEXT paths
 - Uses Spring AI `ChatClient` with structured output to parse LLM responses directly into `PriceInfo`
-- Ollama runs locally, natively (no external API keys required)
+- **Provider (issue #121):** Groq Cloud by default, reached through Spring AI's OpenAI-compatible client
+  (`spring-ai-starter-model-openai` + `spring.ai.openai.base-url=https://api.groq.com/openai/v1`). Models:
+  `openai/gpt-oss-20b` (SNIPPET) and `openai/gpt-oss-120b` (FULLTEXT) — the only Groq production models
+  supporting strict schema-enforced structured output. Needs `GROQ_API_KEY`. **Free-tier budget:** one
+  extraction call is ~1,100 tokens (the fixed prompt + schema, not the snippet), against 8,000
+  tokens/min and 200k tokens/day — so **~7 LLM calls/min and ~185/day**; tokens bind long before the
+  request limits do. A burst past that gets HTTP 429 (`Retry-After` ≈ 2–3s), which
+  `spring.ai.retry.*` rides out (4s/8s/16s). Pacing, cooldown and a daily budget are #171.
+- **Local fallback:** `--spring.profiles.active=ollama` swaps in a natively-run Ollama with the qwen models
+  and needs no API key (`application-ollama.properties`). Both starters sit on the classpath and both
+  autoconfigs default to ON, so `spring.ai.model.chat` selects exactly one per profile — without it the
+  context fails on two `ChatModel` beans.
+- **The provider seam:** `ExtractionLlmProvider` supplies the per-call chat-options type. It must return a
+  `StructuredOutputChatOptions`; the portable `ChatOptions` builder would *silently* disable native
+  structured output (Spring AI's advisor applies the schema only on an `instanceof` match).
 
 **Prompt changes — hard rule:** whenever you edit the extraction prompt in
-`OllamaPriceExtractionService.java` (system or user template), run the prompt-regression
+`LlmPriceExtractionService.java` (system or user template), run the prompt-regression
 sanity check **before committing** and confirm it passes:
 
 ```bash
-scripts/run-ollama-prompt-regression.sh            # default: qwen3:1.7b (the SNIPPET model)
-scripts/run-ollama-prompt-regression.sh qwen3.5:9b # optional: spot-check the FULLTEXT model
+scripts/run-prompt-regression.sh                                  # groq, openai/gpt-oss-20b (SNIPPET tier)
+scripts/run-prompt-regression.sh openai/gpt-oss-120b              # spot-check the FULLTEXT tier
+scripts/run-prompt-regression.sh --provider ollama                # the local fallback, qwen3:1.7b
+scripts/run-prompt-regression.sh --provider ollama qwen3.5:9b     # ...its FULLTEXT tier
 ```
 
 This drives the real service over labeled snippets (`backend/src/test/resources/price-extraction/availability-cases.json`)
 and asserts the extracted `available`/price/currency — a small prompt tweak can silently
-flip availability (issue #102). Needs `ollama serve` running. It is **manual, not CI**
-(`OllamaPromptRegressionIT` is `*IT` + env-gated by `RUN_OLLAMA_PROMPT_REGRESSION=true`),
+flip availability (issue #102). Needs a live provider — `GROQ_API_KEY` for groq, or `ollama serve`
+for the fallback — and a prompt edit should be checked against **both**. Knobs (see `--help`):
+`PROMPT_REGRESSION_PACE=9s` keeps a full run under Groq's free-tier tokens/min limit;
+`PROMPT_REGRESSION_ONLY=<names> PROMPT_REGRESSION_REPEAT=10` is the consistency check to run before
+quarantining a case on a provider (`"quarantinedOn": ["ollama"]`) or lifting one. It is **manual, not CI**
+(`PromptRegressionIT` is `*IT` + env-gated by `RUN_PROMPT_REGRESSION=true`),
 so nothing runs it for you. When you add or change a prompt rule, add a covering case to
 the fixtures JSON in the same change.
 
 The prompt lives in the `SYSTEM_PROMPT` / `USER_PROMPT_TEMPLATE` constants, and
-`OllamaPriceExtractionService.PROMPT_VERSION` is **auto-derived** from a hash of those two
+`LlmPriceExtractionService.PROMPT_VERSION` is **auto-derived** from a hash of those two
 strings (issue #131) — it changes iff the prompt changes, so there is no "remember to bump
 the version" step. The regression sanity check above is still required on any prompt edit.
 
@@ -286,7 +306,7 @@ Schema is managed by **Flyway**. SQL files live in `backend/src/main/resources/d
 
 ## Roadmap
 
-**Phase 1 (done):** Synchronous HTTP pipeline — user submits URL → Spring Boot calls Python scraper → Ollama extracts price → stored in Postgres.
+**Phase 1 (done):** Synchronous HTTP pipeline — user submits URL → Spring Boot calls Python scraper → the LLM extracts price → stored in Postgres.
 
 **Phase 1.5 (in progress):** Efficient price extraction waterfall — DOM pruning + JSON-LD → CSS selectors → regex-filtered LLM fallback. Eliminates LLM calls for most major e-commerce sites.
 
@@ -297,7 +317,7 @@ Schema is managed by **Flyway**. SQL files live in `backend/src/main/resources/d
 **Phase 2 (future):** Kafka async pipeline. Replace synchronous scraper call with:
 - Spring Boot publishes `ScrapeRequestedEvent` to `price-tracker.scrape-requests` topic
 - Python scraper consumes, scrapes, publishes `ScrapeCompletedEvent` to `price-tracker.scrape-results`
-- Spring Boot consumes result, calls Ollama if needed, saves `PriceRecord`
+- Spring Boot consumes result, calls the LLM if needed, saves `PriceRecord`
 - `POST /api/products/{id}/track` returns `202 Accepted` with a `requestId`
 - `PriceCheckScheduler` (`@Scheduled`) publishes events for all active `TrackedItem`s hourly
 - Migrate primary keys project-wide from BIGSERIAL/SEQUENCE to UUIDv7 — Kafka producers can mint IDs before the row hits the DB (no `getGeneratedKeys()` round-trip per insert). Until Phase 2 lands, `ExchangeRate` uses SEQUENCE; other entities use IDENTITY.
@@ -348,7 +368,7 @@ Design notes (decided in discussion, revisit when the work starts):
 ## Infrastructure
 
 - **Database:** PostgreSQL — credentials in `compose.yaml` (do not commit credentials to git)
-- **LLM:** Ollama (local, runs **natively** — not via Docker Compose; `compose.yaml` orchestrates only `postgres`, `scraper`, and `grafana`)
+- **LLM:** Groq Cloud (hosted; `GROQ_API_KEY` required). Local fallback = Ollama under the `ollama` profile, run **natively** — never via Docker Compose; `compose.yaml` orchestrates only `postgres`, `scraper`, and `grafana`
 - **Scraper:** Python FastAPI + Playwright at `localhost:8001` (built from `scraper/Dockerfile` by Docker Compose)
 - **Kafka** — in `pom.xml`, wired up in Phase 2
 - **Dashboards:** Grafana 11.4.0 at `localhost:3000` (admin/admin local-only — gate before any cloud deploy). Provisioned datasource + dashboards under `infra/grafana/`. All time-scoped Postgres panels MUST use the Grafana `$__timeFilter(column)` macro — hardcoded `WHERE x > NOW() - INTERVAL ...` makes the dashboard's time picker inert. New dashboards: drop a JSON into `infra/grafana/dashboards/`; the file provider picks it up every 30s.

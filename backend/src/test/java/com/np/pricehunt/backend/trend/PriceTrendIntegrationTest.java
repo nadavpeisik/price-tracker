@@ -55,7 +55,6 @@ import org.springframework.web.context.WebApplicationContext;
         properties = {
             "spring.docker.compose.enabled=false",
             "price.scheduler.enabled=false",
-            "spring.ai.ollama.init.pull-model-strategy=never",
             "pricehunt.currency.fx.refresh-cron=-",
             "scrape.audit.purge-cron=-",
         })

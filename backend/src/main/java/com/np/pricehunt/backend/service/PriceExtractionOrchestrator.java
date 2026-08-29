@@ -25,7 +25,7 @@ public class PriceExtractionOrchestrator implements PriceExtractionService {
     // LLM calls and bogus prices being persisted.
     private static final int MIN_LLM_INPUT_CHARS = 15;
 
-    private final OllamaPriceExtractionService ollamaService;
+    private final LlmPriceExtractionService llmService;
     private final PriceExtractionProperties extractionProperties;
     // Single source of truth for the LLM input (issue #131): the recorder re-derives the same text, so
     // a persisted scrape_attempt's llm_input is byte-identical to what the model saw here.
@@ -41,10 +41,10 @@ public class PriceExtractionOrchestrator implements PriceExtractionService {
                 guardMinLength(text, "SNIPPET");
                 PriceLlmResult raw;
                 try {
-                    raw = ollamaService.extractPriceFromText(text, extractionProperties.snippetModel());
+                    raw = llmService.extractPriceFromText(text, extractionProperties.snippetModel());
                 } catch (MalformedLlmOutputException e) {
                     // Fast model emitted unparseable output — let the bigger model try. Transport
-                    // failures, Ollama 4xx/5xx, and bugs are NOT caught here; they propagate.
+                    // failures, provider 4xx/5xx, and bugs are NOT caught here; they propagate.
                     log.info("SNIPPET fast model returned malformed output — retrying with accurate model");
                     raw = null;
                 }
@@ -53,7 +53,7 @@ public class PriceExtractionOrchestrator implements PriceExtractionService {
                     if (raw != null) {
                         log.info("SNIPPET fast model returned invalid result {}, retrying with accurate model", raw);
                     }
-                    raw = ollamaService.extractPriceFromText(text, extractionProperties.fulltextModel());
+                    raw = llmService.extractPriceFromText(text, extractionProperties.fulltextModel());
                 }
                 yield new PriceInfo(
                         raw.price(),
@@ -64,7 +64,7 @@ public class PriceExtractionOrchestrator implements PriceExtractionService {
             case FULLTEXT -> {
                 String text = llmInputResolver.resolve(response);
                 guardMinLength(text, "FULLTEXT");
-                PriceLlmResult raw = ollamaService.extractPriceFromText(text, extractionProperties.fulltextModel());
+                PriceLlmResult raw = llmService.extractPriceFromText(text, extractionProperties.fulltextModel());
                 yield new PriceInfo(
                         raw.price(),
                         raw.currency(),

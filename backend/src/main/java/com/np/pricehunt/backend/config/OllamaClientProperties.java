@@ -3,6 +3,7 @@ package com.np.pricehunt.backend.config;
 import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
+import org.springframework.context.annotation.Profile;
 
 /**
  * Timeouts for the Spring AI Ollama client's blocking (non-streaming) {@code RestClient} path,
@@ -14,6 +15,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * legitimately slow extraction; an unbounded one would starve the connection pool (the standing
  * project rule is that every HTTP client sets explicit timeouts).
  */
+@Profile("ollama")
 @ConfigurationProperties("pricehunt.ollama")
 public record OllamaClientProperties(
         @DefaultValue("5s") Duration connectTimeout, @DefaultValue("120s") Duration readTimeout) {}

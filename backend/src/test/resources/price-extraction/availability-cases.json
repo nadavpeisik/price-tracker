@@ -6,7 +6,7 @@
   { "name": "hebrew_in_stock", "text": "במלאי. ₪200", "expectedAvailability": "AVAILABLE" },
   { "name": "ships_24h", "text": "In stock. Ships in 24 hours. $40", "expectedAvailability": "AVAILABLE" },
   { "name": "preorder", "text": "Pre-order now. Releases next month. $60", "expectedAvailability": "AVAILABLE", "note": "pre-order = orderable now → AVAILABLE (issue #124 decision)" },
-  { "name": "usually_ships_2_3wk", "text": "In stock. Usually ships within 2 to 3 weeks. $30", "expectedAvailability": "AVAILABLE", "gated": false, "note": "present-tense 'In stock.' + slow dispatch → AVAILABLE (vs 'in stock within N'); small model flaky (issue #102)" },
+  { "name": "usually_ships_2_3wk", "text": "In stock. Usually ships within 2 to 3 weeks. $30", "expectedAvailability": "AVAILABLE", "note": "gpt-oss-20b 10/10 and qwen3:1.7b 3/3 (2026-08-29); present-tense 'In stock.' + slow dispatch → AVAILABLE (vs 'in stock within N'); small model flaky (issue #102)" },
 
   { "name": "out_of_stock", "text": "Out of stock. $99", "expectedAvailability": "UNAVAILABLE" },
   { "name": "currently_unavailable", "text": "Currently unavailable. $50", "expectedAvailability": "UNAVAILABLE" },
@@ -14,11 +14,11 @@
   { "name": "no_longer_available", "text": "No longer available. $80", "expectedAvailability": "UNAVAILABLE" },
   { "name": "hebrew_oos", "text": "חסר במלאי. ₪200", "expectedAvailability": "UNAVAILABLE" },
   { "name": "hebrew_not_in_stock", "text": "לא במלאי. ₪200", "expectedAvailability": "UNAVAILABLE" },
-  { "name": "within_1week", "text": "In stock within 1 week. £100", "expectedAvailability": "UNAVAILABLE", "gated": false, "note": "future-restock ETA ('in stock within N') = not in stock now → UNAVAILABLE (issue #124); small model flaky on the present-vs-future distinction (issue #102)" },
-  { "name": "within_about_1week", "text": "In stock within about 1 week. €299", "expectedAvailability": "UNAVAILABLE", "gated": false, "note": "future-restock ETA → UNAVAILABLE (issue #124); small model flaky (issue #102)" },
-  { "name": "notify_me", "text": "Notify me when available. $45", "expectedAvailability": "UNAVAILABLE", "gated": false, "note": "out-of-stock waitlist CTA → UNAVAILABLE; qwen3:1.7b deterministic miss, the token 'available' defeats the rule (issue #102)" },
+  { "name": "within_1week", "text": "In stock within 1 week. £100", "expectedAvailability": "UNAVAILABLE", "quarantinedOn": ["ollama"], "note": "gpt-oss-20b 10/10 (2026-08-29), qwen3:1.7b deterministic miss; future-restock ETA ('in stock within N') = not in stock now → UNAVAILABLE (issue #124); small model flaky on the present-vs-future distinction (issue #102)" },
+  { "name": "within_about_1week", "text": "In stock within about 1 week. €299", "expectedAvailability": "UNAVAILABLE", "quarantinedOn": ["ollama"], "note": "gpt-oss-20b 10/10 (2026-08-29), qwen3:1.7b deterministic miss; future-restock ETA → UNAVAILABLE (issue #124); small model flaky (issue #102)" },
+  { "name": "notify_me", "text": "Notify me when available. $45", "expectedAvailability": "UNAVAILABLE", "quarantinedOn": ["ollama"], "note": "gpt-oss-20b 10/10 (2026-08-29), qwen3:1.7b deterministic miss; out-of-stock waitlist CTA → UNAVAILABLE; qwen3:1.7b deterministic miss, the token 'available' defeats the rule (issue #102)" },
 
   { "name": "price_only", "text": "Wireless Headphones. $50", "expectedAvailability": "UNKNOWN", "note": "price but no stock wording → UNKNOWN, not a guess (issue #124)" },
-  { "name": "sale_price_only", "text": "On sale: $39.99 (was $59.99)", "expectedAvailability": "UNKNOWN", "gated": false, "note": "sale/discount is a PRICE signal, not stock → UNKNOWN (issue #124); qwen3:1.7b reads 'on sale' as available — over its ceiling (issue #102). A narrow 'price is not stock' prompt rule could promote this back to gating if it survives the full regression." },
-  { "name": "ships_1_2_days", "text": "Ships in 1-2 business days. $40", "expectedAvailability": "UNKNOWN", "gated": false, "note": "bare dispatch window, no stock statement → UNKNOWN; small model flaky on windows (issue #102)" }
+  { "name": "sale_price_only", "text": "On sale: $39.99 (was $59.99)", "expectedAvailability": "UNKNOWN", "quarantinedOn": ["ollama"], "note": "gpt-oss-20b 10/10 (2026-08-29), qwen3:1.7b deterministic miss; sale/discount is a PRICE signal, not stock → UNKNOWN (issue #124); qwen3:1.7b reads 'on sale' as available — over its ceiling (issue #102). A narrow 'price is not stock' prompt rule could promote this back to gating if it survives the full regression." },
+  { "name": "ships_1_2_days", "text": "Ships in 1-2 business days. $40", "expectedAvailability": "UNKNOWN", "note": "gpt-oss-20b 10/10 and qwen3:1.7b 3/3 (2026-08-29); bare dispatch window, no stock statement → UNKNOWN; small model flaky on windows (issue #102)" }
 ]

@@ -15,7 +15,7 @@ import com.np.pricehunt.backend.exception.ScrapeBlockedException;
 import com.np.pricehunt.backend.repository.ScrapeAttemptRepository;
 import com.np.pricehunt.backend.service.ExtractionConfigFingerprint;
 import com.np.pricehunt.backend.service.LlmInputResolver;
-import com.np.pricehunt.backend.service.OllamaPriceExtractionService;
+import com.np.pricehunt.backend.service.LlmPriceExtractionService;
 import com.np.pricehunt.backend.util.Hashing;
 import com.np.pricehunt.backend.util.Throwables;
 import com.np.pricehunt.backend.util.UrlSanitizer;
@@ -155,10 +155,9 @@ public class ScrapeAttemptRecorder {
 
     private LlmAttribution nominalModelFor(ExtractionSource source) {
         return switch (source) {
-            case SNIPPET ->
-                attribution(extractionProperties.snippetModel(), OllamaPriceExtractionService.PROMPT_VERSION);
+            case SNIPPET -> attribution(extractionProperties.snippetModel(), LlmPriceExtractionService.PROMPT_VERSION);
             case FULLTEXT ->
-                attribution(extractionProperties.fulltextModel(), OllamaPriceExtractionService.PROMPT_VERSION);
+                attribution(extractionProperties.fulltextModel(), LlmPriceExtractionService.PROMPT_VERSION);
             case STRUCTURED, BLOCKED -> attribution(null, null);
         };
     }

@@ -1,11 +1,13 @@
 package com.np.pricehunt.backend.config;
 
+import com.np.pricehunt.backend.service.ExtractionLlmProvider;
 import java.net.http.HttpClient;
 import org.springframework.ai.model.ollama.autoconfigure.OllamaConnectionDetails;
 import org.springframework.ai.ollama.api.OllamaApi;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Profile;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.web.client.ResponseErrorHandler;
 import org.springframework.web.client.RestClient;
@@ -33,8 +35,13 @@ import org.springframework.web.reactive.function.client.WebClient;
  * (reactor-netty) path, which we pass through unchanged — intentional per #90, since extraction
  * uses {@code .call()}. The seam to bound the reactive path later lives in this same method (we
  * already hold the {@code WebClient.Builder}).
+ *
+ * <p><b>Profile-gated since #121:</b> Groq is the default provider and Ollama is the key-free local
+ * fallback, so this configuration — and the properties it binds, whose values now live in
+ * {@code application-ollama.properties} — only applies under the {@code ollama} profile.
  */
 @Configuration
+@Profile("ollama")
 public class OllamaClientConfig {
 
     @Bean
@@ -59,6 +66,11 @@ public class OllamaClientConfig {
         // OllamaApi.Builder default stand.
         errorHandlerProvider.ifAvailable(builder::responseErrorHandler);
         return builder.build();
+    }
+
+    @Bean
+    ExtractionLlmProvider ollamaExtractionLlmProvider(OllamaChatOptionsProperties options) {
+        return new OllamaExtractionLlmProvider(options);
     }
 
     // Package-private so the unit test can assert the factory without going through OllamaApi.

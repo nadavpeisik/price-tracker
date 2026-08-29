@@ -34,20 +34,20 @@ import org.springframework.web.client.ResourceAccessException;
 class PriceExtractionOrchestratorTest {
 
     @Mock
-    private OllamaPriceExtractionService ollamaService;
+    private LlmPriceExtractionService llmService;
 
     private PriceExtractionOrchestrator orchestrator;
 
     private static final PriceLlmResult STUB_LLM_RESULT =
             new PriceLlmResult(new BigDecimal("29.99"), "USD", AvailabilityStatus.AVAILABLE);
 
-    private static final String SNIPPET_MODEL = "qwen3:1.7b";
-    private static final String FULLTEXT_MODEL = "qwen3.5:9b";
+    private static final String SNIPPET_MODEL = "openai/gpt-oss-20b";
+    private static final String FULLTEXT_MODEL = "openai/gpt-oss-120b";
 
     @BeforeEach
     void setUp() {
         orchestrator = new PriceExtractionOrchestrator(
-                ollamaService,
+                llmService,
                 new PriceExtractionProperties(SNIPPET_MODEL, FULLTEXT_MODEL),
                 new LlmInputResolver(new ScrapeAuditProperties(Duration.ofDays(90), "0 15 3 * * *", 8000, false)));
     }
@@ -69,7 +69,7 @@ class PriceExtractionOrchestratorTest {
         assertThat(result.currency()).isEqualTo("EUR");
         assertThat(result.availability()).isEqualTo(AvailabilityStatus.AVAILABLE);
         assertThat(result.extractionSource()).isEqualTo(ExtractionSource.STRUCTURED);
-        verifyNoInteractions(ollamaService);
+        verifyNoInteractions(llmService);
     }
 
     @Test
@@ -99,7 +99,7 @@ class PriceExtractionOrchestratorTest {
 
     @Test
     void extractPrice_snippet_callsLlmWithSnippetAndFastModel() {
-        when(ollamaService.extractPriceFromText("$29.99 | USD | In Stock", SNIPPET_MODEL))
+        when(llmService.extractPriceFromText("$29.99 | USD | In Stock", SNIPPET_MODEL))
                 .thenReturn(STUB_LLM_RESULT);
         ScrapeResponse response =
                 new ScrapeResponse(ExtractionSource.SNIPPET, null, "$29.99 | USD | In Stock", null, null);
@@ -108,41 +108,41 @@ class PriceExtractionOrchestratorTest {
 
         assertThat(result.extractionSource()).isEqualTo(ExtractionSource.SNIPPET);
         assertThat(result.price()).isEqualByComparingTo("29.99");
-        verify(ollamaService).extractPriceFromText("$29.99 | USD | In Stock", SNIPPET_MODEL);
-        verify(ollamaService, never()).extractPriceFromText(anyString(), eq(FULLTEXT_MODEL));
+        verify(llmService).extractPriceFromText("$29.99 | USD | In Stock", SNIPPET_MODEL);
+        verify(llmService, never()).extractPriceFromText(anyString(), eq(FULLTEXT_MODEL));
     }
 
     @Test
     void extractPrice_snippet_invalidFastResult_retriesWithAccurateModel() {
         String snippet = "ambiguous text payload";
         PriceLlmResult invalid = new PriceLlmResult(null, null, AvailabilityStatus.UNKNOWN);
-        when(ollamaService.extractPriceFromText(snippet, SNIPPET_MODEL)).thenReturn(invalid);
-        when(ollamaService.extractPriceFromText(snippet, FULLTEXT_MODEL)).thenReturn(STUB_LLM_RESULT);
+        when(llmService.extractPriceFromText(snippet, SNIPPET_MODEL)).thenReturn(invalid);
+        when(llmService.extractPriceFromText(snippet, FULLTEXT_MODEL)).thenReturn(STUB_LLM_RESULT);
         ScrapeResponse response = new ScrapeResponse(ExtractionSource.SNIPPET, null, snippet, null, null);
 
         PriceInfo result = orchestrator.extractPrice(response);
 
         assertThat(result.extractionSource()).isEqualTo(ExtractionSource.SNIPPET);
         assertThat(result.price()).isEqualByComparingTo("29.99");
-        verify(ollamaService).extractPriceFromText(snippet, SNIPPET_MODEL);
-        verify(ollamaService).extractPriceFromText(snippet, FULLTEXT_MODEL);
+        verify(llmService).extractPriceFromText(snippet, SNIPPET_MODEL);
+        verify(llmService).extractPriceFromText(snippet, FULLTEXT_MODEL);
     }
 
     @Test
     void extractPrice_snippet_fastModelMalformedOutput_retriesWithAccurateModel() {
         String snippet = "malformed-json-trigger";
-        when(ollamaService.extractPriceFromText(snippet, SNIPPET_MODEL))
+        when(llmService.extractPriceFromText(snippet, SNIPPET_MODEL))
                 .thenThrow(
                         new MalformedLlmOutputException(SNIPPET_MODEL, "v1", new RuntimeException("JSON parse error")));
-        when(ollamaService.extractPriceFromText(snippet, FULLTEXT_MODEL)).thenReturn(STUB_LLM_RESULT);
+        when(llmService.extractPriceFromText(snippet, FULLTEXT_MODEL)).thenReturn(STUB_LLM_RESULT);
         ScrapeResponse response = new ScrapeResponse(ExtractionSource.SNIPPET, null, snippet, null, null);
 
         PriceInfo result = orchestrator.extractPrice(response);
 
         assertThat(result.extractionSource()).isEqualTo(ExtractionSource.SNIPPET);
         assertThat(result.price()).isEqualByComparingTo("29.99");
-        verify(ollamaService).extractPriceFromText(snippet, SNIPPET_MODEL);
-        verify(ollamaService).extractPriceFromText(snippet, FULLTEXT_MODEL);
+        verify(llmService).extractPriceFromText(snippet, SNIPPET_MODEL);
+        verify(llmService).extractPriceFromText(snippet, FULLTEXT_MODEL);
     }
 
     // A non-parse exception (a bug, or an Ollama transport/HTTP failure) must NOT escalate to the
@@ -151,24 +151,24 @@ class PriceExtractionOrchestratorTest {
     void extractPrice_snippet_fastModelGenericException_propagatesWithoutEscalating() {
         String snippet = "snippet payload";
         IllegalStateException bug = new IllegalStateException("a bug, not bad output");
-        when(ollamaService.extractPriceFromText(snippet, SNIPPET_MODEL)).thenThrow(bug);
+        when(llmService.extractPriceFromText(snippet, SNIPPET_MODEL)).thenThrow(bug);
         ScrapeResponse response = new ScrapeResponse(ExtractionSource.SNIPPET, null, snippet, null, null);
 
         assertThatThrownBy(() -> orchestrator.extractPrice(response)).isSameAs(bug);
-        verify(ollamaService).extractPriceFromText(snippet, SNIPPET_MODEL);
-        verify(ollamaService, never()).extractPriceFromText(anyString(), eq(FULLTEXT_MODEL));
+        verify(llmService).extractPriceFromText(snippet, SNIPPET_MODEL);
+        verify(llmService, never()).extractPriceFromText(anyString(), eq(FULLTEXT_MODEL));
     }
 
     @ParameterizedTest
     @MethodSource("infraFailures")
     void extractPrice_snippet_fastModelInfraFailure_propagatesWithoutEscalating(RuntimeException infraEx) {
         String snippet = "snippet payload";
-        when(ollamaService.extractPriceFromText(snippet, SNIPPET_MODEL)).thenThrow(infraEx);
+        when(llmService.extractPriceFromText(snippet, SNIPPET_MODEL)).thenThrow(infraEx);
         ScrapeResponse response = new ScrapeResponse(ExtractionSource.SNIPPET, null, snippet, null, null);
 
         assertThatThrownBy(() -> orchestrator.extractPrice(response)).isSameAs(infraEx);
-        verify(ollamaService).extractPriceFromText(snippet, SNIPPET_MODEL);
-        verify(ollamaService, never()).extractPriceFromText(anyString(), eq(FULLTEXT_MODEL));
+        verify(llmService).extractPriceFromText(snippet, SNIPPET_MODEL);
+        verify(llmService, never()).extractPriceFromText(anyString(), eq(FULLTEXT_MODEL));
     }
 
     static Stream<RuntimeException> infraFailures() {
@@ -182,13 +182,13 @@ class PriceExtractionOrchestratorTest {
     void extractPrice_snippet_heavyModelFailurePropagates() {
         String snippet = "ambiguous payload";
         PriceLlmResult invalid = new PriceLlmResult(null, null, AvailabilityStatus.UNKNOWN);
-        when(ollamaService.extractPriceFromText(snippet, SNIPPET_MODEL)).thenReturn(invalid);
+        when(llmService.extractPriceFromText(snippet, SNIPPET_MODEL)).thenReturn(invalid);
         ResourceAccessException heavyFailure = new ResourceAccessException("heavy model timeout");
-        when(ollamaService.extractPriceFromText(snippet, FULLTEXT_MODEL)).thenThrow(heavyFailure);
+        when(llmService.extractPriceFromText(snippet, FULLTEXT_MODEL)).thenThrow(heavyFailure);
         ScrapeResponse response = new ScrapeResponse(ExtractionSource.SNIPPET, null, snippet, null, null);
 
         assertThatThrownBy(() -> orchestrator.extractPrice(response)).isSameAs(heavyFailure);
-        verify(ollamaService).extractPriceFromText(snippet, FULLTEXT_MODEL);
+        verify(llmService).extractPriceFromText(snippet, FULLTEXT_MODEL);
     }
 
     // The escalation path's failure-only context (issue #131): when the SNIPPET fast model emits
@@ -197,9 +197,9 @@ class PriceExtractionOrchestratorTest {
     @Test
     void extractPrice_snippet_bothModelsMalformed_propagatesHeavyModelContext() {
         String snippet = "ambiguous payload trigger";
-        when(ollamaService.extractPriceFromText(snippet, SNIPPET_MODEL))
+        when(llmService.extractPriceFromText(snippet, SNIPPET_MODEL))
                 .thenThrow(new MalformedLlmOutputException(SNIPPET_MODEL, "v1", new RuntimeException("snip bad")));
-        when(ollamaService.extractPriceFromText(snippet, FULLTEXT_MODEL))
+        when(llmService.extractPriceFromText(snippet, FULLTEXT_MODEL))
                 .thenThrow(new MalformedLlmOutputException(FULLTEXT_MODEL, "v1", new RuntimeException("heavy bad")));
         ScrapeResponse response = new ScrapeResponse(ExtractionSource.SNIPPET, null, snippet, null, null);
 
@@ -215,8 +215,8 @@ class PriceExtractionOrchestratorTest {
     void extractPrice_snippet_bothModelsInvalid_returnsResultWithNulls() {
         String snippet = "ambiguous payload";
         PriceLlmResult invalid = new PriceLlmResult(null, null, AvailabilityStatus.UNKNOWN);
-        when(ollamaService.extractPriceFromText(snippet, SNIPPET_MODEL)).thenReturn(invalid);
-        when(ollamaService.extractPriceFromText(snippet, FULLTEXT_MODEL)).thenReturn(invalid);
+        when(llmService.extractPriceFromText(snippet, SNIPPET_MODEL)).thenReturn(invalid);
+        when(llmService.extractPriceFromText(snippet, FULLTEXT_MODEL)).thenReturn(invalid);
         ScrapeResponse response = new ScrapeResponse(ExtractionSource.SNIPPET, null, snippet, null, null);
 
         PriceInfo result = orchestrator.extractPrice(response);
@@ -225,8 +225,8 @@ class PriceExtractionOrchestratorTest {
         assertThat(result.price()).isNull();
         assertThat(result.currency()).isNull();
         assertThat(result.availability()).isEqualTo(AvailabilityStatus.UNKNOWN);
-        verify(ollamaService).extractPriceFromText(snippet, SNIPPET_MODEL);
-        verify(ollamaService).extractPriceFromText(snippet, FULLTEXT_MODEL);
+        verify(llmService).extractPriceFromText(snippet, SNIPPET_MODEL);
+        verify(llmService).extractPriceFromText(snippet, FULLTEXT_MODEL);
     }
 
     @Test
@@ -237,7 +237,7 @@ class PriceExtractionOrchestratorTest {
         assertThatThrownBy(() -> orchestrator.extractPrice(response))
                 .isInstanceOf(ScrapeBlockedException.class)
                 .hasMessageContaining(reason);
-        verifyNoInteractions(ollamaService);
+        verifyNoInteractions(llmService);
     }
 
     // FULLTEXT with empty innerText is the symptom we hit on Amazon's AWS WAF
@@ -251,7 +251,7 @@ class PriceExtractionOrchestratorTest {
                 .isInstanceOf(EmptyExtractionInputException.class)
                 .hasMessageContaining("FULLTEXT")
                 .hasMessageContaining("chars=0");
-        verifyNoInteractions(ollamaService);
+        verifyNoInteractions(llmService);
     }
 
     // Whitespace-only inputs would slip past a raw-length check. guardMinLength
@@ -266,7 +266,7 @@ class PriceExtractionOrchestratorTest {
                 .isInstanceOf(EmptyExtractionInputException.class)
                 .hasMessageContaining("FULLTEXT")
                 .hasMessageContaining("chars=0");
-        verifyNoInteractions(ollamaService);
+        verifyNoInteractions(llmService);
     }
 
     @Test
@@ -277,13 +277,12 @@ class PriceExtractionOrchestratorTest {
                 .isInstanceOf(EmptyExtractionInputException.class)
                 .hasMessageContaining("SNIPPET")
                 .hasMessageContaining("chars=3");
-        verifyNoInteractions(ollamaService);
+        verifyNoInteractions(llmService);
     }
 
     @Test
     void extractPrice_fulltext_callsLlmWithFilteredTextAndAccurateModel() {
-        when(ollamaService.extractPriceFromText(anyString(), eq(FULLTEXT_MODEL)))
-                .thenReturn(STUB_LLM_RESULT);
+        when(llmService.extractPriceFromText(anyString(), eq(FULLTEXT_MODEL))).thenReturn(STUB_LLM_RESULT);
         // lines 0-1 and 5-6 are far enough from any price match that filterLines should drop them
         String body = "dropped first\nalso dropped\n$29.99\nin stock\nalso dropped\ndropped last";
         ScrapeResponse response = new ScrapeResponse(ExtractionSource.FULLTEXT, null, null, body, null);
@@ -292,7 +291,7 @@ class PriceExtractionOrchestratorTest {
 
         assertThat(result.extractionSource()).isEqualTo(ExtractionSource.FULLTEXT);
         // filterLines retains price-relevant lines and their context, drops lines 2+ away from any match
-        verify(ollamaService)
+        verify(llmService)
                 .extractPriceFromText(
                         argThat(text -> text.contains("$29.99")
                                 && !text.contains("dropped first")

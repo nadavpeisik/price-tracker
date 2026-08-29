@@ -3,6 +3,7 @@ package com.np.pricehunt.backend.config;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.context.annotation.Profile;
 import org.springframework.validation.annotation.Validated;
 
 /**
@@ -19,6 +20,7 @@ import org.springframework.validation.annotation.Validated;
  * that doesn't match what's sent. The model is intentionally excluded (it's a per-row column, and it
  * is overridden per call: snippet vs fulltext tier).
  */
+@Profile("ollama")
 @Validated
 @ConfigurationProperties("spring.ai.ollama.chat.options")
 public record OllamaChatOptionsProperties(

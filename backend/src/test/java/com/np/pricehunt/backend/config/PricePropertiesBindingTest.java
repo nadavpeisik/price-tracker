@@ -286,6 +286,68 @@ class PricePropertiesBindingTest {
                         assertThat(validationFailure(ctx.getStartupFailure())).isNotNull());
     }
 
+    // --- GroqChatOptionsProperties / GroqClientProperties (the default provider since #121) ---
+
+    private final ApplicationContextRunner groqOptions =
+            new ApplicationContextRunner().withUserConfiguration(GroqOptionsConfig.class);
+
+    @Test
+    void groqOptions_bindsExplicitValues() {
+        groqOptions
+                .withPropertyValues(
+                        "spring.ai.openai.chat.options.temperature=0",
+                        "spring.ai.openai.chat.options.reasoning-effort=low")
+                .run(ctx -> {
+                    GroqChatOptionsProperties props = ctx.getBean(GroqChatOptionsProperties.class);
+                    assertThat(props.temperature()).isEqualTo(0.0);
+                    assertThat(props.reasoningEffort()).isEqualTo("low");
+                });
+    }
+
+    @Test
+    void groqOptions_rejectsMissingTemperature() {
+        // @NotNull guards against Spring binding null while Spring AI silently falls back to its default.
+        groqOptions
+                .withPropertyValues("spring.ai.openai.chat.options.reasoning-effort=low")
+                .run(ctx ->
+                        assertThat(validationFailure(ctx.getStartupFailure())).isNotNull());
+    }
+
+    @Test
+    void groqOptions_rejectsUnsupportedReasoningEffort() {
+        // Groq accepts only low|medium|high for the gpt-oss models. Without the @Pattern a typo would
+        // bind cleanly and then fail every single extraction with an HTTP 400.
+        groqOptions
+                .withPropertyValues(
+                        "spring.ai.openai.chat.options.temperature=0",
+                        "spring.ai.openai.chat.options.reasoning-effort=ludicrous")
+                .run(ctx ->
+                        assertThat(validationFailure(ctx.getStartupFailure())).isNotNull());
+    }
+
+    @Test
+    void groqClient_appliesTimeoutDefaults() {
+        new ApplicationContextRunner()
+                .withUserConfiguration(GroqClientConfig.class)
+                .run(ctx -> {
+                    GroqClientProperties props = ctx.getBean(GroqClientProperties.class);
+                    assertThat(props.connectTimeout()).isEqualTo(Duration.ofSeconds(5));
+                    assertThat(props.readTimeout()).isEqualTo(Duration.ofSeconds(30));
+                });
+    }
+
+    @Test
+    void groqClient_bindsExplicitTimeouts() {
+        new ApplicationContextRunner()
+                .withUserConfiguration(GroqClientConfig.class)
+                .withPropertyValues("pricehunt.groq.connect-timeout=2s", "pricehunt.groq.read-timeout=45s")
+                .run(ctx -> {
+                    GroqClientProperties props = ctx.getBean(GroqClientProperties.class);
+                    assertThat(props.connectTimeout()).isEqualTo(Duration.ofSeconds(2));
+                    assertThat(props.readTimeout()).isEqualTo(Duration.ofSeconds(45));
+                });
+    }
+
     // --- PriceTrendProperties (#145 price-trend engine) ---
 
     private final ApplicationContextRunner trend =
@@ -398,6 +460,12 @@ class PricePropertiesBindingTest {
 
     @EnableConfigurationProperties(OllamaChatOptionsProperties.class)
     static class OllamaOptionsConfig {}
+
+    @EnableConfigurationProperties(GroqChatOptionsProperties.class)
+    static class GroqOptionsConfig {}
+
+    @EnableConfigurationProperties(GroqClientProperties.class)
+    static class GroqClientConfig {}
 
     @EnableConfigurationProperties(PriceExtractionProperties.class)
     static class ExtractionConfig {}
