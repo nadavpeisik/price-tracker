@@ -30,8 +30,8 @@ public record PriceSchedulerProperties(
         @DefaultValue(DEFAULT_FIXED_DELAY) @DurationMin(millis = 1) Duration fixedDelay,
         @DefaultValue(DEFAULT_INITIAL_DELAY) @DurationMin(nanos = 0) Duration initialDelay) {
 
-    /** 6 hours. Shared with {@code @Scheduled(fixedDelayString=...)} so the defaults can't diverge. */
-    public static final String DEFAULT_FIXED_DELAY = "6h";
+    /** 12 hours. Shared with {@code @Scheduled(fixedDelayString=...)} so the defaults can't diverge. */
+    public static final String DEFAULT_FIXED_DELAY = "12h";
 
     /** 1 minute. Shared with {@code @Scheduled(initialDelayString=...)}. */
     public static final String DEFAULT_INITIAL_DELAY = "1m";
