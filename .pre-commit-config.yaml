@@ -11,10 +11,25 @@ repos:
         args: [--fix]
       - id: ruff-format
   # SQL: Flyway migrations only (issue #228), whichever are staged. Pinned to CI's version.
+  # V1-V12 are excluded as immutable, not as clean: sqlfluff-fix is an auto-fixer, and
+  # Flyway CRCs each line's raw bytes, so a --all-files reindent reads as an edit and every
+  # DB that already ran them refuses to boot.
   - repo: https://github.com/sqlfluff/sqlfluff
     rev: 4.3.0
     hooks:
       - id: sqlfluff-fix
         files: ^backend/src/main/resources/db/migration/.*\.sql$
+        exclude: /V([1-9]|1[0-2])__
       - id: sqlfluff-lint
         files: ^backend/src/main/resources/db/migration/.*\.sql$
+        exclude: /V([1-9]|1[0-2])__
+  # .properties are decoded as ISO-8859-1 (Spring Boot's loader, IntelliJ's default), so a
+  # UTF-8 em dash pasted into one renders as mojibake for every reader. Reject, don't fix:
+  # the ASCII spelling is a judgment call ("--"? " - "?), so the author picks it.
+  - repo: local
+    hooks:
+      - id: ascii-properties
+        name: .properties files must be pure ASCII
+        entry: scripts/check-ascii-properties.py
+        language: system
+        files: \.properties$
