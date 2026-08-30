@@ -18,3 +18,13 @@ repos:
         files: ^backend/src/main/resources/db/migration/.*\.sql$
       - id: sqlfluff-lint
         files: ^backend/src/main/resources/db/migration/.*\.sql$
+  # .properties are decoded as ISO-8859-1 (Spring Boot's loader, IntelliJ's default), so a
+  # UTF-8 em dash pasted into one renders as mojibake for every reader. Reject, don't fix:
+  # the ASCII spelling is a judgment call ("--"? " - "?), so the author picks it.
+  - repo: local
+    hooks:
+      - id: ascii-properties
+        name: .properties files must be pure ASCII
+        entry: scripts/check-ascii-properties.py
+        language: system
+        files: \.properties$
