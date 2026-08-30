@@ -54,12 +54,21 @@ def check(path: str) -> list[str]:
     # Decode for reporting only. These files are read as ISO-8859-1 in production, but
     # they are *authored* as UTF-8, so UTF-8 is what names the character the author typed.
     text = raw.decode("utf-8", errors="replace")
-    return [
-        f"{path}:{lineno}:{col}: non-ASCII {describe(char)}"
-        for lineno, line in enumerate(text.splitlines(), start=1)
-        for col, char in enumerate(line, start=1)
-        if not char.isascii()
-    ]
+
+    # Walk characters rather than str.splitlines(): that also splits on U+0085, U+2028 and
+    # U+2029, which would consume those very characters as line breaks and report a file
+    # containing one as clean -- failing open, the exact defect this hook exists to catch.
+    # Only "\n" ends a line here, so every non-ASCII character survives to be reported.
+    problems = []
+    lineno, col = 1, 1
+    for char in text:
+        if char == "\n":
+            lineno, col = lineno + 1, 1
+            continue
+        if not char.isascii():
+            problems.append(f"{path}:{lineno}:{col}: non-ASCII {describe(char)}")
+        col += 1
+    return problems
 
 
 def main(paths: list[str]) -> int:
