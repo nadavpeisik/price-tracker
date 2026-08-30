@@ -184,6 +184,13 @@ jobs:
           pip install sqlfluff==4.3.0
           echo "$new_migrations" | xargs sqlfluff lint
 
+      # The backstop for the ascii-properties pre-commit hook, which --no-verify, the GitHub web
+      # editor, and any clone that skipped `pre-commit install` all bypass. Checks every tracked
+      # file, not just branch-added ones: unlike a migration a .properties file stays editable, so
+      # "linted once, in the PR that adds it" would leave later edits unguarded. Costs milliseconds.
+      - name: Verify .properties files are pure ASCII
+        run: git ls-files -z '*.properties' | xargs -0 python3 scripts/check-ascii-properties.py
+
       - name: Build, lint, and test backend
         working-directory: backend
         env:

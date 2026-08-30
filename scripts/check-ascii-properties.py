@@ -14,7 +14,7 @@ and a `grep -P` guard there fails open -- it reports a clean pass it never perfo
 
 Invoked by pre-commit on staged .properties files; also runnable by hand:
 
-    scripts/check-ascii-properties.py $(git ls-files '*.properties')
+    git ls-files -z '*.properties' | xargs -0 scripts/check-ascii-properties.py
 """
 
 import sys
