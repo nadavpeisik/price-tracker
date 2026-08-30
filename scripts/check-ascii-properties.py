@@ -4,13 +4,7 @@
 Java .properties are spec'd as ISO-8859-1, and that is what actually reads them here:
 Spring Boot's OriginTrackedPropertiesLoader decodes with ISO_8859_1, and IntelliJ defaults
 the format to the same. So a UTF-8 em dash written into one of these files renders as
-mojibake ("a-circumflex" soup) for every reader -- the bytes on disk are fine, but nothing
-in the toolchain decodes them as UTF-8. Comments are where this shows up in practice; a
-non-ASCII byte in a *value* would additionally reach a bound property mis-decoded.
-
-Editors and paste insert these characters silently, so this is a hook rather than a
-convention. Detection is done on raw bytes in Python on purpose: macOS grep has no -P,
-and a `grep -P` guard there fails open -- it reports a clean pass it never performed.
+mojibake for every reader -- and in a *value*, reaches a bound property mis-decoded.
 
 Invoked by pre-commit on staged .properties files; also runnable by hand:
 
@@ -20,31 +14,15 @@ Invoked by pre-commit on staged .properties files; also runnable by hand:
 import sys
 import unicodedata
 
-# Characters seen in practice, with the ASCII spelling to use instead. Anything not listed
-# still fails -- this only makes the common cases self-explanatory in the error output.
-SUGGESTIONS = {
-    "—": "--",  # em dash
-    "–": "-",  # en dash
-    "→": "->",  # rightwards arrow
-    "↔": "<->",  # left-right arrow
-    "‘": "'",  # left single quote
-    "’": "'",  # right single quote
-    "“": '"',  # left double quote
-    "”": '"',  # right double quote
-    "…": "...",  # horizontal ellipsis
-    " ": " ",  # no-break space
-}
-
 
 def describe(char: str) -> str:
-    name = unicodedata.name(char, "unnamed character")
-    label = f"U+{ord(char):04X} {name}"
-    suggestion = SUGGESTIONS.get(char)
-    return f"{label} -- write {suggestion!r} instead" if suggestion else label
+    return f"U+{ord(char):04X} {unicodedata.name(char, 'unnamed character')}"
 
 
 def check(path: str) -> list[str]:
     """Return one human-readable complaint per offending character in `path`."""
+    # Raw bytes, not `grep -P '[^\x00-\x7F]'`: macOS grep has no -P, so that guard fails
+    # open there -- it reports a clean pass it never performed.
     with open(path, "rb") as handle:
         raw = handle.read()
 
