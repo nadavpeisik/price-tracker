@@ -5,9 +5,11 @@ datasources:
     type: postgres
     access: proxy
     url: postgres:5432
-    user: ${POSTGRES_USER}
+    # SELECT-only role (#242) — never the application user; Grafana doesn't validate query safety.
+    user: grafana_reader
     secureJsonData:
-      password: ${POSTGRES_PASSWORD}
+      # keep '$' out of this password — Grafana interpolates provisioning values
+      password: ${GRAFANA_DB_PASSWORD}
     jsonData:
       database: ${POSTGRES_DB}
       sslmode: disable
