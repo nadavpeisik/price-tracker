@@ -368,7 +368,7 @@ Design notes (decided in discussion, revisit when the work starts):
 
 ## Infrastructure
 
-- **Database:** PostgreSQL — credentials in `compose.yaml` (do not commit credentials to git)
+- **Database:** PostgreSQL — credentials come from the git-ignored `.env` (`.env.example` documents the names; do not commit credentials to git)
 - **LLM:** Groq Cloud (hosted; `GROQ_API_KEY` required). Local fallback = Ollama under the `ollama` profile, run **natively** — never via Docker Compose; `compose.yaml` orchestrates only `postgres`, `scraper`, and `grafana`
 - **Scraper:** Python FastAPI + Playwright at `localhost:8001` (built from `scraper/Dockerfile` by Docker Compose)
 - **Kafka** — in `pom.xml`, wired up in Phase 2
