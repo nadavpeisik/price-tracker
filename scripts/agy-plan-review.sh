@@ -14,7 +14,7 @@
 #
 set -euo pipefail
 
-MODEL="${AGY_REVIEW_MODEL:-Gemini 3.7 Flash (High)}"
+MODEL="${AGY_REVIEW_MODEL:-Gemini 3.8 Flash (High)}"
 TIMEOUT="${AGY_REVIEW_TIMEOUT:-240s}"
 SANDBOX="${AGY_REVIEW_SANDBOX:-1}" # sandbox ON unless explicitly "0" (fail-safe); restricts the terminal, NOT file access (see usage)
 PLAN_DIR="${AGY_PLAN_DIR:-$HOME/.claude/plans}"
@@ -35,7 +35,7 @@ Usage:
   scripts/agy-plan-review.sh -h | --help   Show this help
 
 Environment:
-  AGY_REVIEW_MODEL    Model (default: "Gemini 3.7 Flash (High)"; switch to
+  AGY_REVIEW_MODEL    Model (default: "Gemini 3.8 Flash (High)"; switch to
                       "Gemini 3.1 Pro (High)" when off the free tier). Shared with
                       agy-review.sh so both tools use one set of dials.
   AGY_REVIEW_TIMEOUT  agy --print-timeout value (default: 240s).
