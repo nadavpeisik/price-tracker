@@ -69,7 +69,7 @@ Prerequisites: Java 21, Docker, and a [Groq](https://console.groq.com/) API key 
 git clone git@github.com:nadavpeisik/price-tracker.git
 cd price-tracker
 
-# Postgres credentials — required (compose.yaml refuses to start without them)
+# Postgres + Grafana credentials — required (compose.yaml refuses to start without them)
 cp .env.example .env
 
 # Price extraction runs on Groq — the app fails fast at boot without this

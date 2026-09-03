@@ -5,15 +5,20 @@ services:
       - 'POSTGRES_DB=${POSTGRES_DB:?POSTGRES_DB not set — copy .env.example to .env}'
       - 'POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD not set — copy .env.example to .env}'
       - 'POSTGRES_USER=${POSTGRES_USER:?POSTGRES_USER not set — copy .env.example to .env}'
+      - 'GRAFANA_DB_PASSWORD=${GRAFANA_DB_PASSWORD:?GRAFANA_DB_PASSWORD not set — copy .env.example to .env}'
     ports:
-      - '5432:5432'
+      # Loopback-only binds (#242): nothing on the LAN should reach these dev services.
+      - '127.0.0.1:5432:5432'
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      # Runs only when the data dir is empty (first boot). Existing volumes: see the
+      # script header for the one-time command that creates the role in place.
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
   scraper:
     build:
       context: ./scraper
     ports:
-      - '8001:8001'
+      - '127.0.0.1:8001:8001'
     volumes:
       - ./scraper:/app
     # --reload-include '*.js' so edits to browser_scripts/*.js restart the worker (uvicorn watches
@@ -23,15 +28,17 @@ services:
   grafana:
     image: 'grafana/grafana:11.4.0'
     environment:
-      # admin/admin default — local-only; gate before any cloud deploy.
-      - 'GF_SECURITY_ADMIN_USER=admin'
-      - 'GF_SECURITY_ADMIN_PASSWORD=admin'
-      # Forwarded so the datasource provisioning YAML can interpolate them.
+      # Seeds the admin only on first boot of grafana_data — an existing volume keeps its
+      # old login (possibly the pre-#242 admin/admin) and ignores later changes here. Reset in place:
+      #   docker compose exec grafana grafana cli admin reset-admin-password <new-password>
+      - 'GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:?GRAFANA_ADMIN_USER not set — copy .env.example to .env}'
+      - 'GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD not set — copy .env.example to .env}'
+      # Forwarded so the datasource provisioning YAML can interpolate them. Grafana connects
+      # as the SELECT-only grafana_reader role, never as the application user (#242).
       - 'POSTGRES_DB=${POSTGRES_DB}'
-      - 'POSTGRES_USER=${POSTGRES_USER}'
-      - 'POSTGRES_PASSWORD=${POSTGRES_PASSWORD}'
+      - 'GRAFANA_DB_PASSWORD=${GRAFANA_DB_PASSWORD}'
     ports:
-      - '3000:3000'
+      - '127.0.0.1:3000:3000'
     volumes:
       - ./infra/grafana/provisioning:/etc/grafana/provisioning
       - ./infra/grafana/dashboards:/var/lib/grafana/dashboards

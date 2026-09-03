@@ -368,9 +368,9 @@ Design notes (decided in discussion, revisit when the work starts):
 
 ## Infrastructure
 
-- **Database:** PostgreSQL — credentials in `compose.yaml` (do not commit credentials to git)
+- **Database:** PostgreSQL — credentials come from the git-ignored `.env` (`.env.example` documents the names; do not commit credentials to git)
 - **LLM:** Groq Cloud (hosted; `GROQ_API_KEY` required). Local fallback = Ollama under the `ollama` profile, run **natively** — never via Docker Compose; `compose.yaml` orchestrates only `postgres`, `scraper`, and `grafana`
 - **Scraper:** Python FastAPI + Playwright at `localhost:8001` (built from `scraper/Dockerfile` by Docker Compose)
 - **Kafka** — in `pom.xml`, wired up in Phase 2
-- **Dashboards:** Grafana 11.4.0 at `localhost:3000` (admin/admin local-only — gate before any cloud deploy). Provisioned datasource + dashboards under `infra/grafana/`. All time-scoped Postgres panels MUST use the Grafana `$__timeFilter(column)` macro — hardcoded `WHERE x > NOW() - INTERVAL ...` makes the dashboard's time picker inert. New dashboards: drop a JSON into `infra/grafana/dashboards/`; the file provider picks it up every 30s.
+- **Dashboards:** Grafana 11.4.0 at `localhost:3000` (login from `GRAFANA_ADMIN_USER`/`GRAFANA_ADMIN_PASSWORD` in `.env` — seeded only when `grafana_data` is first initialized; an existing volume keeps its old login until `docker compose exec grafana grafana cli admin reset-admin-password <new>`; the datasource connects as `grafana_reader`, a SELECT-only Postgres role created by `infra/postgres/init/create-grafana-role.sh` — #242. That script only auto-runs when Postgres initializes an empty volume; on a pre-#242 `postgres_data` volume run it once by hand: `docker compose exec postgres bash /docker-entrypoint-initdb.d/create-grafana-role.sh`). Provisioned datasource + dashboards under `infra/grafana/`. All time-scoped Postgres panels MUST use the Grafana `$__timeFilter(column)` macro — hardcoded `WHERE x > NOW() - INTERVAL ...` makes the dashboard's time picker inert. New dashboards: drop a JSON into `infra/grafana/dashboards/`; the file provider picks it up every 30s.
 - Spring Boot version: **4.0.3** | Spring AI version: **2.0.0-M2** | Java: **21** | Scraper Python: **3.12** (`scraper/.python-version` pins dev; `pyproject.toml` requires `>=3.12`; `Dockerfile` runs `python:3.12-slim`)
