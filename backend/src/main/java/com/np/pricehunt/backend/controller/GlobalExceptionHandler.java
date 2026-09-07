@@ -5,6 +5,7 @@ import com.np.pricehunt.backend.exception.ConflictException;
 import com.np.pricehunt.backend.exception.DependencyTimeoutException;
 import com.np.pricehunt.backend.exception.DependencyUnavailableException;
 import com.np.pricehunt.backend.exception.ErrorCode;
+import com.np.pricehunt.backend.exception.ForbiddenException;
 import com.np.pricehunt.backend.exception.NotFoundException;
 import com.np.pricehunt.backend.exception.PriceExtractionException;
 import com.np.pricehunt.backend.exception.RefreshCooldownException;
@@ -17,9 +18,16 @@ import org.hibernate.exception.ConstraintViolationException;
 import org.springframework.ai.retry.NonTransientAiException;
 import org.springframework.ai.retry.TransientAiException;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.authentication.AuthenticationServiceException;
+import org.springframework.security.authentication.InsufficientAuthenticationException;
+import org.springframework.security.core.AuthenticationException;
+import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
+import org.springframework.security.oauth2.server.resource.BearerTokenError;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.client.RestClientException;
@@ -52,6 +60,7 @@ public class GlobalExceptionHandler {
             case ValidationException e -> HttpStatus.BAD_REQUEST;
             case NotFoundException e -> HttpStatus.NOT_FOUND;
             case ConflictException e -> HttpStatus.CONFLICT;
+            case ForbiddenException e -> HttpStatus.FORBIDDEN;
             case RefreshCooldownException e -> HttpStatus.TOO_MANY_REQUESTS;
             // Gateway to the public web and the LLM: an upstream failure is 502, not 500.
             case PriceExtractionException e -> HttpStatus.BAD_GATEWAY;
@@ -70,6 +79,70 @@ public class GlobalExceptionHandler {
             body.setProperty(ERROR_CODE_MEMBER, conflict.errorCode().name());
         }
         return ResponseEntity.status(status).body(body);
+    }
+
+    // --- Spring Security rejections, routed here by SecurityRejectionRouter (issue #245) ---
+
+    /**
+     * The identity provider is unreachable: {@code JwtAuthenticationProvider} wraps every
+     * non-malformed-token {@code JwtException}, a failed JWKS fetch included, in this type. A 503 and
+     * not a 401, which the BFF would read as "bad credentials" and answer with a re-login loop lasting
+     * as long as the outage.
+     */
+    @ExceptionHandler(AuthenticationServiceException.class)
+    public ResponseEntity<ProblemDetail> handleAuthenticationServiceFailure(AuthenticationServiceException ex) {
+        log.warn("Authentication service unavailable: {}", ex.getMessage(), ex);
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(ProblemDetail.forStatusAndDetail(
+                        HttpStatus.SERVICE_UNAVAILABLE, "Authentication service unavailable"));
+    }
+
+    /** No or invalid bearer token. Carries the RFC 6750 challenge Spring's default entry point sends. */
+    @ExceptionHandler(AuthenticationException.class)
+    public ResponseEntity<ProblemDetail> handleAuthenticationFailure(AuthenticationException ex) {
+        log.debug("Rejected unauthenticated request: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .header(HttpHeaders.WWW_AUTHENTICATE, bearerChallenge(ex))
+                .body(ProblemDetail.forStatusAndDetail(HttpStatus.UNAUTHORIZED, "Authentication required"));
+    }
+
+    /**
+     * Authenticated but not permitted: a missing role, or an identity with no account here. RFC 6750
+     * wants a challenge whenever the token does not enable access, and this is the one Spring's
+     * {@code BearerTokenAccessDeniedHandler} sends.
+     */
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<ProblemDetail> handleAccessDenied(AccessDeniedException ex) {
+        log.info("Rejected request: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .header(
+                        HttpHeaders.WWW_AUTHENTICATE,
+                        "Bearer error=\"insufficient_scope\", error_description=\"The request requires higher"
+                                + " privileges than provided by the access token.\"")
+                .body(ProblemDetail.forStatusAndDetail(HttpStatus.FORBIDDEN, "Not permitted"));
+    }
+
+    /**
+     * A rejected token's own code and description are reproduced verbatim: they are what Spring's
+     * default entry point would have sent, so routing 401s through this advice discloses nothing new.
+     */
+    private static String bearerChallenge(AuthenticationException ex) {
+        if (ex instanceof InsufficientAuthenticationException) {
+            return "Bearer";
+        }
+        if (ex instanceof OAuth2AuthenticationException oauth && oauth.getError() instanceof BearerTokenError error) {
+            StringBuilder challenge = new StringBuilder("Bearer error=\"")
+                    .append(error.getErrorCode())
+                    .append('"');
+            if (error.getDescription() != null) {
+                challenge
+                        .append(", error_description=\"")
+                        .append(error.getDescription())
+                        .append('"');
+            }
+            return challenge.toString();
+        }
+        return "Bearer error=\"invalid_token\"";
     }
 
     @ExceptionHandler(RestClientException.class)

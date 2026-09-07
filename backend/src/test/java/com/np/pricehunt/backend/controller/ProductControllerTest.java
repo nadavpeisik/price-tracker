@@ -29,10 +29,12 @@ import org.hibernate.exception.ConstraintViolationException;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.MediaType;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.web.client.RestClientException;
@@ -40,6 +42,10 @@ import org.springframework.web.client.RestClientException;
 @WebMvcTest(ProductController.class)
 @Import(DisplayCurrencyResolver.class)
 @EnableConfigurationProperties(CurrencyProperties.class)
+// The HTTP contract only: filters off, so the chain does not 401 every request. SecurityPostureTest
+// (#245) enumerates every mapping and owns the security posture.
+@AutoConfigureMockMvc(addFilters = false)
+@TestPropertySource(properties = "spring.security.oauth2.resourceserver.jwt.issuer-uri=https://test-issuer.invalid/")
 class ProductControllerTest {
 
     @Autowired

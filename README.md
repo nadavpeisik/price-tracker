@@ -75,6 +75,10 @@ cp .env.example .env
 # Price extraction runs on Groq — the app fails fast at boot without this
 export GROQ_API_KEY='gsk_your_key_here'
 
+# Every API call needs an Auth0 bearer token (issue #245) — the app fails fast at boot without the
+# tenant issuer. Trailing slash mandatory. AUTH0_AUDIENCE defaults to pricehunt-api.
+export AUTH0_ISSUER_URI='https://your-tenant.eu.auth0.com/'
+
 # Start the backend — Spring Boot auto-starts postgres + scraper via Docker Compose
 cd backend
 ./mvnw spring-boot:run
@@ -117,21 +121,30 @@ survive it:
 `seed` and `seed-clean` together are refused at startup — they request
 opposite outcomes.
 
-Verify it's up:
+Verify it's up (`TOKEN` is an access token for the `pricehunt-api` audience from your Auth0 tenant —
+until the login flow lands, a machine-to-machine application's token from the API's Test tab; the identity
+must first be linked to an `app_user` row, see CLAUDE.md "Dev bootstrap"):
 
 ```bash
 # Create a product
 curl -X POST http://localhost:8080/api/products \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"name":"Duesenberg Starplayer TV"}'
 # → 201 { "id": 1, ... }
 
 # Attach a URL to track
 curl -X POST http://localhost:8080/api/products/1/track \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"url":"https://www.thomannmusic.com/duesenberg_starplayer_tv_blue_sparkle.htm"}'
 # → 200 with extracted price, current PriceRecord, and the auto-detected shop name
 ```
+
+Without a token every `/api` route answers `401` with a `ProblemDetail` body. Two routes stay anonymous:
+`/actuator/health`, for liveness probes, and `/.well-known/oauth-protected-resource`, the RFC 9728 metadata
+Spring Security serves so a client can discover how to authenticate. The React UI in `frontend/` calls the API directly and therefore stays dark until the BFF
+login flow (#247/#248) lands.
 
 ## API
 
