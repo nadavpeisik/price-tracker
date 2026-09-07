@@ -64,8 +64,10 @@ public class CurrentUser {
         }
         Optional<Long> id = appUserRepository.findByIssuerAndSub(issuer, sub).map(AppUser::getId);
         if (id.isEmpty()) {
-            // The dev-bootstrap hook until #249: this pair is what the one-off UPDATE relinks the
-            // placeholder row to. Neither claim is a secret.
+            // Temporary bootstrap channel until #249: relinking V15's placeholder row needs this exact
+            // pair, and no other integrated path exposes it. Raw claims are not free just because they
+            // are not secret, since logs and the database have different readers and retention, so drop
+            // them once invitation redemption provisions accounts.
             log.warn("No app_user for issuer={} sub={}", issuer, sub);
         }
         return id;
