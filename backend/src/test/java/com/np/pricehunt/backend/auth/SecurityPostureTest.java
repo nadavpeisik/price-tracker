@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -63,6 +64,9 @@ import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandl
 class SecurityPostureTest {
 
     private static final FakeIdentityProvider IDP = FakeIdentityProvider.start();
+
+    /** Compiled once: {@code String.replaceAll} would recompile it per route (Sonar S4248). */
+    private static final Pattern PATH_VARIABLE = Pattern.compile("\\{[^}]+}");
 
     private static final String UNKNOWN_SUB = "auth0|nobody";
     private static final String PROBLEM_JSON = "application/problem+json";
@@ -126,7 +130,7 @@ class SecurityPostureTest {
             for (String pattern : patterns) {
                 // Every path variable in this API is a numeric id. A future slug-shaped one needs a
                 // per-name substitution here rather than a mysterious 400.
-                String path = pattern.replaceAll("\\{[^}]+}", "1");
+                String path = PATH_VARIABLE.matcher(pattern).replaceAll("1");
                 if (methods.isEmpty()) {
                     routes.add(new Route(HttpMethod.GET, path));
                 } else {
@@ -228,7 +232,7 @@ class SecurityPostureTest {
     }
 
     @Test
-    void noRequest_createsASessionOrSetsACookie() throws Exception {
+    void statelessChain_createsNoSession_andSetsNoCookie() throws Exception {
         MvcResult rejected = mvc.perform(get("/api/products/1")).andReturn();
         MvcResult admitted = mvc.perform(
                         get("/api/products/999999").header(HttpHeaders.AUTHORIZATION, bearer(IDP.userToken())))

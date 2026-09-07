@@ -87,6 +87,10 @@ final class FakeIdentityProvider {
         }
     }
 
+    // Sonar S2925 flags Thread.sleep in tests as a flakiness smell. Here the delay is the subject
+    // under test: JwksReadTimeoutTest asserts the configured read timeout fires before this returns,
+    // so an unresponsive endpoint is exactly what has to be simulated.
+    @SuppressWarnings("java:S2925")
     private static void sleepQuietly(long millis) {
         try {
             Thread.sleep(millis);

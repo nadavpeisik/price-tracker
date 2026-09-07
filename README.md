@@ -141,8 +141,9 @@ curl -X POST http://localhost:8080/api/products/1/track \
 # → 200 with extracted price, current PriceRecord, and the auto-detected shop name
 ```
 
-Without a token every `/api` route answers `401` with a `ProblemDetail` body; only `/actuator/health` is
-anonymous. The React UI in `frontend/` calls the API directly and therefore stays dark until the BFF
+Without a token every `/api` route answers `401` with a `ProblemDetail` body. Two routes stay anonymous:
+`/actuator/health`, for liveness probes, and `/.well-known/oauth-protected-resource`, the RFC 9728 metadata
+Spring Security serves so a client can discover how to authenticate. The React UI in `frontend/` calls the API directly and therefore stays dark until the BFF
 login flow (#247/#248) lands.
 
 ## API
