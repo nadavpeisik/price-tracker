@@ -8,6 +8,7 @@ import com.np.pricehunt.backend.exception.ConflictException;
 import com.np.pricehunt.backend.exception.DependencyTimeoutException;
 import com.np.pricehunt.backend.exception.DependencyUnavailableException;
 import com.np.pricehunt.backend.exception.ErrorCode;
+import com.np.pricehunt.backend.exception.ForbiddenException;
 import com.np.pricehunt.backend.exception.NotFoundException;
 import com.np.pricehunt.backend.exception.RefreshCooldownException;
 import com.np.pricehunt.backend.exception.ScrapeBlockedException;
@@ -22,9 +23,17 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.ai.retry.NonTransientAiException;
 import org.springframework.ai.retry.TransientAiException;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.authentication.AuthenticationServiceException;
+import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.authentication.InsufficientAuthenticationException;
+import org.springframework.security.oauth2.core.OAuth2AuthenticationException;
+import org.springframework.security.oauth2.server.resource.BearerTokenError;
+import org.springframework.security.oauth2.server.resource.BearerTokenErrors;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClientException;
 
@@ -40,6 +49,7 @@ class GlobalExceptionHandlerTest {
                 Arguments.of(new NotFoundException("missing"), HttpStatus.NOT_FOUND),
                 Arguments.of(
                         new ConflictException(ErrorCode.PRODUCT_LISTING_LIMIT_REACHED, "full"), HttpStatus.CONFLICT),
+                Arguments.of(new ForbiddenException("no account"), HttpStatus.FORBIDDEN),
                 Arguments.of(new RefreshCooldownException("slow down"), HttpStatus.TOO_MANY_REQUESTS),
                 Arguments.of(new ScrapeBlockedException("cloudflare"), HttpStatus.BAD_GATEWAY),
                 Arguments.of(new DependencyUnavailableException("dns down", null), HttpStatus.SERVICE_UNAVAILABLE),
@@ -108,6 +118,61 @@ class GlobalExceptionHandlerTest {
         // even one whose constraint happens to carry a listed name.
         DataIntegrityViolationException ex = integrityViolation("uq_product_name_ci", "23502");
         assertThatThrownBy(() -> handler.handleUniqueViolation(ex)).isSameAs(ex);
+    }
+
+    // --- Spring Security rejections routed in by SecurityRejectionRouter (#245) ---
+
+    @Test
+    void missingToken_is401_withABareBearerChallenge() {
+        var response = handler.handleAuthenticationFailure(new InsufficientAuthenticationException("none"));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(response.getHeaders().getFirst(HttpHeaders.WWW_AUTHENTICATE)).isEqualTo("Bearer");
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getStatus()).isEqualTo(401);
+        assertThat(response.getBody().getDetail()).isEqualTo("Authentication required");
+    }
+
+    @Test
+    void rejectedToken_is401_withTheTokenErrorInTheChallenge() {
+        // The same code + description Spring's default entry point would send: no new disclosure.
+        BearerTokenError error = BearerTokenErrors.invalidToken("Jwt expired at 2026-09-05T10:00:00Z");
+        var response = handler.handleAuthenticationFailure(new OAuth2AuthenticationException(error));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(response.getHeaders().getFirst(HttpHeaders.WWW_AUTHENTICATE))
+                .isEqualTo("Bearer error=\"invalid_token\", error_description=\"Jwt expired at 2026-09-05T10:00:00Z\"");
+    }
+
+    @Test
+    void otherAuthenticationFailure_is401_withAGenericChallenge() {
+        var response = handler.handleAuthenticationFailure(new BadCredentialsException("nope"));
+
+        assertThat(response.getHeaders().getFirst(HttpHeaders.WWW_AUTHENTICATE))
+                .isEqualTo("Bearer error=\"invalid_token\"");
+    }
+
+    @Test
+    void accessDenied_is403_withAnInsufficientScopeChallenge() {
+        var response = handler.handleAccessDenied(new AccessDeniedException("no"));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(response.getHeaders().getFirst(HttpHeaders.WWW_AUTHENTICATE))
+                .startsWith("Bearer error=\"insufficient_scope\"");
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getDetail()).isEqualTo("Not permitted");
+    }
+
+    @Test
+    void identityProviderFailure_is503_withAFixedDetail() {
+        // The cause (a JWKS URL, a connect error) goes to the log, never to the client.
+        var response = handler.handleAuthenticationServiceFailure(
+                new AuthenticationServiceException("Couldn't retrieve remote JWK set: http://127.0.0.1:1/jwks"));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getDetail()).isEqualTo("Authentication service unavailable");
+        assertThat(response.getHeaders().getFirst(HttpHeaders.WWW_AUTHENTICATE)).isNull();
     }
 
     // --- gateway failures ---

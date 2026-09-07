@@ -446,6 +446,41 @@ class PricePropertiesBindingTest {
                 .isNotNull());
     }
 
+    // --- JwksClientProperties (JWKS fetch timeouts, #245) ---
+
+    private final ApplicationContextRunner jwksClient =
+            new ApplicationContextRunner().withUserConfiguration(JwksClientConfig.class);
+
+    @Test
+    void jwksClientTimeouts_useDefaults() {
+        jwksClient.run(ctx -> {
+            JwksClientProperties props = ctx.getBean(JwksClientProperties.class);
+            assertThat(props.connectTimeout()).isEqualTo(Duration.ofSeconds(5));
+            assertThat(props.readTimeout()).isEqualTo(Duration.ofSeconds(10));
+        });
+    }
+
+    @Test
+    void jwksClientTimeouts_bindExplicitDurations() {
+        jwksClient
+                .withPropertyValues("pricehunt.auth.jwks.connect-timeout=2s", "pricehunt.auth.jwks.read-timeout=500ms")
+                .run(ctx -> {
+                    JwksClientProperties props = ctx.getBean(JwksClientProperties.class);
+                    assertThat(props.connectTimeout()).isEqualTo(Duration.ofSeconds(2));
+                    assertThat(props.readTimeout()).isEqualTo(Duration.ofMillis(500));
+                });
+    }
+
+    @Test
+    void jwksClientTimeouts_rejectZeroDuration() {
+        jwksClient.withPropertyValues("pricehunt.auth.jwks.read-timeout=0s").run(ctx -> assertThat(
+                        validationFailure(ctx.getStartupFailure()))
+                .isNotNull());
+    }
+
+    @EnableConfigurationProperties(JwksClientProperties.class)
+    static class JwksClientConfig {}
+
     @EnableConfigurationProperties(DashboardProperties.class)
     static class DashboardConfig {}
 

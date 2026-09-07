@@ -74,6 +74,8 @@ import org.testcontainers.utility.DockerImageName;
             "price.scheduler.enabled=false",
             // Shadows ${GROQ_API_KEY} (#121) so the context boots with no secret; extraction is never called here.
             "spring.ai.openai.api-key=test-key",
+            // Shadows ${AUTH0_ISSUER_URI} (#245) likewise; the lazy decoder never dials it.
+            "spring.security.oauth2.resourceserver.jwt.issuer-uri=https://test-issuer.invalid/",
             "pricehunt.currency.fx.refresh-cron=-",
             "scrape.audit.purge-cron=-",
         })

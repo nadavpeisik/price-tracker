@@ -50,8 +50,10 @@ class AppUserMigrationTest {
 
     @Test
     void backfillRowExists_underThePlaceholderIssuer() {
-        // The placeholder pair lives under .invalid, which no real IdP can issue — #245 relinks it.
-        // Email is NULL until the first real login syncs the verified-email claim (#245).
+        // The placeholder pair lives under .invalid, which no real IdP can issue. It is relinked
+        // out-of-band (a one-off UPDATE on the dev DB, see CLAUDE.md) until #249's invitation
+        // redemption becomes the durable path; a migration cannot carry a per-tenant value. Email
+        // stays NULL until #249 records the verified-email claim at redemption.
         assertThat(repository.findByIssuerAndSub("https://auth0-tenant-pending.invalid/", "nadav"))
                 .get()
                 .extracting(AppUser::getEmail)

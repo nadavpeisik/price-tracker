@@ -15,9 +15,10 @@ import org.springframework.web.bind.annotation.RestController;
  * {@code availability-cases.json} fixture (issue #131), so a real production failure can become a
  * regression case. HTTP mapping only — the lookup/assembly lives in {@link ScrapeAttemptExportService}.
  *
- * <p><b>Double-gated</b> — {@code @Profile("dev")} AND {@code scrape.audit.export-enabled=true}
- * (disabled by default). There is no Spring Security in this app and the endpoint returns untrusted
- * raw page text, so a single mistaken {@code dev} profile must not be enough to expose the corpus.
+ * <p><b>Triple-gated</b>: the {@code ADMIN} role plus an admitted identity (the {@code /api/dev/**} rule
+ * in {@code SecurityConfig}, #245), AND {@code @Profile("dev")}, AND {@code
+ * scrape.audit.export-enabled=true} (disabled by default). The endpoint returns untrusted raw page text,
+ * so a role misassigned in the identity provider must not be enough on its own to expose the corpus.
  *
  * <p>The fixture is a <b>draft</b>: {@code expectedAvailability} is left {@code null} for a human to
  * label before it's appended to {@code availability-cases.json} (a null label would fail the

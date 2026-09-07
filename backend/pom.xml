@@ -57,6 +57,15 @@
 			<artifactId>spring-boot-starter-actuator</artifactId>
 		</dependency>
 		<!--
+			OAuth2 resource server against Auth0 (issue #245). Bearer JWTs only: no oauth2-client, no
+			spring-session, no cookies ever land on this classpath - the BFF (#247) is a separate
+			deployable. SB4 name; spring-boot-starter-oauth2-resource-server is the deprecated alias.
+		-->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-security-oauth2-resource-server</artifactId>
+		</dependency>
+		<!--
 			Two chat providers on the classpath at once (issue #121). Groq is the default and is reached
 			through the OpenAI starter (Groq exposes an OpenAI-compatible endpoint); Ollama stays as the
 			key-free local fallback under the "ollama" profile. Both starters' autoconfigs default to ON
@@ -132,6 +141,12 @@
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-data-jpa-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<!-- spring-security-test (jwt(), @WithMockUser, springSecurity()) + the security slice wiring -->
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-security-test</artifactId>
 			<scope>test</scope>
 		</dependency>
 		<dependency>

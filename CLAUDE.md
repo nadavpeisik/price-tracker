@@ -261,6 +261,70 @@ The prompt lives in the `SYSTEM_PROMPT` / `USER_PROMPT_TEMPLATE` constants, and
 strings (issue #131) — it changes iff the prompt changes, so there is no "remember to bump
 the version" step. The regression sanity check above is still required on any prompt edit.
 
+**Auth (issue #245 — epic #241):** the backend is a pure OAuth2 **resource server** against hosted Auth0;
+bearer JWTs only. No `spring-session`, cookies, CSRF config or `oauth2-client` ever land on this classpath —
+the browser talks to a separate BFF (#247) that holds the tokens. Boot's own decoder does the validation from
+properties (`issuer-uri`, an explicit `jwk-set-uri` derived from it, `audiences`, and the namespaced roles
+claim `https://pricehunt.app/roles` → `ROLE_*`); the only class-level pieces are in `config/SecurityConfig`,
+`auth/` and `controller/SecurityRejectionRouter`. Needs `AUTH0_ISSUER_URI` (**trailing slash mandatory** —
+it must match the token's `iss` byte-for-byte and the JWKS URL is derived from it) and optionally
+`AUTH0_AUDIENCE` (default `pricehunt-api`); the boot fails fast on either being malformed or blank.
+
+The authorization ladder is the whole policy, top rule wins:
+```text
+/actuator/health                                anonymous
+/.well-known/oauth-protected-resource           anonymous (filter-provided, see below)
+/actuator/**  (incl. root)    ROLE_ADMIN                       (role from the token; no app_user row needed)
+/api/dev/**                   authenticated + ROLE_ADMIN + admitted
+/api/**                       authenticated + admitted          (403 without an app_user row)
+anything else                 authenticated
+```
+Two routes come from filters rather than controllers, so the enumeration test cannot see them: Spring's
+`LogoutFilter`, disabled in `SecurityConfig` because it would answer `/logout` with a 302 ahead of the
+rules, and Security 7's `OAuth2ProtectedResourceMetadataFilter`, which serves RFC 9728 metadata at
+`/.well-known/oauth-protected-resource`. The latter has no DSL toggle and short-circuits before
+`AuthorizationFilter`, so it cannot be gated; it is public by design and names no identity provider, and
+`SecurityPostureTest` pins both the 200 and the absence of our tenant URL. **Any new filter-provided route
+needs its own case there.**
+
+*Admitted* = the token's raw `(iss, sub)` names an `app_user` row (`AdmissionAuthorizationManager` backed by
+`CurrentUser.resolveUserId`). There is **no just-in-time account creation** — an unknown identity is a 403 — and
+no identity cache. Only #249's invitation redemption may create or relink rows; it will be the one
+`authenticated()`-only `/api` route, placed above the admission rule. `CurrentUser.userId()` is what services
+call (#246); it throws `ForbiddenException` (403) for an unknown identity and `IllegalStateException` when
+there is no authentication at all — that is a wiring bug (a scheduler or the seeder reaching a user-scoped
+service), never a client error. Services never see the JWT.
+
+401/403/503 keep the #231 contract: Security's entry point and access-denied handler run outside
+`DispatcherServlet`, so `SecurityRejectionRouter` feeds them to the `handlerExceptionResolver` and
+`GlobalExceptionHandler` writes the `ProblemDetail` — 401 with an RFC 6750 challenge, 403 with
+`insufficient_scope`, and 503 when the JWKS fetch fails, so an Auth0 outage does not read as "bad
+credentials". That fetch is the decoder's only network call and runs on our own timed client
+(`pricehunt.auth.jwks.*`).
+
+Testing: `SecurityPostureTest` enumerates every request mapping (anonymous → 401, valid-but-unknown identity
+→ 403 on `/api/**`) with **no exclusion list**, against Boot's real decoder fed by `FakeIdentityProvider` (a
+loopback JWKS + signed tokens); `ManagementPortPostureTest` boots a real server for the actuator rules.
+Every `@SpringBootTest` and `@WebMvcTest` needs the `issuer-uri` shadow (`https://test-issuer.invalid/`,
+in `application-test.properties` or its inline property block) because Boot's decoder condition reads the
+property at startup; controller slices run with `@AutoConfigureMockMvc(addFilters = false)` — they pin HTTP
+contracts, the posture test owns security. Anything that reaches `CurrentUser` needs a token from the fake
+provider, not `@WithMockUser` (whose principal is not a `Jwt`).
+
+**Dev bootstrap until #249:** the V15 placeholder row (`https://auth0-tenant-pending.invalid/`, `nadav`)
+must be relinked to your real identity, which differs per tenant — so no migration. The first request
+with a valid token is a 403 whose WARN line shows `issuer=... sub=...`; run once on the dev DB:
+```sql
+UPDATE app_user SET issuer = '<iss>', sub = '<sub>'
+WHERE issuer = 'https://auth0-tenant-pending.invalid/' AND sub = 'nadav';   -- expect UPDATE 1
+```
+Auth0 dev tenant checklist: an API with identifier `pricehunt-api` (RS256, access-token lifetime 300 s,
+RBAC on), a role `ADMIN`, and a post-login Action
+`api.accessToken.setCustomClaim("https://pricehunt.app/roles", event.authorization?.roles ?? [])`. For a
+manual smoke token before the login flow exists (#248), a machine-to-machine application authorized for the
+API (its `sub` is `<clientId>@clients`). The live UI 401s until #247/#248 land — run a pre-#245 checkout for
+UI work. Connections and refresh-token settings belong to #247.
+
 **Validation layer** (in `ProductTrackingService`, before saving `PriceRecord`):
 - Price must be > 0
 - If a prior price exists for the `TrackedItem` **and the currency matches**, new price must not differ by more than 200% (i.e. no more than 3x the previous price) — configurable via `price.tracking.max-delta-percent` in `application.properties`
@@ -290,7 +354,7 @@ New scheduler? Wire the recorder the same way `PriceCheckScheduler.refreshAll()`
 - Monetary values are `BigDecimal` everywhere inside the app. **`MoneyPrecision` owns the scale** (4, `HALF_UP`) and every layer references it — the `@Column(scale = MoneyPrecision.SCALE)` mapping, `PriceConverter`'s output, `PriceValidator`'s delta band, and the wire formatter. Normalize at the persistence boundary **before** validating, or a check passes on a value the column then rounds to something else (a `0.00004` once passed `price > 0` and stored as `0.0000`, which froze that listing permanently). Deliberately not a general scales holder: FX rates (8) and percentages (2) are different quantities, and division-precision constants stay local to their calculation.
 - **Money crosses the wire as a decimal string.** API response DTOs declare money fields `String` and mappers format via `WireMoney.decimalString(...)` (fixed scale 4, `HALF_UP` — the same digits `numeric(19,4)` stores, so one amount has one spelling on every endpoint). JSON has no decimal type: a `BigDecimal` serialized as a JSON number is parsed into an IEEE-754 double, which fails silently until a rendered price looks wrong. A `String` field cannot be misconfigured into a number, which `@JsonFormat` can — and this project runs Jackson 3 for the web layer while Spring AI binds Jackson 2. **Ratios stay JSON numbers** (`delta7d`, `deltaPct`): they are not amounts. `MoneyOnTheWireTest` walks every controller's response graph and fails the build on a decimal outside that ratio allow-list.
 - **HTTP pagination is 1-based**, request and response — `?page=1` is the first page, and a response's page number is always a valid request value. Spring Data's 0-based `Page` is that library's internal convention and must not reach the wire.
-- The single existing test class is `@Disabled` — tests are not yet implemented
+- Test conventions: `@DataJpaTest` on H2 (`test` profile) unless Postgres semantics matter (then Testcontainers + Flyway); `@WebMvcTest` slices pin HTTP contracts with filters off; `@SpringBootTest`s switch off Docker Compose, the scheduler and every cron in their property block and shadow the two required env vars (`GROQ_API_KEY`, `AUTH0_ISSUER_URI`) so CI needs no secrets.
 
 ## Database migrations
 
