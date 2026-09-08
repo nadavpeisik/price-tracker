@@ -181,12 +181,17 @@ Guardrails (same model as the diff review and issue #81):
 
 **Flow for the main use case (track a product URL):**
 1. `POST /api/products/{id}/track` hits `ProductController`
-2. `ProductTrackingService.trackUrl()` orchestrates the workflow (transactional):
-   - Calls `ScraperClient` → `POST http://localhost:8001/scrape` → Python Playwright scraper returns `ScrapeResponse`
-   - Calls `PriceExtractionService` → `PriceExtractionOrchestrator` routes based on `extractionSource` (see waterfall below)
-   - Validates the extracted `PriceInfo` before saving (non-zero, delta check, currency consistency)
-   - Resolves the `TrackedItem` by URL (reusing it, or admitting a new one) under the parent `Product`'s write lock; the product itself must already exist — `trackUrl` 404s otherwise, it never creates one
-   - Appends a new `PriceRecord` with the extracted price, `observedAt`, and `extractionSource`
+2. `ProductTrackingService.trackUrl()` (user-facing: holds `CurrentUser`) orchestrates:
+   - Cheap catalog-global 404 (`ProductCatalogService.productExists`), then `UrlValidator` — a rejected URL is never persisted
+   - **One transaction**: `ProductCatalogService.admitListing()` resolves the `TrackedItem` by URL (reusing it, or admitting a new one) under the parent `Product`'s write lock, then `UserScopedCatalog.track()` records the caller's membership (`user_product`, `ON CONFLICT DO NOTHING`). Both commit before any network I/O, so a failed first scrape never undoes "I want to track this". The product must already exist — this is the one deliberately catalog-global user route: attaching to a product someone else created is the shared-catalog feature.
+   - `PriceCheckPipeline.checkPrice()` (engine: no user knowledge; the scheduler calls it too) — `ScraperClient` → `POST http://localhost:8001/scrape` → Python Playwright scraper returns `ScrapeResponse`; `PriceExtractionService` → `PriceExtractionOrchestrator` routes based on `extractionSource` (see waterfall below); validates the extracted `PriceInfo` before saving (non-zero, delta check, currency consistency); appends a new `PriceRecord` with the extracted price, `observedAt`, and `extractionSource`
+
+**Tenancy — the user-scoped query layer (#246).** Membership is **product-level**: `user_product` (V17) = "user U tracks product P"; every shop under that product, now or later, shows through it. Scoping is application-layer and *structural*, not disciplinary:
+- `tenancy/UserScopedCatalog` is the **only** data access a user-facing service has. Every method takes the caller's `userId` first and proves membership inside the query (`FROM UserProduct up JOIN up.product p JOIN p.trackedItems t WHERE up.user.id = :userId …`), so "not yours" and "does not exist" are one empty answer → the service throws `NotFoundException` (**404, never 403**). It is a class, not a `JpaRepository`, so no `findAll`/`findById`/`deleteById` can reach user-facing code.
+- **ArchUnit (`architecture/TenancyBoundaryTest`) enforces it**: a class that depends on `CurrentUser` may not depend on any `Repository` (whoever knows the caller talks to data only through the port); only `..tenancy..`/`..repository..`/`..dev..` may touch `UserProductRepository`; `..scheduler..` never reaches `CurrentUser`, even transitively; controllers depend on neither repositories nor `CurrentUser`; only `..auth..` reads `SecurityContextHolder`. So: user-facing services (`DashboardQueryService`, `TrackedProductQueryService`, `ProductTrackingService`) hold `CurrentUser` + the port; engines (`PriceCheckPipeline`, `DashboardSnapshotService`, `PriceTrendService`) hold repositories and take ids/refs the port produced; `ProductCatalogService` is the catalog half (create, admit listing, edit, hard delete) and knows no user.
+- Routes: every read and every user mutation resolves through membership. `PATCH`/`DELETE /api/products/**` change the shared row for everyone and are **admin-only** in `SecurityConfig` (ahead of the `/api/**` rule); a user's own removal is `DELETE /api/tracked-products/{productId}` = delete one `user_product` row, catalog untouched. Creating a product (`POST /api/products`) also tracks it for the creator, or they would 404 on their own row.
+- Proof: `tenancy/TenancyRouteMatrixTest` (two users, real chain + Postgres, DB-state assertions after every mutation) and `scheduler/SchedulerRunsWithoutPrincipalTest` (security context cleared; the whole catalog, including listings nobody tracks, still refreshes — "unlinked items keep being scraped" is the settled epic decision).
+- Per-listing state (hide one shop) is a sparse child of `user_product` that arrives with its first writer (#250); `added_at` is stored now and projected when #226 reads it; notification grain is Phase 3's.
 
 **Price extraction waterfall** (each tier attempted in order; first success short-circuits):
 ```
@@ -202,7 +207,7 @@ The scraper response carries an `extractionSource` enum (`STRUCTURED | SNIPPET |
 - `TrackedItem` — belongs to a `Product`, has a `url` + `shopName`, has many `PriceRecord`s
 - Both `Product` and `TrackedItem` carry `createdAt` (V12, #225): stamped by `@PrePersist` when null, `updatable = false`, not exposed on the wire yet. It is an audit column, not the key for the per-user "most recently added" sort (#226 — that lives on the tenancy join table).
 - `AppUser` — application identity keyed on `(issuer, sub)` (V15, #243); `id` is what the schema references.
-- `UserTrackedItem` — the tenancy join row (V16, #244): one user's per-listing state (`hidden`, `notifyEnabled`, `addedAt`) on a shared canonical `TrackedItem`. Both `@ManyToOne` are lazy and non-optional with **no cascade into the catalog**; the DB cascades the join rows away on catalog/account delete. User-facing removal is an **unlink** (delete this row only) — the service/endpoint semantics for that, and admin-gating the existing hard deletes, are #246/#250. `addedAt` is the per-user "recently added" key (#226).
+- `UserProduct` — the tenancy membership row (V17, #246; supersedes V16's per-listing `user_tracked_item`, dropped): "user U tracks product P". Unique on `(user_id, product_id)`, both FKs `ON DELETE CASCADE` at the database (mirrored by Hibernate `@OnDelete` so the H2 suites generate the same DDL), lazy non-optional `@ManyToOne`s, **no JPA cascade into the catalog**. `addedAt` is the per-user "recently added" key (#226). Written only through `UserScopedCatalog.track()` (idempotent) and removed by `stopTracking()`; the dev seeder is the one other writer (it tracks its fixtures for the owner — the lowest-id, V15 bootstrap account — only).
 - `PriceRecord` — immutable price snapshot (BigDecimal, LocalDateTime set via `@PrePersist`, availability flag, `extractionSource`)
 - `PriceInfo` — Java record DTO carrying `price`, `currency`, `available`, and `extractionSource`
 - `ExtractionSource` — shared enum (`STRUCTURED | SNIPPET | FULLTEXT`) used across `ScrapeResponse`, `PriceInfo`, and `PriceRecord`
@@ -308,8 +313,11 @@ loopback JWKS + signed tokens); `ManagementPortPostureTest` boots a real server 
 Every `@SpringBootTest` and `@WebMvcTest` needs the `issuer-uri` shadow (`https://test-issuer.invalid/`,
 in `application-test.properties` or its inline property block) because Boot's decoder condition reads the
 property at startup; controller slices run with `@AutoConfigureMockMvc(addFilters = false)` — they pin HTTP
-contracts, the posture test owns security. Anything that reaches `CurrentUser` needs a token from the fake
-provider, not `@WithMockUser` (whose principal is not a `Jwt`).
+contracts, the posture test owns security. Anything that reaches `CurrentUser` through the real chain needs a
+token from the fake provider, not `@WithMockUser` (whose principal is not a `Jwt`); an integration test that
+builds MockMvc *without* `springSecurity()` instead mocks `CurrentUser` (`@MockitoBean`) and seeds the
+caller + memberships with `tenancy.TestTenants` — the route matrix is the one place decoding, admission and
+tenancy are proven together.
 
 **Dev bootstrap until #249:** the V15 placeholder row (`https://auth0-tenant-pending.invalid/`, `nadav`)
 must be relinked to your real identity, which differs per tenant — so no migration. The first request

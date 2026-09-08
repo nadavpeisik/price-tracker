@@ -12,7 +12,7 @@ import com.np.pricehunt.backend.domain.JobStatus;
 import com.np.pricehunt.backend.observability.JobRunRecorder;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
 import com.np.pricehunt.backend.repository.projection.TrackedItemRefreshView;
-import com.np.pricehunt.backend.service.ProductTrackingService;
+import com.np.pricehunt.backend.service.PriceCheckPipeline;
 import com.np.pricehunt.backend.validator.UrlValidator;
 import java.time.Duration;
 import java.time.Instant;
@@ -30,7 +30,7 @@ class PriceCheckSchedulerTest {
     private static final Long RUN_ID = 99L;
 
     @Mock
-    private ProductTrackingService trackingService;
+    private PriceCheckPipeline pipeline;
 
     @Mock
     private TrackedItemRepository trackedItemRepository;
@@ -46,7 +46,7 @@ class PriceCheckSchedulerTest {
     @BeforeEach
     void setUp() {
         scheduler = new PriceCheckScheduler(
-                trackingService,
+                pipeline,
                 trackedItemRepository,
                 jobRunRecorder,
                 new PriceSchedulerProperties(FIXED_DELAY, Duration.ofMinutes(1)),
@@ -65,10 +65,10 @@ class PriceCheckSchedulerTest {
 
         scheduler.refreshAll();
 
-        verify(trackingService).scheduledRefresh(items.get(1 - 1));
-        verify(trackingService).scheduledRefresh(items.get(2 - 1));
-        verify(trackingService).scheduledRefresh(items.get(3 - 1));
-        verifyNoMoreInteractions(trackingService);
+        verify(pipeline).scheduledRefresh(items.get(1 - 1));
+        verify(pipeline).scheduledRefresh(items.get(2 - 1));
+        verify(pipeline).scheduledRefresh(items.get(3 - 1));
+        verifyNoMoreInteractions(pipeline);
 
         verify(jobRunRecorder).start(PriceCheckScheduler.JOB_NAME);
         verify(jobRunRecorder, times(3))
@@ -84,15 +84,15 @@ class PriceCheckSchedulerTest {
                 new TrackedItemRefreshView(2L, "https://b.com/2", old),
                 new TrackedItemRefreshView(3L, "https://c.com/3", old));
         when(trackedItemRepository.findStaleItems(any(Instant.class))).thenReturn(items);
-        when(trackingService.scheduledRefresh(items.get(1 - 1))).thenReturn(null);
-        when(trackingService.scheduledRefresh(items.get(3 - 1))).thenReturn(null);
-        when(trackingService.scheduledRefresh(items.get(2 - 1))).thenThrow(new RuntimeException("scraper down"));
+        when(pipeline.scheduledRefresh(items.get(1 - 1))).thenReturn(null);
+        when(pipeline.scheduledRefresh(items.get(3 - 1))).thenReturn(null);
+        when(pipeline.scheduledRefresh(items.get(2 - 1))).thenThrow(new RuntimeException("scraper down"));
 
         scheduler.refreshAll();
 
-        verify(trackingService).scheduledRefresh(items.get(1 - 1));
-        verify(trackingService).scheduledRefresh(items.get(2 - 1));
-        verify(trackingService).scheduledRefresh(items.get(3 - 1));
+        verify(pipeline).scheduledRefresh(items.get(1 - 1));
+        verify(pipeline).scheduledRefresh(items.get(2 - 1));
+        verify(pipeline).scheduledRefresh(items.get(3 - 1));
 
         verify(jobRunRecorder).start(PriceCheckScheduler.JOB_NAME);
         verify(jobRunRecorder, times(2))
@@ -114,7 +114,7 @@ class PriceCheckSchedulerTest {
 
         scheduler.refreshAll();
 
-        verify(trackingService).scheduledRefresh(items.get(1 - 1));
+        verify(pipeline).scheduledRefresh(items.get(1 - 1));
         verify(jobRunRecorder).complete(eq(RUN_ID), eq(JobStatus.SUCCESS), eq(1), eq(1), eq(0), isNull());
     }
 
@@ -137,10 +137,10 @@ class PriceCheckSchedulerTest {
         scheduler.refreshAll();
 
         // Skipped items are never refreshed (no request sent) and do NOT count as processed/failed.
-        verify(trackingService).scheduledRefresh(items.get(1 - 1));
-        verify(trackingService).scheduledRefresh(items.get(3 - 1));
-        verify(trackingService, never()).scheduledRefresh(items.get(2 - 1));
-        verify(trackingService, never()).scheduledRefresh(items.get(4 - 1));
+        verify(pipeline).scheduledRefresh(items.get(1 - 1));
+        verify(pipeline).scheduledRefresh(items.get(3 - 1));
+        verify(pipeline, never()).scheduledRefresh(items.get(2 - 1));
+        verify(pipeline, never()).scheduledRefresh(items.get(4 - 1));
         verify(jobRunRecorder, never()).recordItem(anyLong(), eq("https://www.amazon.com/2"), any(), anyLong(), any());
         verify(jobRunRecorder, never())
                 .recordItem(anyLong(), eq("https://ivory.seed.invalid/item/1001"), any(), anyLong(), any());
@@ -154,7 +154,7 @@ class PriceCheckSchedulerTest {
 
         scheduler.refreshAll();
 
-        verifyNoInteractions(trackingService);
+        verifyNoInteractions(pipeline);
 
         verify(jobRunRecorder).start(PriceCheckScheduler.JOB_NAME);
         verify(jobRunRecorder, never()).recordItem(anyLong(), any(), any(), anyLong(), any());

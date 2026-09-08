@@ -3,8 +3,6 @@ package com.np.pricehunt.backend.repository;
 import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.domain.ShopNameSource;
 import com.np.pricehunt.backend.domain.TrackedItem;
-import com.np.pricehunt.backend.repository.projection.DashboardListingRef;
-import com.np.pricehunt.backend.repository.projection.ListingLatestObservationRow;
 import com.np.pricehunt.backend.repository.projection.TrackedItemRefreshView;
 import java.time.Instant;
 import java.util.Collection;
@@ -49,89 +47,6 @@ public interface TrackedItemRepository extends JpaRepository<TrackedItem, Long> 
            WHERE t.lastChecked IS NULL OR t.lastChecked < :cutoff
            """)
     List<TrackedItemRefreshView> findStaleItems(@Param("cutoff") Instant cutoff);
-
-    // Same narrow shape for a single user-driven refresh; the product filter is the ownership check,
-    // so a listing under another product reads as absent rather than as a separate 404 branch.
-    @Query(
-            """
-           SELECT new com.np.pricehunt.backend.repository.projection.TrackedItemRefreshView(t.id, t.url, t.lastChecked)
-           FROM TrackedItem t
-           WHERE t.id = :id AND t.product.id = :productId
-           """)
-    Optional<TrackedItemRefreshView> findRefreshViewByIdAndProductId(
-            @Param("id") Long id, @Param("productId") Long productId);
-
-    /**
-     * Every listing in the catalogue, flattened to what the dashboard's whole-set pass reads (issue
-     * #146): one query, no entities, no lazy associations.
-     *
-     * <p>Whole-set rather than filtered because the summary tiles aggregate over everything tracked
-     * regardless of the active search — so the rows are needed in memory anyway, and a second
-     * database round trip to re-filter data already loaded would cost more than it saves.
-     *
-     * <p>Ordered by id so the facet list and any grouping are stable across requests.
-     */
-    @Query(
-            """
-           SELECT new com.np.pricehunt.backend.repository.projection.DashboardListingRef(t.id, t.product.id, t.shopName)
-           FROM TrackedItem t
-           ORDER BY t.id ASC
-           """)
-    List<DashboardListingRef> findAllForDashboard();
-
-    /**
-     * A product's listings, each with its latest observation at or before {@code asOf} — one
-     * statement regardless of listing count (issue #157).
-     *
-     * <p>{@code LEFT JOIN LATERAL … LIMIT 1} rather than a {@code ROW_NUMBER()} window: the lateral
-     * subquery walks the {@code (tracked_item_id, observed_at)} index and stops after one row per
-     * listing, where a window would rank the product's whole price history to pick the same rows.
-     * The selection rule — latest at or before the instant, ties broken by higher record id — is the
-     * dashboard's ({@code PriceRecordRepository.findCutoffObservations}), so the panel and the row can
-     * never pick different observations for the same listing.
-     *
-     * <p>Outer join on purpose: a listing with no qualifying record is still a listing, and comes
-     * back with null observation columns. Ordered by listing id so callers that don't re-sort get a
-     * stable order across requests.
-     *
-     * <p>Aliases are quoted because the interface projection binds by exact column label and Postgres
-     * folds unquoted identifiers to lowercase.
-     */
-    @Query(
-            nativeQuery = true,
-            value =
-                    """
-                    SELECT t.id                  AS "trackedItemId",
-                           t.url                 AS "url",
-                           t.shop_name           AS "shopName",
-                           t.shop_name_source    AS "shopNameSource",
-                           t.last_checked        AS "lastChecked",
-                           o.price               AS "price",
-                           o.currency            AS "currency",
-                           o.availability_status AS "availability",
-                           o.observed_at         AS "observedAt"
-                    FROM tracked_item t
-                    LEFT JOIN LATERAL (
-                        SELECT r.price, r.currency, r.availability_status, r.observed_at
-                        FROM price_record r
-                        WHERE r.tracked_item_id = t.id AND r.observed_at <= :asOf
-                        ORDER BY r.observed_at DESC, r.id DESC
-                        LIMIT 1
-                    ) o ON true
-                    WHERE t.product_id = :productId
-                    ORDER BY t.id ASC
-                    """)
-    List<ListingLatestObservationRow> findListingsWithLatestObservation(
-            @Param("productId") Long productId, @Param("asOf") Instant asOf);
-
-    /**
-     * Listings for the products on one dashboard page, as entities.
-     *
-     * <p>Entities specifically because {@code PriceTrendService.computeProductTrends} takes {@code
-     * TrackedItem}s; the light refs above cannot be passed. Bounded by the page size, and callers
-     * must skip the call entirely on an empty page rather than binding an empty {@code IN} list.
-     */
-    List<TrackedItem> findByProductIdIn(Collection<Long> productIds);
 
     /**
      * Atomic compare-and-set of the shop name: overwrites only when {@code newSource} ranks at or

@@ -3,9 +3,11 @@ package com.np.pricehunt.backend.controller;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -23,6 +25,8 @@ import com.np.pricehunt.backend.dto.DashboardQueryRequest;
 import com.np.pricehunt.backend.dto.DashboardResponse;
 import com.np.pricehunt.backend.dto.DashboardSortKey;
 import com.np.pricehunt.backend.dto.DashboardSummary;
+import com.np.pricehunt.backend.exception.NotFoundException;
+import com.np.pricehunt.backend.service.ProductTrackingService;
 import com.np.pricehunt.backend.service.dashboard.DashboardQueryService;
 import com.np.pricehunt.backend.service.fx.ExchangeRateService;
 import java.math.BigDecimal;
@@ -60,11 +64,33 @@ class DashboardControllerTest {
     private DashboardQueryService queryService;
 
     @MockitoBean
+    private ProductTrackingService trackingService;
+
+    @MockitoBean
     private ExchangeRateService rateService;
 
     @BeforeEach
     void setUp() throws Exception {
         when(rateService.isDefinitelyUnsupported(anyString())).thenReturn(false);
+    }
+
+    // --- DELETE /{productId}: stop tracking (#246) ---
+
+    @Test
+    void stopTracking_returnsNoContent() throws Exception {
+        mvc.perform(delete("/api/tracked-products/7")).andExpect(status().isNoContent());
+        verify(trackingService).stopTracking(7L);
+    }
+
+    @Test
+    void stopTracking_notTracked_propagates404() throws Exception {
+        doThrow(new NotFoundException("Product not found"))
+                .when(trackingService)
+                .stopTracking(7L);
+
+        mvc.perform(delete("/api/tracked-products/7"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.status").value(404));
     }
 
     // --- parameter binding ---

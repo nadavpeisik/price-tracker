@@ -144,6 +144,7 @@ class DashboardSnapshotServiceTest {
 
         verify(priceRecordRepository)
                 .findCutoffObservations(
+                        eq(Set.of(1L)),
                         eq(AS_OF.minus(TTL, ChronoUnit.DAYS)),
                         eq(AS_OF),
                         eq(AS_OF.minus(7L + TTL, ChronoUnit.DAYS)),
@@ -187,7 +188,7 @@ class DashboardSnapshotServiceTest {
         service.snapshotAll(Map.of(7L, List.of(listing(1L, "KSP")), 8L, List.of(listing(2L, "Bug"))), AS_OF, ILS);
 
         verify(rateWindowLoader).load(any(), any(), any());
-        verify(priceRecordRepository).findCutoffObservations(any(), any(), any(), any());
+        verify(priceRecordRepository).findCutoffObservations(any(), any(), any(), any(), any());
     }
 
     // --- availability rollup ---
@@ -241,7 +242,6 @@ class DashboardSnapshotServiceTest {
 
     @Test
     void productWithNoListings_reportsNothingTracked() {
-        stubRows();
         stubEmptyRatesAndDelta();
 
         ProductDashboardSnapshot snapshot = snapshotOne(Map.of(7L, List.of()));
@@ -327,7 +327,7 @@ class DashboardSnapshotServiceTest {
 
     @Test
     void everyRequestedProductGetsASnapshot_evenWithNoDataAtAll() {
-        stubRows();
+        // No listings at all: the cutoff query is skipped rather than bound with an empty IN list.
         stubEmptyRatesAndDelta();
 
         Map<Long, ProductDashboardSnapshot> snapshots =
@@ -363,7 +363,7 @@ class DashboardSnapshotServiceTest {
     }
 
     private void stubRows(CutoffObservationRow... rows) {
-        when(priceRecordRepository.findCutoffObservations(any(), any(), any(), any()))
+        when(priceRecordRepository.findCutoffObservations(any(), any(), any(), any(), any()))
                 .thenReturn(List.of(rows));
     }
 

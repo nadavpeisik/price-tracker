@@ -7,20 +7,20 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.np.pricehunt.backend.domain.Product;
+import com.np.pricehunt.backend.auth.CurrentUser;
 import com.np.pricehunt.backend.dto.AvailabilityRollupStatus;
 import com.np.pricehunt.backend.dto.DashboardProductResponse;
 import com.np.pricehunt.backend.dto.DashboardQueryRequest;
 import com.np.pricehunt.backend.dto.DashboardResponse;
 import com.np.pricehunt.backend.dto.DashboardSortKey;
-import com.np.pricehunt.backend.repository.ProductRepository;
-import com.np.pricehunt.backend.repository.TrackedItemRepository;
 import com.np.pricehunt.backend.repository.projection.DashboardListingRef;
+import com.np.pricehunt.backend.repository.projection.TrackedProductRef;
 import com.np.pricehunt.backend.service.dashboard.ProductDashboardSnapshot.AvailabilitySummary;
 import com.np.pricehunt.backend.service.trend.BestOffer;
 import com.np.pricehunt.backend.service.trend.PriceTrendService;
 import com.np.pricehunt.backend.service.trend.ProductTrend;
 import com.np.pricehunt.backend.service.trend.TrendPoint;
+import com.np.pricehunt.backend.tenancy.UserScopedCatalog;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
@@ -47,11 +47,13 @@ class DashboardQueryServiceTest {
     private static final Instant NOW = Instant.parse("2026-03-20T12:00:00Z");
     private static final String ILS = "ILS";
 
-    @Mock
-    private ProductRepository productRepository;
+    private static final long USER_ID = 7L;
 
     @Mock
-    private TrackedItemRepository trackedItemRepository;
+    private CurrentUser currentUser;
+
+    @Mock
+    private UserScopedCatalog catalog;
 
     @Mock
     private DashboardSnapshotService snapshotService;
@@ -62,7 +64,7 @@ class DashboardQueryServiceTest {
     private DashboardQueryService service;
 
     /** Fixtures accumulate here and are installed by {@link #stubCatalogue()}. */
-    private final List<Product> products = new ArrayList<>();
+    private final List<TrackedProductRef> products = new ArrayList<>();
 
     private final List<DashboardListingRef> listings = new ArrayList<>();
     private final Map<Long, ProductDashboardSnapshot> snapshots = new HashMap<>();
@@ -70,11 +72,7 @@ class DashboardQueryServiceTest {
     @BeforeEach
     void setUp() {
         service = new DashboardQueryService(
-                productRepository,
-                trackedItemRepository,
-                snapshotService,
-                trendService,
-                Clock.fixed(NOW, ZoneOffset.UTC));
+                currentUser, catalog, snapshotService, trendService, Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
     // --- filtering ---
@@ -500,7 +498,7 @@ class DashboardQueryServiceTest {
     }
 
     private SnapshotBuilder product(long id, String name) {
-        products.add(Product.builder().id(id).name(name).build());
+        products.add(new TrackedProductRef(id, name));
         SnapshotBuilder builder = new SnapshotBuilder(id);
         snapshots.put(id, builder.build());
         return builder;
@@ -511,8 +509,9 @@ class DashboardQueryServiceTest {
     }
 
     private void stubCatalogue() {
-        when(productRepository.findAll()).thenReturn(List.copyOf(products));
-        when(trackedItemRepository.findAllForDashboard()).thenReturn(List.copyOf(listings));
+        when(currentUser.userId()).thenReturn(USER_ID);
+        when(catalog.trackedProducts(USER_ID)).thenReturn(List.copyOf(products));
+        when(catalog.listingsOfTrackedProducts(USER_ID)).thenReturn(List.copyOf(listings));
         when(snapshotService.snapshotAll(any(), any(), anyString())).thenReturn(Map.copyOf(snapshots));
         // Sparklines are deliberately NOT stubbed here: Mockito's defaults already return an empty
         // list and an empty map, which is the right "no series" answer for most cases, and stubbing

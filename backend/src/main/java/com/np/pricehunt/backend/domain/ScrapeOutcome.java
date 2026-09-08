@@ -8,6 +8,6 @@ package com.np.pricehunt.backend.domain;
 public enum ScrapeOutcome {
     /** The extraction pipeline threw before producing a usable {@code PriceInfo}. */
     EXTRACTION_FAILED,
-    /** A {@code PriceInfo} was produced but failed {@code ProductTrackingService} validation. */
+    /** A {@code PriceInfo} was produced but failed {@code PriceValidator} validation. */
     VALIDATION_REJECTED
 }

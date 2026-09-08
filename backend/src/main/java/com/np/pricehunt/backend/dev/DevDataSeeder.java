@@ -6,8 +6,11 @@ import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.domain.PriceRecord;
 import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.domain.TrackedItem;
+import com.np.pricehunt.backend.domain.UserProduct;
+import com.np.pricehunt.backend.repository.AppUserRepository;
 import com.np.pricehunt.backend.repository.ExchangeRateRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
+import com.np.pricehunt.backend.repository.UserProductRepository;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Clock;
@@ -120,6 +123,8 @@ public class DevDataSeeder implements CommandLineRunner {
 
     private final ProductRepository productRepository;
     private final ExchangeRateRepository exchangeRateRepository;
+    private final AppUserRepository appUserRepository;
+    private final UserProductRepository userProductRepository;
     private final Clock clock;
     private final Environment environment;
 
@@ -151,12 +156,41 @@ public class DevDataSeeder implements CommandLineRunner {
 
         int insertedRateCount = seedExchangeRates(LocalDate.ofInstant(now, ZoneOffset.UTC));
         List<Product> products = productRepository.saveAll(withoutNameClashes(fixtures(now)));
+        int membershipCount = trackForTheOwner(products);
 
         log.info(
-                "Dev seed complete: replaced {} product(s) with {}, plus {} exchange-rate row(s)",
+                "Dev seed complete: replaced {} product(s) with {}, tracked for the owner ({} membership row(s)), plus {} exchange-rate row(s)",
                 existingSeedProducts.size(),
                 products.size(),
+                membershipCount,
                 insertedRateCount);
+    }
+
+    /**
+     * The owner's account tracks every seeded product (#246): the dashboard reads through membership,
+     * so a seeded catalog nobody tracks renders empty. Only the owner's — the seeder exists for the
+     * owner's own feature testing, and other accounts (#249) must not wake up to demo data. That account
+     * is V15's bootstrap row, the lowest id. A migrated database always has it, so its absence means an
+     * unmigrated (H2 test) context: warn and seed no memberships rather than fail the boot.
+     * {@code added_at} follows the product's back-dated creation so the "recently added" order (#226) is
+     * not a tie. Cleanup needs nothing: the product delete cascades.
+     */
+    private int trackForTheOwner(List<Product> products) {
+        return appUserRepository
+                .findBootstrapAccount()
+                .map(owner -> {
+                    List<UserProduct> memberships = new ArrayList<>();
+                    products.forEach(product -> memberships.add(UserProduct.builder()
+                            .user(owner)
+                            .product(product)
+                            .addedAt(product.getCreatedAt())
+                            .build()));
+                    return userProductRepository.saveAll(memberships).size();
+                })
+                .orElseGet(() -> {
+                    log.warn("Dev seed: no app_user row — seeded products are tracked by nobody");
+                    return 0;
+                });
     }
 
     /**

@@ -18,12 +18,9 @@ import com.np.pricehunt.backend.dto.*;
 import com.np.pricehunt.backend.exception.ScrapeBlockedException;
 import com.np.pricehunt.backend.observability.ScrapeAttemptRecorder;
 import com.np.pricehunt.backend.repository.PriceRecordRepository;
-import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
-import com.np.pricehunt.backend.service.ratelimit.RefreshCooldownLimiter;
 import com.np.pricehunt.backend.validator.UrlValidator;
 import java.math.BigDecimal;
-import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
@@ -38,13 +35,10 @@ import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 
 @ExtendWith(MockitoExtension.class)
-class ProductTrackingServiceValidationTest {
+class PriceCheckPipelineValidationTest {
 
     private static final PriceTrackingProperties TRACKING_PROPERTIES =
             new PriceTrackingProperties(200, Duration.ofMinutes(1), 20);
-
-    @Mock
-    private ProductRepository productRepository;
 
     @Mock
     private TrackedItemRepository trackedItemRepository;
@@ -68,12 +62,9 @@ class ProductTrackingServiceValidationTest {
     private ShopNameAssignment shopNameAssignment;
 
     @Mock
-    private RefreshCooldownLimiter cooldownLimiter;
-
-    @Mock
     private ScrapeAttemptRecorder scrapeAttemptRecorder;
 
-    private ProductTrackingService service;
+    private PriceCheckPipeline service;
 
     private Product product;
     private TrackedItem item;
@@ -81,18 +72,14 @@ class ProductTrackingServiceValidationTest {
 
     @BeforeEach
     void setUp() {
-        service = new ProductTrackingService(
-                productRepository,
+        service = new PriceCheckPipeline(
                 trackedItemRepository,
                 priceRecordRepository,
                 extractionService,
                 scraperClient,
                 transactionTemplate,
                 urlValidator,
-                TRACKING_PROPERTIES,
                 shopNameAssignment,
-                cooldownLimiter,
-                Clock.systemUTC(),
                 scrapeAttemptRecorder,
                 new PriceValidator(TRACKING_PROPERTIES));
 
@@ -114,9 +101,6 @@ class ProductTrackingServiceValidationTest {
             TransactionCallback<?> cb = inv.getArgument(0);
             return cb.doInTransaction(null);
         });
-        when(productRepository.existsById(1L)).thenReturn(true);
-        when(productRepository.findForUpdateById(1L)).thenReturn(Optional.of(product));
-        when(trackedItemRepository.findByUrl(any())).thenReturn(Optional.of(item));
         // findById is hit only inside validateAndSavePrice — tests that short-circuit
         // before persistence (e.g. ScrapeBlockedException propagation) skip it.
         lenient().when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
@@ -136,13 +120,12 @@ class ProductTrackingServiceValidationTest {
             return r;
         });
 
-        TrackResponse response = service.trackUrl(1L, new TrackRequest("https://example.com/item"));
+        TrackResponse response = service.checkPrice(1L, "https://example.com/item", false);
 
         assertThat(response.currentPrice()).isEqualTo("100.0000");
         verify(priceRecordRepository).save(any());
-        // trackUrl is first-time tracking, not a refresh — the cooldown limiter must not apply. A
-        // successful track must NOT record a scrape_attempt (failure-first; #131).
-        verifyNoInteractions(cooldownLimiter, scrapeAttemptRecorder);
+        // A successful check must NOT record a scrape_attempt (failure-first; #131).
+        verifyNoInteractions(scrapeAttemptRecorder);
     }
 
     @Test
@@ -158,7 +141,7 @@ class ProductTrackingServiceValidationTest {
             return r;
         });
 
-        service.trackUrl(1L, new TrackRequest("https://example.com/item"));
+        service.checkPrice(1L, "https://example.com/item", false);
 
         ArgumentCaptor<PriceRecord> captor = ArgumentCaptor.forClass(PriceRecord.class);
         verify(priceRecordRepository).save(captor.capture());
@@ -173,7 +156,7 @@ class ProductTrackingServiceValidationTest {
                 .thenReturn(
                         new PriceInfo(BigDecimal.ZERO, "USD", AvailabilityStatus.AVAILABLE, ExtractionSource.FULLTEXT));
 
-        service.trackUrl(1L, new TrackRequest("https://example.com/item"));
+        service.checkPrice(1L, "https://example.com/item", false);
 
         verify(priceRecordRepository, never()).save(any());
         // A rejected price records a VALIDATION_REJECTED scrape_attempt with the precise code (#131).
@@ -193,7 +176,7 @@ class ProductTrackingServiceValidationTest {
                 .thenReturn(new PriceInfo(
                         new BigDecimal("0.00004"), "USD", AvailabilityStatus.AVAILABLE, ExtractionSource.FULLTEXT));
 
-        service.trackUrl(1L, new TrackRequest("https://example.com/item"));
+        service.checkPrice(1L, "https://example.com/item", false);
 
         verify(priceRecordRepository, never()).save(any());
         verify(scrapeAttemptRecorder)
@@ -219,7 +202,7 @@ class ProductTrackingServiceValidationTest {
             return r;
         });
 
-        service.trackUrl(1L, new TrackRequest("https://example.com/item"));
+        service.checkPrice(1L, "https://example.com/item", false);
 
         ArgumentCaptor<PriceRecord> captor = ArgumentCaptor.forClass(PriceRecord.class);
         verify(priceRecordRepository).save(captor.capture());
@@ -234,7 +217,7 @@ class ProductTrackingServiceValidationTest {
                 .thenReturn(new PriceInfo(
                         new BigDecimal("-5.00"), "USD", AvailabilityStatus.AVAILABLE, ExtractionSource.FULLTEXT));
 
-        service.trackUrl(1L, new TrackRequest("https://example.com/item"));
+        service.checkPrice(1L, "https://example.com/item", false);
 
         verify(priceRecordRepository, never()).save(any());
     }
@@ -247,7 +230,7 @@ class ProductTrackingServiceValidationTest {
                 .thenReturn(new PriceInfo(
                         new BigDecimal("100.00"), null, AvailabilityStatus.AVAILABLE, ExtractionSource.FULLTEXT));
 
-        service.trackUrl(1L, new TrackRequest("https://example.com/item"));
+        service.checkPrice(1L, "https://example.com/item", false);
 
         verify(priceRecordRepository, never()).save(any());
     }
@@ -261,7 +244,7 @@ class ProductTrackingServiceValidationTest {
                 .thenReturn(new PriceInfo(
                         new BigDecimal("105.00"), null, AvailabilityStatus.AVAILABLE, ExtractionSource.FULLTEXT));
 
-        service.trackUrl(1L, new TrackRequest("https://example.com/item"));
+        service.checkPrice(1L, "https://example.com/item", false);
 
         verify(priceRecordRepository, never()).save(any());
     }
@@ -280,7 +263,7 @@ class ProductTrackingServiceValidationTest {
             return r;
         });
 
-        TrackResponse response = service.trackUrl(1L, new TrackRequest("https://example.com/item"));
+        TrackResponse response = service.checkPrice(1L, "https://example.com/item", false);
 
         verify(priceRecordRepository).save(any());
         assertThat(response.currency()).isEqualTo("EUR");
@@ -300,7 +283,7 @@ class ProductTrackingServiceValidationTest {
             return r;
         });
 
-        service.trackUrl(1L, new TrackRequest("https://example.com/item"));
+        service.checkPrice(1L, "https://example.com/item", false);
 
         verify(priceRecordRepository).save(any());
     }
@@ -315,7 +298,7 @@ class ProductTrackingServiceValidationTest {
                 .thenReturn(new PriceInfo(
                         new BigDecimal("400.00"), "USD", AvailabilityStatus.AVAILABLE, ExtractionSource.FULLTEXT));
 
-        service.trackUrl(1L, new TrackRequest("https://example.com/item"));
+        service.checkPrice(1L, "https://example.com/item", false);
 
         verify(priceRecordRepository, never()).save(any());
     }
@@ -330,7 +313,7 @@ class ProductTrackingServiceValidationTest {
                 .thenReturn(new PriceInfo(
                         new BigDecimal("10.00"), "USD", AvailabilityStatus.AVAILABLE, ExtractionSource.FULLTEXT));
 
-        service.trackUrl(1L, new TrackRequest("https://example.com/item"));
+        service.checkPrice(1L, "https://example.com/item", false);
 
         verify(priceRecordRepository, never()).save(any());
     }
@@ -348,7 +331,7 @@ class ProductTrackingServiceValidationTest {
         String reason = "cloudflare-managed:cf-ray=9fcfc0abcd123456-TLV";
         when(extractionService.extractPrice(scrapeResponse)).thenThrow(new ScrapeBlockedException(reason));
 
-        assertThatThrownBy(() -> service.trackUrl(1L, new TrackRequest("https://example.com/item")))
+        assertThatThrownBy(() -> service.checkPrice(1L, "https://example.com/item", false))
                 .isInstanceOf(ScrapeBlockedException.class)
                 .hasMessageContaining(reason);
 
@@ -368,7 +351,7 @@ class ProductTrackingServiceValidationTest {
                 .when(scrapeAttemptRecorder)
                 .recordExtractionFailure(any(), any(), any(), any());
 
-        assertThatThrownBy(() -> service.trackUrl(1L, new TrackRequest("https://example.com/item")))
+        assertThatThrownBy(() -> service.checkPrice(1L, "https://example.com/item", false))
                 .isInstanceOf(ScrapeBlockedException.class)
                 .hasMessageContaining(reason);
 
@@ -385,7 +368,7 @@ class ProductTrackingServiceValidationTest {
                 .thenReturn(Optional.of(previous));
         when(scraperClient.scrape(any())).thenReturn(null);
 
-        TrackResponse response = service.trackUrl(1L, new TrackRequest("https://example.com/item"));
+        TrackResponse response = service.checkPrice(1L, "https://example.com/item", false);
 
         verify(priceRecordRepository, never()).save(any());
         assertThat(response.currentPrice()).isEqualTo("99.0000");

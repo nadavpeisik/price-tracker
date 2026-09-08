@@ -1,21 +1,13 @@
 package com.np.pricehunt.backend.service.trend;
 
 import com.np.pricehunt.backend.config.PriceTrendProperties;
-import com.np.pricehunt.backend.domain.Product;
-import com.np.pricehunt.backend.domain.TrackedItem;
-import com.np.pricehunt.backend.dto.BestOfferResponse;
-import com.np.pricehunt.backend.dto.PriceTrendResponse;
-import com.np.pricehunt.backend.dto.TrendPointResponse;
-import com.np.pricehunt.backend.exception.NotFoundException;
 import com.np.pricehunt.backend.exception.ValidationException;
 import com.np.pricehunt.backend.repository.PriceRecordRepository;
-import com.np.pricehunt.backend.repository.ProductRepository;
-import com.np.pricehunt.backend.repository.TrackedItemRepository;
+import com.np.pricehunt.backend.repository.projection.DashboardListingRef;
 import com.np.pricehunt.backend.repository.projection.TrendRecordView;
 import com.np.pricehunt.backend.service.fx.HistoricalRateRequirements;
 import com.np.pricehunt.backend.service.fx.HistoricalRateWindow;
 import com.np.pricehunt.backend.service.fx.HistoricalRateWindowLoader;
-import com.np.pricehunt.backend.util.WireMoney;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -40,6 +32,10 @@ import org.springframework.transaction.annotation.Transactional;
  * <p>Deliberately batch-first: {@link #computeProductTrends} takes many products and issues <b>one</b>
  * price query and <b>one</b> rate-window load for the whole set, so the dashboard query endpoint (#146)
  * can call it per page without an N+1. The single-product endpoint is just a batch of one.
+ *
+ * <p>An engine, not a user-facing service (#246): it takes listing refs the tenancy port already
+ * resolved and never asks who the caller is, so the id-bounded price query below is scoped by
+ * construction — the ids entering it came through membership.
  */
 @Slf4j
 @Service
@@ -47,28 +43,11 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class PriceTrendService {
 
-    private final ProductRepository productRepository;
-    private final TrackedItemRepository trackedItemRepository;
     private final PriceRecordRepository priceRecordRepository;
     private final HistoricalRateWindowLoader rateWindowLoader;
     private final PriceTrendCalculator calculator;
     private final PriceTrendProperties trendProperties;
     private final Clock clock;
-
-    /**
-     * @param days sparkline window; null falls back to the configured default
-     * @param displayCurrency must already be validated by the caller (the controller does this)
-     */
-    public PriceTrendResponse getProductTrend(Long productId, Integer days, String displayCurrency) {
-        Product product =
-                productRepository.findById(productId).orElseThrow(() -> new NotFoundException("Product not found"));
-
-        List<TrackedItem> listings = trackedItemRepository.findByProduct(product);
-        ProductTrend trend = computeProductTrends(Map.of(product.getId(), listings), days, displayCurrency)
-                .getOrDefault(product.getId(), ProductTrend.empty());
-
-        return toResponse(product.getId(), displayCurrency, trend);
-    }
 
     /**
      * Computes trends for every product in {@code listingsByProductId}.
@@ -84,7 +63,7 @@ public class PriceTrendService {
      * @param displayCurrency must already be validated by the caller
      */
     public Map<Long, ProductTrend> computeProductTrends(
-            Map<Long, List<TrackedItem>> listingsByProductId, Integer days, String displayCurrency) {
+            Map<Long, List<DashboardListingRef>> listingsByProductId, Integer days, String displayCurrency) {
         return computeProductTrendsAsOf(listingsByProductId, days, displayCurrency, clock.instant());
     }
 
@@ -99,7 +78,7 @@ public class PriceTrendService {
      *     #computeProductTrends(Map, Integer, String)} instead
      */
     public Map<Long, ProductTrend> computeProductTrendsAsOf(
-            Map<Long, List<TrackedItem>> listingsByProductId,
+            Map<Long, List<DashboardListingRef>> listingsByProductId,
             Integer days,
             String displayCurrency,
             Instant asOfInstant) {
@@ -121,7 +100,7 @@ public class PriceTrendService {
         Set<Long> listingIds = listingsByProductId.values().stream()
                 .filter(Objects::nonNull)
                 .flatMap(List::stream)
-                .map(TrackedItem::getId)
+                .map(DashboardListingRef::trackedItemId)
                 .collect(Collectors.toSet());
 
         Map<Long, List<TrendRecordView>> recordsByListingId =
@@ -142,12 +121,12 @@ public class PriceTrendService {
 
         Map<Long, ProductTrend> trendsByProductId = new LinkedHashMap<>();
         listingsByProductId.forEach((productId, listings) -> {
-            List<ListingWindow> listingWindows = (listings == null ? List.<TrackedItem>of() : listings)
+            List<ListingWindow> listingWindows = (listings == null ? List.<DashboardListingRef>of() : listings)
                     .stream()
                             .map(listing -> new ListingWindow(
-                                    listing.getId(),
-                                    listing.getShopName(),
-                                    recordsByListingId.getOrDefault(listing.getId(), List.of())))
+                                    listing.trackedItemId(),
+                                    listing.shopName(),
+                                    recordsByListingId.getOrDefault(listing.trackedItemId(), List.of())))
                             .toList();
             trendsByProductId.put(
                     productId,
@@ -189,24 +168,5 @@ public class PriceTrendService {
             return trendProperties.maxWindowDays();
         }
         return days;
-    }
-
-    private static PriceTrendResponse toResponse(Long productId, String displayCurrency, ProductTrend trend) {
-        List<TrendPointResponse> sparkline = trend.points().stream()
-                .map(point -> new TrendPointResponse(
-                        point.t(),
-                        WireMoney.decimalString(point.price()),
-                        new BestOfferResponse(
-                                point.bestOffer().trackedItemId(),
-                                point.bestOffer().shopName(),
-                                point.bestOffer().observedAt())))
-                .toList();
-        return new PriceTrendResponse(
-                productId,
-                displayCurrency,
-                trend.delta7d(),
-                trend.conversionAsOf(),
-                trend.conversionStale(),
-                sparkline);
     }
 }

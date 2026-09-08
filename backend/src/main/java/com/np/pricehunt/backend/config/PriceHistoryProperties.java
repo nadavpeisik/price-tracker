@@ -6,7 +6,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 import org.springframework.validation.annotation.Validated;
 
 /**
- * Configuration for {@link com.np.pricehunt.backend.service.ProductQueryService}'s price-history
+ * Configuration for {@link com.np.pricehunt.backend.service.TrackedProductQueryService}'s price-history
  * queries.
  *
  * <p>{@code defaultWindowDays} is the look-back window applied when a history request omits an

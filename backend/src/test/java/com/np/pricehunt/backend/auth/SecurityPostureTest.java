@@ -270,6 +270,31 @@ class SecurityPostureTest {
     }
 
     @Test
+    void catalogMutation_isAdminOnly_userGets403_adminPassesTheGate() throws Exception {
+        // PATCH and DELETE on /api/products/** change the shared catalog row for every user (#246), so
+        // an admitted non-admin is refused at the chain; an admitted admin reaches the service, which
+        // 404s the unknown id. A user's own removal is DELETE /api/tracked-products/{id}, ungated.
+        for (Route route : List.of(
+                new Route(HttpMethod.PATCH, "/api/products/999999"),
+                new Route(HttpMethod.DELETE, "/api/products/999999"),
+                new Route(HttpMethod.DELETE, "/api/products/999999/tracked-items/1"))) {
+            mvc.perform(route.request()
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"name\":\"x\"}")
+                            .header(HttpHeaders.AUTHORIZATION, bearer(IDP.userToken())))
+                    .andExpect(status().isForbidden())
+                    .andExpect(content().contentTypeCompatibleWith(PROBLEM_JSON))
+                    .andExpect(header().string(
+                                    HttpHeaders.WWW_AUTHENTICATE, startsWith("Bearer error=\"insufficient_scope\"")));
+            mvc.perform(route.request()
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"name\":\"x\"}")
+                            .header(HttpHeaders.AUTHORIZATION, bearer(IDP.adminToken())))
+                    .andExpect(status().isNotFound());
+        }
+    }
+
+    @Test
     void rejection_stillCarriesTheCorrelationId() throws Exception {
         // CorrelationIdFilter runs ahead of the security chain, so even a 401 is traceable.
         mvc.perform(get("/api/products/1").header("X-Correlation-ID", "posture-test"))

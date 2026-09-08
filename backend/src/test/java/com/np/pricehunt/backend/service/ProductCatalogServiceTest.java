@@ -5,15 +5,19 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
+import com.np.pricehunt.backend.config.PriceTrackingProperties;
 import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.domain.TrackedItem;
 import com.np.pricehunt.backend.dto.CreateProductRequest;
 import com.np.pricehunt.backend.dto.ProductResponse;
 import com.np.pricehunt.backend.dto.UpdateProductRequest;
+import com.np.pricehunt.backend.exception.ConflictException;
+import com.np.pricehunt.backend.exception.ErrorCode;
 import com.np.pricehunt.backend.exception.NotFoundException;
 import com.np.pricehunt.backend.exception.ValidationException;
 import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
+import java.time.Duration;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -23,6 +27,9 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 @ExtendWith(MockitoExtension.class)
 class ProductCatalogServiceTest {
+
+    private static final PriceTrackingProperties TRACKING_PROPERTIES =
+            new PriceTrackingProperties(200, Duration.ofMinutes(1), 20);
 
     @Mock
     private ProductRepository productRepository;
@@ -37,7 +44,7 @@ class ProductCatalogServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new ProductCatalogService(productRepository, trackedItemRepository);
+        service = new ProductCatalogService(productRepository, trackedItemRepository, TRACKING_PROPERTIES);
         product = Product.builder().id(1L).name("Laptop").build();
         item = TrackedItem.builder()
                 .id(1L)
@@ -215,6 +222,85 @@ class ProductCatalogServiceTest {
         assertThatThrownBy(() -> service.updateProduct(1L, new UpdateProductRequest(null, null)))
                 .isInstanceOf(ValidationException.class);
 
+        verify(productRepository, never()).findById(any());
+    }
+
+    // --- admitListing (#146 cap; moved here from the tracking service in #246) ---
+
+    @Test
+    void admitListing_newUrlAtListingCap_returns409_withoutSaving() {
+        when(productRepository.findForUpdateById(1L)).thenReturn(Optional.of(product));
+        when(trackedItemRepository.findByUrl("https://amazon.com/dp/2")).thenReturn(Optional.empty());
+        when(trackedItemRepository.countByProduct(product)).thenReturn(20L);
+
+        assertThatThrownBy(() -> service.admitListing(1L, "https://amazon.com/dp/2"))
+                .isInstanceOfSatisfying(ConflictException.class, e -> assertThat(e.errorCode())
+                        .isEqualTo(ErrorCode.PRODUCT_LISTING_LIMIT_REACHED));
+
+        verify(trackedItemRepository, never()).save(any());
+    }
+
+    @Test
+    void admitListing_urlOwnedByAnotherProduct_returns409_withItsOwnCode() {
+        // Same status as the listing cap, different remedy — the code is what tells them apart (#173).
+        Product other = Product.builder().id(2L).name("Other").build();
+        TrackedItem theirs = TrackedItem.builder()
+                .id(7L)
+                .url("https://amazon.com/dp/2")
+                .product(other)
+                .build();
+        when(productRepository.findForUpdateById(1L)).thenReturn(Optional.of(product));
+        when(trackedItemRepository.findByUrl("https://amazon.com/dp/2")).thenReturn(Optional.of(theirs));
+
+        assertThatThrownBy(() -> service.admitListing(1L, "https://amazon.com/dp/2"))
+                .isInstanceOfSatisfying(ConflictException.class, e -> assertThat(e.errorCode())
+                        .isEqualTo(ErrorCode.URL_TRACKED_BY_ANOTHER_PRODUCT));
+
+        verify(trackedItemRepository, never()).save(any());
+    }
+
+    @Test
+    void admitListing_existingUrlAtListingCap_isUnaffected() {
+        // Re-tracking a URL the product already has admits no new listing, so the cap must not fire.
+        when(productRepository.findForUpdateById(1L)).thenReturn(Optional.of(product));
+        when(trackedItemRepository.findByUrl(item.getUrl())).thenReturn(Optional.of(item));
+
+        assertThat(service.admitListing(1L, item.getUrl())).isEqualTo(1L);
+        verify(trackedItemRepository, never()).countByProduct(any());
+        verify(trackedItemRepository, never()).save(any());
+    }
+
+    @Test
+    void admitListing_newUrl_savesUnderTheLockedProduct() {
+        when(productRepository.findForUpdateById(1L)).thenReturn(Optional.of(product));
+        when(trackedItemRepository.findByUrl("https://amazon.com/dp/2")).thenReturn(Optional.empty());
+        when(trackedItemRepository.countByProduct(product)).thenReturn(3L);
+        when(trackedItemRepository.save(any())).thenAnswer(inv -> {
+            TrackedItem saved = inv.getArgument(0);
+            saved.setId(9L);
+            return saved;
+        });
+
+        assertThat(service.admitListing(1L, "https://amazon.com/dp/2")).isEqualTo(9L);
+        // The lock is what serializes admission; a plain findById would leave the count-then-insert
+        // racing a concurrent track of the same product.
+        verify(productRepository).findForUpdateById(1L);
+        verify(productRepository, never()).findById(1L);
+    }
+
+    @Test
+    void admitListing_unknownProduct_throwsNotFound() {
+        when(productRepository.findForUpdateById(99L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.admitListing(99L, "https://amazon.com/dp/2"))
+                .isInstanceOf(NotFoundException.class);
+    }
+
+    @Test
+    void productExists_delegatesToTheCheapExistenceQuery() {
+        when(productRepository.existsById(1L)).thenReturn(true);
+
+        assertThat(service.productExists(1L)).isTrue();
         verify(productRepository, never()).findById(any());
     }
 }

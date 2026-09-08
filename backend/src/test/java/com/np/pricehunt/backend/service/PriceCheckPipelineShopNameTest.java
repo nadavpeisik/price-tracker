@@ -11,14 +11,10 @@ import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.domain.TrackedItem;
 import com.np.pricehunt.backend.dto.ScrapeResponse;
-import com.np.pricehunt.backend.dto.TrackRequest;
 import com.np.pricehunt.backend.observability.ScrapeAttemptRecorder;
 import com.np.pricehunt.backend.repository.PriceRecordRepository;
-import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
-import com.np.pricehunt.backend.service.ratelimit.RefreshCooldownLimiter;
 import com.np.pricehunt.backend.validator.UrlValidator;
-import java.time.Clock;
 import java.time.Duration;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
@@ -33,15 +29,12 @@ import org.springframework.transaction.support.TransactionTemplate;
 // it unless the URL name was curated, and name-before-price ordering. The assignment's own choreography
 // is covered by ShopNameAssignmentTest.
 @ExtendWith(MockitoExtension.class)
-class ProductTrackingServiceShopNameTest {
+class PriceCheckPipelineShopNameTest {
 
     private static final PriceTrackingProperties TRACKING_PROPERTIES =
             new PriceTrackingProperties(200, Duration.ofMinutes(1), 20);
 
     private static final String URL = "https://thomannmusic.com/x.htm";
-
-    @Mock
-    private ProductRepository productRepository;
 
     @Mock
     private TrackedItemRepository trackedItemRepository;
@@ -65,43 +58,33 @@ class ProductTrackingServiceShopNameTest {
     private ShopNameAssignment shopNameAssignment;
 
     @Mock
-    private RefreshCooldownLimiter cooldownLimiter;
-
-    @Mock
     private ScrapeAttemptRecorder scrapeAttemptRecorder;
 
-    private ProductTrackingService service;
+    private PriceCheckPipeline service;
     private TrackedItem item;
 
     @BeforeEach
     void setUp() {
-        service = new ProductTrackingService(
-                productRepository,
+        service = new PriceCheckPipeline(
                 trackedItemRepository,
                 priceRecordRepository,
                 extractionService,
                 scraperClient,
                 transactionTemplate,
                 urlValidator,
-                TRACKING_PROPERTIES,
                 shopNameAssignment,
-                cooldownLimiter,
-                Clock.systemUTC(),
                 scrapeAttemptRecorder,
                 new PriceValidator(TRACKING_PROPERTIES));
 
         Product product = Product.builder().id(1L).name("P").build();
         item = TrackedItem.builder().id(1L).url(URL).product(product).build();
-
-        when(transactionTemplate.execute(any()))
-                .thenAnswer(inv -> ((TransactionCallback<?>) inv.getArgument(0)).doInTransaction(null));
-        when(productRepository.existsById(1L)).thenReturn(true);
-        when(productRepository.findForUpdateById(1L)).thenReturn(Optional.of(product));
-        when(trackedItemRepository.findByUrl(any())).thenReturn(Optional.of(item));
     }
 
-    // The persist step reads the latest price; "no history" means no PriceRecord is saved.
+    // The persist step reads the latest price; "no history" means no PriceRecord is saved. Only checks
+    // that reach persistence open the transaction — an extraction failure throws before it.
     private void stubPersistReadsEmpty() {
+        when(transactionTemplate.execute(any()))
+                .thenAnswer(inv -> ((TransactionCallback<?>) inv.getArgument(0)).doInTransaction(null));
         when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(item));
         when(priceRecordRepository.findFirstByTrackedItemOrderByObservedAtDesc(any()))
                 .thenReturn(Optional.empty());
@@ -125,7 +108,7 @@ class ProductTrackingServiceShopNameTest {
         when(extractionService.extractPrice(any())).thenReturn(null);
         stubPersistReadsEmpty();
 
-        service.trackUrl(1L, new TrackRequest(URL));
+        service.checkPrice(1L, URL, false);
 
         var order = inOrder(shopNameAssignment, scraperClient);
         order.verify(shopNameAssignment).applyNameFromUrl(1L, URL);
@@ -141,7 +124,7 @@ class ProductTrackingServiceShopNameTest {
         when(extractionService.extractPrice(any())).thenReturn(null);
         stubPersistReadsEmpty();
 
-        service.trackUrl(1L, new TrackRequest(URL));
+        service.checkPrice(1L, URL, false);
 
         verify(shopNameAssignment, never()).applyNameFromPage(any(), any(), any());
     }
@@ -152,7 +135,7 @@ class ProductTrackingServiceShopNameTest {
         when(scraperClient.scrape(URL)).thenReturn(null);
         stubPersistReadsEmpty();
 
-        service.trackUrl(1L, new TrackRequest(URL));
+        service.checkPrice(1L, URL, false);
 
         verify(shopNameAssignment).applyNameFromUrl(1L, URL);
         verify(shopNameAssignment, never()).applyNameFromPage(any(), any(), any());
@@ -164,7 +147,7 @@ class ProductTrackingServiceShopNameTest {
         when(scraperClient.scrape(URL)).thenReturn(scrapeWithProposal("Musikhaus Thomann", true));
         when(extractionService.extractPrice(any())).thenThrow(new RuntimeException("LLM blew up"));
 
-        assertThatThrownBy(() -> service.trackUrl(1L, new TrackRequest(URL))).isInstanceOf(RuntimeException.class);
+        assertThatThrownBy(() -> service.checkPrice(1L, URL, false)).isInstanceOf(RuntimeException.class);
 
         // Both name steps ran before extraction threw — a price failure never loses the name.
         verify(shopNameAssignment).applyNameFromUrl(1L, URL);

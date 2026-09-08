@@ -100,7 +100,9 @@ never-checked, gone-cold, mixed ILS/USD, a case-variant shop spelling, and a
 product with no listings — plus 35 days of exchange rates. It is safe to
 re-run (it replaces only its own `[dev-seed]` rows and never deletes real
 FX data), and its `*.seed.invalid` URLs are blocklisted so the scheduler
-never scrapes them. Ollama is not needed for it.
+never scrapes them. The demo products are tracked for the owner's account
+only (the bootstrap `app_user` row, #246) — other accounts do not see them.
+Ollama is not needed for it.
 
 The `seed-clean` profile is the way back out (issue #212). Turning the `seed`
 profile off does **not** remove the demo data — the purge runs only on a boot
@@ -152,7 +154,8 @@ login flow (#247/#248) lands.
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/tracked-products` | The dashboard in one call: a page of products with best price, availability rollup, 7-day delta and sparkline, plus global shop facets and summary tiles. Query params: `?search`, repeated `?shops=`, `?sort=` (`name` \| `lowestCurrentPrice` \| `biggest7dDrop`), `?page` (**1-based**), `?size`, `?displayCurrency` |
+| `GET` | `/api/tracked-products` | The caller's dashboard in one call: a page of the products they track with best price, availability rollup, 7-day delta and sparkline, plus shop facets and summary tiles over that set. Query params: `?search`, repeated `?shops=`, `?sort=` (`name` \| `lowestCurrentPrice` \| `biggest7dDrop`), `?page` (**1-based**), `?size`, `?displayCurrency` |
+| `DELETE` | `/api/tracked-products/{productId}` | Stop tracking a product: removes the caller's membership only (the shared catalog row stays); 404 if the caller never tracked it |
 
 ### Products
 
@@ -160,14 +163,14 @@ Base path: `/api/products`
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/` | Create a product |
-| `GET` | `/{id}` | Get product detail with tracked items |
-| `PATCH` | `/{id}` | Update product fields |
-| `DELETE` | `/{id}` | Delete a product and all its tracked items |
-| `POST` | `/{id}/track` | Attach a URL to a product and run an initial scrape |
-| `POST` | `/{id}/tracked-items/{itemId}/refresh` | Re-scrape a tracked URL and append a new PriceRecord |
-| `DELETE` | `/{id}/tracked-items/{itemId}` | Remove a tracked URL |
-| `GET` | `/{id}/tracked-items/{itemId}/price-history` | Price history with optional `?from`/`?to` ISO timestamps |
+| `POST` | `/` | Create a product; the caller tracks it |
+| `GET` | `/{id}` | Get product detail with tracked items (404 unless the caller tracks it) |
+| `PATCH` | `/{id}` | Update product fields — **admin only** (the row is shared) |
+| `DELETE` | `/{id}` | Delete a product and all its tracked items for everyone — **admin only** |
+| `POST` | `/{id}/track` | Attach a URL to a product (any existing product — the catalog is shared), track the product for the caller, and run an initial scrape |
+| `POST` | `/{id}/tracked-items/{itemId}/refresh` | Re-scrape a tracked URL and append a new PriceRecord (404 unless the caller tracks the product) |
+| `DELETE` | `/{id}/tracked-items/{itemId}` | Remove a tracked URL from the catalog — **admin only**; users stop tracking the product instead |
+| `GET` | `/{id}/tracked-items/{itemId}/price-history` | Price history with optional `?from`/`?to` ISO timestamps (404 unless the caller tracks the product) |
 
 ## Tech stack
 

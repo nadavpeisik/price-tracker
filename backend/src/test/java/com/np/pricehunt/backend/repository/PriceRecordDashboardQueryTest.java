@@ -72,7 +72,15 @@ class PriceRecordDashboardQueryTest {
     private TestEntityManager em;
 
     private List<CutoffObservationRow> query() {
-        return repository.findCutoffObservations(CURRENT_FLOOR, AS_OF, BASELINE_FLOOR, BASELINE_CUTOFF);
+        return repository.findCutoffObservations(
+                everyListingId(), CURRENT_FLOOR, AS_OF, BASELINE_FLOOR, BASELINE_CUTOFF);
+    }
+
+    /** Production passes the caller's listing ids (#246); the whole table stands in for "every product tracked". */
+    private List<Long> everyListingId() {
+        return em.getEntityManager()
+                .createQuery("SELECT t.id FROM TrackedItem t", Long.class)
+                .getResultList();
     }
 
     @Test

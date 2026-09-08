@@ -5,7 +5,7 @@ import com.np.pricehunt.backend.domain.JobStatus;
 import com.np.pricehunt.backend.observability.JobRunRecorder;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
 import com.np.pricehunt.backend.repository.projection.TrackedItemRefreshView;
-import com.np.pricehunt.backend.service.ProductTrackingService;
+import com.np.pricehunt.backend.service.PriceCheckPipeline;
 import com.np.pricehunt.backend.util.Throwables;
 import com.np.pricehunt.backend.util.Timing;
 import com.np.pricehunt.backend.validator.UrlValidator;
@@ -27,7 +27,7 @@ public class PriceCheckScheduler {
 
     public static final String JOB_NAME = "PRICE_REFRESH";
 
-    private final ProductTrackingService trackingService;
+    private final PriceCheckPipeline pipeline;
     private final TrackedItemRepository trackedItemRepository;
     private final JobRunRecorder jobRunRecorder;
     private final PriceSchedulerProperties schedulerProperties;
@@ -73,7 +73,7 @@ public class PriceCheckScheduler {
                     JobStatus itemStatus;
                     String itemError = null;
                     try {
-                        trackingService.scheduledRefresh(item);
+                        pipeline.scheduledRefresh(item);
                         itemStatus = JobStatus.SUCCESS;
                         success++;
                     } catch (Exception e) {

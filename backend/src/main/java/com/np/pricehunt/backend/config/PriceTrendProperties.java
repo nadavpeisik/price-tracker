@@ -11,7 +11,7 @@ import org.springframework.validation.annotation.Validated;
  *
  * <p>{@code defaultWindowDays} is the sparkline window applied when a request omits {@code days};
  * {@code maxWindowDays} is the absolute ceiling a request can be clamped to, mirroring the two-year
- * clamp {@link com.np.pricehunt.backend.service.ProductQueryService} already applies to raw price
+ * clamp {@link com.np.pricehunt.backend.service.TrackedProductQueryService} already applies to raw price
  * history.
  *
  * <p>{@code carryForwardDays} is the freshness TTL: a listing's last observed price keeps counting

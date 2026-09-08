@@ -16,7 +16,7 @@ import java.time.Instant;
  * <p>The observation columns are <b>raw and nullable</b>: a listing that has never been scraped, or
  * has no record at or before the reference instant, still appears (that is what the outer join is
  * for) with {@code price}, {@code currency}, {@code availability} and {@code observedAt} all null.
- * The row carries no freshness judgement — {@code ProductQueryService} applies the carry-forward rule
+ * The row carries no freshness judgement — {@code TrackedProductQueryService} applies the carry-forward rule
  * for the listings panel and deliberately does not for the product detail.
  */
 public interface ListingLatestObservationRow {

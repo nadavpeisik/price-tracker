@@ -35,14 +35,14 @@ import java.util.function.Consumer;
  * {@code @AfterAll}. Virtual threads, so the deliberately slow {@code /jwks/slow} path cannot block the
  * healthy one.
  */
-final class FakeIdentityProvider {
+public final class FakeIdentityProvider {
 
     /** Matches the shadow {@code issuer-uri} in {@code application-test.properties}. */
-    static final String ISSUER = "https://test-issuer.invalid/";
+    public static final String ISSUER = "https://test-issuer.invalid/";
 
     static final String AUDIENCE = "pricehunt-api";
     static final String ROLES_CLAIM = "https://pricehunt.app/roles";
-    static final String DEFAULT_SUB = "auth0|test-user";
+    public static final String DEFAULT_SUB = "auth0|test-user";
     static final String KEY_ID = "test-key";
 
     private final RSAKey key;
@@ -53,7 +53,7 @@ final class FakeIdentityProvider {
         this.server = server;
     }
 
-    static FakeIdentityProvider start() {
+    public static FakeIdentityProvider start() {
         try {
             KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
             generator.initialize(2048);
@@ -99,11 +99,11 @@ final class FakeIdentityProvider {
         }
     }
 
-    void stop() {
+    public void stop() {
         server.stop(0);
     }
 
-    String jwkSetUri() {
+    public String jwkSetUri() {
         return "http://127.0.0.1:" + server.getAddress().getPort() + "/jwks";
     }
 
@@ -135,7 +135,7 @@ final class FakeIdentityProvider {
         return token(claims -> {});
     }
 
-    String userToken(String sub) {
+    public String userToken(String sub) {
         return token(claims -> claims.subject(sub));
     }
 
@@ -143,7 +143,7 @@ final class FakeIdentityProvider {
         return token(claims -> claims.claim(ROLES_CLAIM, List.of("ADMIN")));
     }
 
-    String adminToken(String sub) {
+    public String adminToken(String sub) {
         return token(claims -> claims.subject(sub).claim(ROLES_CLAIM, List.of("ADMIN")));
     }
 
