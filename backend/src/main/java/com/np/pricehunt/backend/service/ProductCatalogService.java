@@ -28,8 +28,6 @@ import org.springframework.util.StringUtils;
 @RequiredArgsConstructor
 public class ProductCatalogService {
 
-    private static final String PRODUCT_NOT_FOUND = "Product not found";
-
     private final ProductRepository productRepository;
     private final TrackedItemRepository trackedItemRepository;
     private final PriceTrackingProperties trackingProperties;
@@ -64,7 +62,7 @@ public class ProductCatalogService {
     public Long admitListing(Long productId, String url) {
         Product product = productRepository
                 .findForUpdateById(productId)
-                .orElseThrow(() -> new NotFoundException(PRODUCT_NOT_FOUND));
+                .orElseThrow(() -> new NotFoundException("Product not found"));
         TrackedItem item = trackedItemRepository
                 .findByUrl(url)
                 .map(existing -> {
@@ -99,7 +97,7 @@ public class ProductCatalogService {
             throw new ValidationException("Name cannot be blank");
         }
 
-        Product product = productRepository.findById(id).orElseThrow(() -> new NotFoundException(PRODUCT_NOT_FOUND));
+        Product product = productRepository.findById(id).orElseThrow(() -> new NotFoundException("Product not found"));
 
         if (StringUtils.hasText(request.name())) {
             product.setName(request.name().strip());
@@ -127,7 +125,7 @@ public class ProductCatalogService {
     /** Admin only: removes the catalog row for everyone; the database cascades memberships (V17). */
     @Transactional
     public void deleteProduct(Long id) {
-        Product product = productRepository.findById(id).orElseThrow(() -> new NotFoundException(PRODUCT_NOT_FOUND));
+        Product product = productRepository.findById(id).orElseThrow(() -> new NotFoundException("Product not found"));
         productRepository.delete(product);
     }
 

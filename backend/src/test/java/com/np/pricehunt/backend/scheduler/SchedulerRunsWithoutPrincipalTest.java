@@ -2,6 +2,8 @@ package com.np.pricehunt.backend.scheduler;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.np.pricehunt.backend.client.ScraperClient;
@@ -148,9 +150,15 @@ class SchedulerRunsWithoutPrincipalTest {
     }
 
     @Test
-    void fxRefresh_withNoPrincipal_runs() {
+    void fxRefresh_withNoPrincipal_reachesTheRateProvider() {
         assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+        // The startup refresh has already called the provider; only this run's call may count. Without
+        // the verify below the test passes vacuously — scheduledRefresh() returns early, before
+        // refresh(), if JobRunRecorder.start() throws.
+        clearInvocations(rateProvider);
 
         rateRefreshScheduler.scheduledRefresh();
+
+        verify(rateProvider).fetchLatest();
     }
 }

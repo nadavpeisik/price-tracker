@@ -196,6 +196,41 @@ class TenancyRouteMatrixTest {
                 .andExpect(jsonPath("$.name").value("Dyson V15"));
     }
 
+    /**
+     * The rule #246 actually promises is not "a foreign product 404s" but "a foreign product is
+     * indistinguishable from one that was never there". A 404 whose body varied by cause would answer
+     * the question the status code refuses to. What keeps them identical is the port collapsing both
+     * into one empty result before any service sees them — so this compares whole response bodies
+     * rather than pinning the prose, and would fail the day a service starts explaining itself.
+     */
+    @Test
+    void aForeignProductAndANonexistentOneAreObservablyIdentical() throws Exception {
+        long foreign = p3BobOnly.getId();
+        long nonexistent = 999_999L;
+        for (String template : List.of(
+                "/api/products/%d",
+                "/api/products/%d/listings",
+                "/api/products/%d/price-trend",
+                "/api/products/%d/tracked-items/1/price-history")) {
+            assertThat(problemBodyAsAlice(template.formatted(foreign)))
+                    .describedAs("%s must not reveal that the foreign product exists", template)
+                    .isEqualTo(problemBodyAsAlice(template.formatted(nonexistent)));
+        }
+    }
+
+    /**
+     * The 404 body minus {@code instance}, which echoes the path the caller themselves requested and
+     * therefore tells them nothing. Everything else must match, including any member added later.
+     */
+    private String problemBodyAsAlice(String path) throws Exception {
+        String body = mvc.perform(get(path).header(HttpHeaders.AUTHORIZATION, as("auth0|alice")))
+                .andExpect(status().isNotFound())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+        return body.replaceAll("\"instance\":\"[^\"]*\",?", "");
+    }
+
     // --- mutations ---
 
     @Test
