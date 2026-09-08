@@ -32,7 +32,7 @@ import org.springframework.transaction.annotation.Transactional;
  * Persists a failure-first {@code scrape_attempt} row (issue #131). Mirrors {@code JobRunRecorder}: each
  * method is {@code REQUIRES_NEW} so the audit commits independently of the caller's transaction (a
  * failure that rolls back the main work must not roll back the evidence). Callers ({@code
- * ProductTrackingService}) invoke this OUTSIDE any transaction and wrap the call best-effort, so a
+ * PriceCheckPipeline}) invoke this OUTSIDE any transaction and wrap the call best-effort, so a
  * recorder hiccup can never mask the original failure — there is no internal swallow here.
  *
  * <p>The exact {@code llm_input} is re-derived from the {@code ScrapeResponse} via the shared {@link

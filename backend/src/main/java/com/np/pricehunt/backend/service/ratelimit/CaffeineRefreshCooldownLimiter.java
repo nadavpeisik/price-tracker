@@ -13,7 +13,7 @@ import org.springframework.stereotype.Component;
  * <p>Replaces a hand-managed {@code ConcurrentHashMap} that grew unbounded (issue #59): Caffeine
  * frees expired entries itself, so there is no manual sweep and no leak. Single-instance only
  * (state is per-process, lost on restart) — acceptable pre-Phase-2; the DB {@code lastChecked}
- * check in {@code ProductTrackingService} is the durable, restart-surviving half of the limit.
+ * check in {@code ProductTrackingService.refreshTrackedItem} is the durable, restart-surviving half of the limit.
  */
 @Component
 public class CaffeineRefreshCooldownLimiter implements RefreshCooldownLimiter {

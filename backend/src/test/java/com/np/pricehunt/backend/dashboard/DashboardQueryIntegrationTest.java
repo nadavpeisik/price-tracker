@@ -7,6 +7,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.jayway.jsonpath.JsonPath;
+import com.np.pricehunt.backend.auth.CurrentUser;
+import com.np.pricehunt.backend.domain.AppUser;
 import com.np.pricehunt.backend.domain.AvailabilityStatus;
 import com.np.pricehunt.backend.domain.ExchangeRate;
 import com.np.pricehunt.backend.domain.ExtractionSource;
@@ -14,13 +16,16 @@ import com.np.pricehunt.backend.domain.PriceRecord;
 import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.domain.ShopNameSource;
 import com.np.pricehunt.backend.domain.TrackedItem;
+import com.np.pricehunt.backend.repository.AppUserRepository;
 import com.np.pricehunt.backend.repository.ExchangeRateRepository;
 import com.np.pricehunt.backend.repository.PriceRecordRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
 import com.np.pricehunt.backend.repository.TrackedItemRepository;
+import com.np.pricehunt.backend.repository.UserProductRepository;
 import com.np.pricehunt.backend.service.fx.ExchangeRateService;
 import com.np.pricehunt.backend.service.fx.FxRateProvider;
 import com.np.pricehunt.backend.service.fx.RateSnapshot;
+import com.np.pricehunt.backend.tenancy.TestTenants;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
@@ -124,6 +129,18 @@ class DashboardQueryIntegrationTest {
     private ExchangeRateService rateService;
 
     @MockitoBean
+    private CurrentUser currentUser;
+
+    @Autowired
+    private AppUserRepository appUsers;
+
+    @Autowired
+    private UserProductRepository memberships;
+
+    /** The one admitted account every request in this class runs as (#246). */
+    private AppUser caller;
+
+    @MockitoBean
     private FxRateProvider rateProvider;
 
     private MockMvc mvc;
@@ -132,6 +149,10 @@ class DashboardQueryIntegrationTest {
     @BeforeEach
     void setUp() {
         mvc = MockMvcBuilders.webAppContextSetup(context).build();
+        // Reads and writes resolve through membership now; the filter chain is off here, so the caller
+        // is a mocked CurrentUser rather than a token (the route matrix owns the real chain).
+        caller = TestTenants.admit(appUsers, "auth0|integration");
+        when(currentUser.userId()).thenReturn(caller.getId());
         today = LocalDate.ofInstant(FIXED_NOW, ZoneOffset.UTC);
 
         productRepository.deleteAll();
@@ -592,7 +613,9 @@ class DashboardQueryIntegrationTest {
     }
 
     private Product seedProduct(String name) {
-        return productRepository.save(Product.builder().name(name).build());
+        Product product = productRepository.save(Product.builder().name(name).build());
+        TestTenants.track(memberships, caller, product);
+        return product;
     }
 
     private TrackedItem seedItem(Product product, String shop, int itemNo) {

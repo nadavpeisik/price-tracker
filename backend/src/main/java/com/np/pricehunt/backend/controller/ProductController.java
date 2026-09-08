@@ -2,9 +2,8 @@ package com.np.pricehunt.backend.controller;
 
 import com.np.pricehunt.backend.dto.*;
 import com.np.pricehunt.backend.service.ProductCatalogService;
-import com.np.pricehunt.backend.service.ProductQueryService;
 import com.np.pricehunt.backend.service.ProductTrackingService;
-import com.np.pricehunt.backend.service.trend.PriceTrendService;
+import com.np.pricehunt.backend.service.TrackedProductQueryService;
 import java.time.Instant;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
@@ -13,6 +12,12 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+/**
+ * The catalog's product routes. Reads and the track/refresh actions are the caller's view (#246: a
+ * product the caller does not track is a 404); {@code PATCH} and both {@code DELETE}s mutate the shared
+ * catalog row for everyone and are admin-only in {@code SecurityConfig}. A user who no longer wants a
+ * product uses {@code DELETE /api/tracked-products/{id}} instead.
+ */
 @RestController
 @RequestMapping("/api/products")
 @RequiredArgsConstructor
@@ -20,19 +25,19 @@ public class ProductController {
 
     private final ProductCatalogService catalogService;
     private final ProductTrackingService trackingService;
-    private final ProductQueryService queryService;
-    private final PriceTrendService trendService;
+    private final TrackedProductQueryService trackedProductQueryService;
     private final DisplayCurrencyResolver displayCurrencyResolver;
 
+    /** Creating a product tracks it for the caller — the catalog row and the membership commit together (#246). */
     @PostMapping
     public ResponseEntity<CreateProductResponse> createProduct(@RequestBody CreateProductRequest request) {
-        CreateProductResponse response = catalogService.createProduct(request);
+        CreateProductResponse response = trackingService.createProduct(request);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
     @GetMapping("/{id}")
     public ResponseEntity<ProductDetailResponse> getProduct(@PathVariable Long id) {
-        return ResponseEntity.ok(queryService.getProduct(id));
+        return ResponseEntity.ok(trackedProductQueryService.getProduct(id));
     }
 
     /**
@@ -43,7 +48,8 @@ public class ProductController {
     @GetMapping("/{id}/listings")
     public ResponseEntity<List<ProductListingResponse>> getListings(
             @PathVariable Long id, @RequestParam(required = false) String displayCurrency) {
-        return ResponseEntity.ok(queryService.getListings(id, displayCurrencyResolver.resolve(displayCurrency)));
+        return ResponseEntity.ok(
+                trackedProductQueryService.getListings(id, displayCurrencyResolver.resolve(displayCurrency)));
     }
 
     /**
@@ -59,7 +65,7 @@ public class ProductController {
             @RequestParam(required = false) Integer days,
             @RequestParam(required = false) String displayCurrency) {
         return ResponseEntity.ok(
-                trendService.getProductTrend(id, days, displayCurrencyResolver.resolve(displayCurrency)));
+                trackedProductQueryService.getPriceTrend(id, days, displayCurrencyResolver.resolve(displayCurrency)));
     }
 
     @PostMapping("/{id}/track")
@@ -97,6 +103,6 @@ public class ProductController {
             @PathVariable Long itemId,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant to) {
-        return ResponseEntity.ok(queryService.getPriceHistory(id, itemId, from, to));
+        return ResponseEntity.ok(trackedProductQueryService.getPriceHistory(id, itemId, from, to));
     }
 }

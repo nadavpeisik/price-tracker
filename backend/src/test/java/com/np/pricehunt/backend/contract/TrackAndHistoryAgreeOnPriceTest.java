@@ -9,13 +9,18 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.jayway.jsonpath.JsonPath;
+import com.np.pricehunt.backend.auth.CurrentUser;
 import com.np.pricehunt.backend.client.ScraperClient;
+import com.np.pricehunt.backend.domain.AppUser;
 import com.np.pricehunt.backend.domain.AvailabilityStatus;
 import com.np.pricehunt.backend.domain.ExtractionSource;
 import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.dto.ScrapeResponse;
+import com.np.pricehunt.backend.repository.AppUserRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
+import com.np.pricehunt.backend.repository.UserProductRepository;
 import com.np.pricehunt.backend.service.fx.FxRateProvider;
+import com.np.pricehunt.backend.tenancy.TestTenants;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import java.math.BigDecimal;
@@ -90,6 +95,18 @@ class TrackAndHistoryAgreeOnPriceTest {
     private EntityManager em;
 
     @MockitoBean
+    private CurrentUser currentUser;
+
+    @Autowired
+    private AppUserRepository appUsers;
+
+    @Autowired
+    private UserProductRepository memberships;
+
+    /** The one admitted account every request in this class runs as (#246). */
+    private AppUser caller;
+
+    @MockitoBean
     private ScraperClient scraperClient;
 
     /**
@@ -106,6 +123,10 @@ class TrackAndHistoryAgreeOnPriceTest {
     @BeforeEach
     void setUp() {
         mvc = MockMvcBuilders.webAppContextSetup(context).build();
+        // Reads and writes resolve through membership now; the filter chain is off here, so the caller
+        // is a mocked CurrentUser rather than a token (the route matrix owns the real chain).
+        caller = TestTenants.admit(appUsers, "auth0|integration");
+        when(currentUser.userId()).thenReturn(caller.getId());
         productRepository.deleteAll();
         when(scraperClient.scrape(anyString()))
                 .thenReturn(new ScrapeResponse(

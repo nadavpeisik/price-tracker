@@ -1,21 +1,22 @@
 package com.np.pricehunt.backend.service;
 
+import com.np.pricehunt.backend.auth.CurrentUser;
 import com.np.pricehunt.backend.config.PriceHistoryProperties;
 import com.np.pricehunt.backend.config.PriceTrendProperties;
 import com.np.pricehunt.backend.domain.AvailabilityStatus;
-import com.np.pricehunt.backend.domain.PriceRecord;
-import com.np.pricehunt.backend.domain.Product;
-import com.np.pricehunt.backend.domain.TrackedItem;
 import com.np.pricehunt.backend.dto.*;
 import com.np.pricehunt.backend.exception.NotFoundException;
 import com.np.pricehunt.backend.exception.ValidationException;
-import com.np.pricehunt.backend.repository.PriceRecordRepository;
-import com.np.pricehunt.backend.repository.ProductRepository;
-import com.np.pricehunt.backend.repository.TrackedItemRepository;
+import com.np.pricehunt.backend.repository.projection.DashboardListingRef;
 import com.np.pricehunt.backend.repository.projection.ListingLatestObservationRow;
+import com.np.pricehunt.backend.repository.projection.TrackedProductDetailRef;
 import com.np.pricehunt.backend.service.fx.ConvertedAmount;
 import com.np.pricehunt.backend.service.fx.PriceConverter;
+import com.np.pricehunt.backend.service.trend.PriceTrendService;
+import com.np.pricehunt.backend.service.trend.ProductTrend;
 import com.np.pricehunt.backend.service.trend.TrendEligibility;
+import com.np.pricehunt.backend.tenancy.UserScopedCatalog;
+import com.np.pricehunt.backend.tenancy.UserScopedCatalog.ListingHistory;
 import com.np.pricehunt.backend.util.WireMoney;
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -23,20 +24,29 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * One user's reads of one product they track (#246): detail, the per-shop panel, a listing's history
+ * and the price trend. The subject is the caller's tracked product, not the catalog's — every method
+ * resolves it through the tenancy port first, so a product the caller does not track answers 404
+ * exactly like one that does not exist. It must be resolved <em>first</em>, because the listings query
+ * on its own answers an empty list for both "not yours" and "no listings yet", which would leak a 200
+ * where the rule says 404.
+ */
 @Slf4j
 @Service
 @Transactional(readOnly = true)
 @RequiredArgsConstructor
-public class ProductQueryService {
+public class TrackedProductQueryService {
 
-    private final ProductRepository productRepository;
-    private final TrackedItemRepository trackedItemRepository;
-    private final PriceRecordRepository priceRecordRepository;
+    private final CurrentUser currentUser;
+    private final UserScopedCatalog userCatalog;
+    private final PriceTrendService trendService;
     private final PriceHistoryProperties historyProperties;
     private final PriceTrendProperties trendProperties;
     private final PriceConverter priceConverter;
@@ -49,17 +59,18 @@ public class ProductQueryService {
             .thenComparing(PanelListing::trackedItemId);
 
     public ProductDetailResponse getProduct(Long id) {
-        Product product = requireProduct(id);
+        long userId = currentUser.userId();
+        TrackedProductDetailRef product = requireProduct(userId, id);
         Instant now = clock.instant();
 
         // The detail keeps its historical meaning — the raw latest observation at any age. Only the
         // listings panel below applies the carry-forward rule.
         List<TrackedItemSummary> summaries =
-                trackedItemRepository.findListingsWithLatestObservation(product.getId(), now).stream()
-                        .map(ProductQueryService::toItemSummary)
+                userCatalog.listingsWithLatestObservation(userId, product.productId(), now).stream()
+                        .map(TrackedProductQueryService::toItemSummary)
                         .toList();
 
-        return new ProductDetailResponse(product.getId(), product.getName(), product.getDescription(), summaries);
+        return new ProductDetailResponse(product.productId(), product.name(), product.description(), summaries);
     }
 
     /**
@@ -84,11 +95,12 @@ public class ProductQueryService {
      * wire strings would sort lexically.
      */
     public List<ProductListingResponse> getListings(Long productId, String displayCurrency) {
-        Product product = requireProduct(productId);
+        long userId = currentUser.userId();
+        TrackedProductDetailRef product = requireProduct(userId, productId);
         Instant now = clock.instant();
         int ttlDays = trendProperties.carryForwardDays();
 
-        return trackedItemRepository.findListingsWithLatestObservation(product.getId(), now).stream()
+        return userCatalog.listingsWithLatestObservation(userId, product.productId(), now).stream()
                 .map(row -> toListing(row, now, ttlDays, displayCurrency))
                 .sorted(LISTING_PANEL_ORDER)
                 .map(PanelListing::toResponse)
@@ -96,14 +108,7 @@ public class ProductQueryService {
     }
 
     public PriceHistoryResponse getPriceHistory(Long productId, Long itemId, Instant from, Instant to) {
-        TrackedItem item = trackedItemRepository
-                .findById(itemId)
-                .orElseThrow(() -> new NotFoundException("Tracked item not found"));
-
-        if (!item.getProduct().getId().equals(productId)) {
-            throw new NotFoundException("Tracked item not found for this product");
-        }
-
+        long userId = currentUser.userId();
         Instant effectiveTo = (to != null) ? to : clock.instant();
         Instant effectiveFrom =
                 (from != null) ? from : effectiveTo.minus(historyProperties.defaultWindowDays(), ChronoUnit.DAYS);
@@ -118,10 +123,11 @@ public class ProductQueryService {
             effectiveFrom = maxFrom;
         }
 
-        List<PriceRecord> records = priceRecordRepository.findByTrackedItemAndObservedAtBetweenOrderByObservedAtDesc(
-                item, effectiveFrom, effectiveTo);
+        ListingHistory history = userCatalog
+                .priceHistory(userId, productId, itemId, effectiveFrom, effectiveTo)
+                .orElseThrow(() -> new NotFoundException("Tracked item not found"));
 
-        List<PricePointResponse> history = records.stream()
+        List<PricePointResponse> points = history.records().stream()
                 .map(r -> new PricePointResponse(
                         WireMoney.decimalString(r.getPrice()),
                         r.getCurrency(),
@@ -130,11 +136,51 @@ public class ProductQueryService {
                         r.getExtractionSource().name()))
                 .toList();
 
-        return new PriceHistoryResponse(item.getId(), item.getShopName(), item.getUrl(), history);
+        return new PriceHistoryResponse(
+                history.listing().id(),
+                history.listing().shopName(),
+                history.listing().url(),
+                points);
     }
 
-    private Product requireProduct(Long id) {
-        return productRepository.findById(id).orElseThrow(() -> new NotFoundException("Product not found"));
+    /**
+     * FX-normalized daily price series plus the 7-day delta for one product (issue #145), over the
+     * listings the caller tracks it through.
+     *
+     * @param days sparkline window; null falls back to the configured default
+     * @param displayCurrency must already be validated by the caller (the controller does this)
+     */
+    public PriceTrendResponse getPriceTrend(Long productId, Integer days, String displayCurrency) {
+        long userId = currentUser.userId();
+        TrackedProductDetailRef product = requireProduct(userId, productId);
+
+        List<DashboardListingRef> listings = userCatalog.listings(userId, product.productId());
+        ProductTrend trend = trendService
+                .computeProductTrends(Map.of(product.productId(), listings), days, displayCurrency)
+                .getOrDefault(product.productId(), ProductTrend.empty());
+
+        List<TrendPointResponse> sparkline = trend.points().stream()
+                .map(point -> new TrendPointResponse(
+                        point.t(),
+                        WireMoney.decimalString(point.price()),
+                        new BestOfferResponse(
+                                point.bestOffer().trackedItemId(),
+                                point.bestOffer().shopName(),
+                                point.bestOffer().observedAt())))
+                .toList();
+        return new PriceTrendResponse(
+                product.productId(),
+                displayCurrency,
+                trend.delta7d(),
+                trend.conversionAsOf(),
+                trend.conversionStale(),
+                sparkline);
+    }
+
+    private TrackedProductDetailRef requireProduct(long userId, Long productId) {
+        return userCatalog
+                .trackedProduct(userId, productId)
+                .orElseThrow(() -> new NotFoundException("Product not found"));
     }
 
     private static TrackedItemSummary toItemSummary(ListingLatestObservationRow row) {

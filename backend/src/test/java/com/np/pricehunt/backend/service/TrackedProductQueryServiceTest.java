@@ -3,11 +3,14 @@ package com.np.pricehunt.backend.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.np.pricehunt.backend.auth.CurrentUser;
 import com.np.pricehunt.backend.config.PriceHistoryProperties;
 import com.np.pricehunt.backend.config.PriceTrendProperties;
 import com.np.pricehunt.backend.domain.AvailabilityStatus;
@@ -17,17 +20,24 @@ import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.domain.ShopNameSource;
 import com.np.pricehunt.backend.domain.TrackedItem;
 import com.np.pricehunt.backend.dto.PriceHistoryResponse;
+import com.np.pricehunt.backend.dto.PriceTrendResponse;
 import com.np.pricehunt.backend.dto.ProductDetailResponse;
 import com.np.pricehunt.backend.dto.ProductListingResponse;
 import com.np.pricehunt.backend.dto.TrackedItemSummary;
 import com.np.pricehunt.backend.exception.NotFoundException;
 import com.np.pricehunt.backend.exception.ValidationException;
-import com.np.pricehunt.backend.repository.PriceRecordRepository;
-import com.np.pricehunt.backend.repository.ProductRepository;
-import com.np.pricehunt.backend.repository.TrackedItemRepository;
+import com.np.pricehunt.backend.repository.projection.DashboardListingRef;
 import com.np.pricehunt.backend.repository.projection.ListingLatestObservationRow;
+import com.np.pricehunt.backend.repository.projection.TrackedListingRef;
+import com.np.pricehunt.backend.repository.projection.TrackedProductDetailRef;
 import com.np.pricehunt.backend.service.fx.ConvertedAmount;
 import com.np.pricehunt.backend.service.fx.PriceConverter;
+import com.np.pricehunt.backend.service.trend.BestOffer;
+import com.np.pricehunt.backend.service.trend.PriceTrendService;
+import com.np.pricehunt.backend.service.trend.ProductTrend;
+import com.np.pricehunt.backend.service.trend.TrendPoint;
+import com.np.pricehunt.backend.tenancy.UserScopedCatalog;
+import com.np.pricehunt.backend.tenancy.UserScopedCatalog.ListingHistory;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
@@ -35,6 +45,7 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
@@ -45,40 +56,46 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 @ExtendWith(MockitoExtension.class)
-class ProductQueryServiceTest {
+class TrackedProductQueryServiceTest {
 
     private static final Instant NOW = LocalDate.of(2026, 5, 24).atTime(12, 0).toInstant(ZoneOffset.UTC);
     private static final int TTL_DAYS = 7;
     private static final String ILS = "ILS";
     private static final String USD = "USD";
 
-    @Mock
-    private ProductRepository productRepository;
+    private static final long USER_ID = 7L;
+    private static final TrackedProductDetailRef PRODUCT_REF = new TrackedProductDetailRef(1L, "Laptop", null);
+    private static final TrackedListingRef LISTING_A =
+            new TrackedListingRef(1L, "https://amazon.com/dp/1", "amazon.com", null);
 
     @Mock
-    private TrackedItemRepository trackedItemRepository;
+    private CurrentUser currentUser;
 
     @Mock
-    private PriceRecordRepository priceRecordRepository;
+    private UserScopedCatalog userCatalog;
+
+    @Mock
+    private PriceTrendService trendService;
 
     @Mock
     private PriceConverter priceConverter;
 
-    private ProductQueryService service;
+    private TrackedProductQueryService service;
 
     private Product product;
     private TrackedItem itemA;
 
     @BeforeEach
     void setUp() {
-        service = new ProductQueryService(
-                productRepository,
-                trackedItemRepository,
-                priceRecordRepository,
+        service = new TrackedProductQueryService(
+                currentUser,
+                userCatalog,
+                trendService,
                 new PriceHistoryProperties(90),
                 new PriceTrendProperties(30, 730, TTL_DAYS),
                 priceConverter,
                 Clock.fixed(NOW, ZoneOffset.UTC));
+        when(currentUser.userId()).thenReturn(USER_ID);
         product = Product.builder().id(1L).name("Laptop").build();
         itemA = TrackedItem.builder()
                 .id(1L)
@@ -92,15 +109,15 @@ class ProductQueryServiceTest {
 
     @Test
     void getProduct_notFound_throwsException() {
-        when(productRepository.findById(99L)).thenReturn(Optional.empty());
+        when(userCatalog.trackedProduct(USER_ID, 99L)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.getProduct(99L)).isInstanceOf(NotFoundException.class);
     }
 
     @Test
     void getProduct_found_includesLatestPricePerItem() {
-        when(productRepository.findById(1L)).thenReturn(Optional.of(product));
-        when(trackedItemRepository.findListingsWithLatestObservation(1L, NOW))
+        when(userCatalog.trackedProduct(USER_ID, 1L)).thenReturn(Optional.of(PRODUCT_REF));
+        when(userCatalog.listingsWithLatestObservation(USER_ID, 1L, NOW))
                 .thenReturn(List.of(row(1L, "Amazon", ShopNameSource.MAPPING, "999.99", USD, daysAgo(1))));
 
         ProductDetailResponse detail = service.getProduct(1L);
@@ -115,8 +132,8 @@ class ProductQueryServiceTest {
 
     @Test
     void getProduct_itemWithNoPrice_currentPriceIsNullAndAvailabilityUnknown() {
-        when(productRepository.findById(1L)).thenReturn(Optional.of(product));
-        when(trackedItemRepository.findListingsWithLatestObservation(1L, NOW))
+        when(userCatalog.trackedProduct(USER_ID, 1L)).thenReturn(Optional.of(PRODUCT_REF));
+        when(userCatalog.listingsWithLatestObservation(USER_ID, 1L, NOW))
                 .thenReturn(List.of(neverObserved(1L, "Amazon")));
 
         ProductDetailResponse detail = service.getProduct(1L);
@@ -129,8 +146,8 @@ class ProductQueryServiceTest {
     void getProduct_keepsItsRawMeaning_expiredAndUnavailableObservationsStayVisible() {
         // The detail endpoint never applied the carry-forward rule; sharing the panel's query must not
         // quietly change that (#157). Only the listings panel prunes.
-        when(productRepository.findById(1L)).thenReturn(Optional.of(product));
-        when(trackedItemRepository.findListingsWithLatestObservation(1L, NOW))
+        when(userCatalog.trackedProduct(USER_ID, 1L)).thenReturn(Optional.of(PRODUCT_REF));
+        when(userCatalog.listingsWithLatestObservation(USER_ID, 1L, NOW))
                 .thenReturn(List.of(
                         row(1L, "TMS", "8890", ILS, daysAgo(9)),
                         row(2L, "KSP", "1849", ILS, daysAgo(1), AvailabilityStatus.UNAVAILABLE)));
@@ -149,10 +166,10 @@ class ProductQueryServiceTest {
 
         @Test
         void unknownProduct_is404_beforeAnyQueryRuns() {
-            when(productRepository.findById(99L)).thenReturn(Optional.empty());
+            when(userCatalog.trackedProduct(USER_ID, 99L)).thenReturn(Optional.empty());
 
             assertThatThrownBy(() -> service.getListings(99L, ILS)).isInstanceOf(NotFoundException.class);
-            verifyNoInteractions(trackedItemRepository);
+            verify(userCatalog, never()).listingsWithLatestObservation(anyLong(), anyLong(), any());
         }
 
         @Test
@@ -296,9 +313,8 @@ class ProductQueryServiceTest {
         }
 
         private void stubProduct(ListingLatestObservationRow... rows) {
-            when(productRepository.findById(1L)).thenReturn(Optional.of(product));
-            when(trackedItemRepository.findListingsWithLatestObservation(1L, NOW))
-                    .thenReturn(List.of(rows));
+            when(userCatalog.trackedProduct(USER_ID, 1L)).thenReturn(Optional.of(PRODUCT_REF));
+            when(userCatalog.listingsWithLatestObservation(USER_ID, 1L, NOW)).thenReturn(List.of(rows));
         }
 
         private void stubIdentityConversion() {
@@ -311,43 +327,35 @@ class ProductQueryServiceTest {
 
     @Test
     void getPriceHistory_noBounds_defaultsToWindowEndingNow() {
-        when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
-        when(priceRecordRepository.findByTrackedItemAndObservedAtBetweenOrderByObservedAtDesc(
-                        eq(itemA), any(Instant.class), any(Instant.class)))
-                .thenReturn(List.of());
+        when(userCatalog.priceHistory(eq(USER_ID), eq(1L), eq(1L), any(Instant.class), any(Instant.class)))
+                .thenReturn(Optional.of(new ListingHistory(LISTING_A, List.of())));
 
         service.getPriceHistory(1L, 1L, null, null);
 
-        verify(priceRecordRepository)
-                .findByTrackedItemAndObservedAtBetweenOrderByObservedAtDesc(itemA, NOW.minus(90, ChronoUnit.DAYS), NOW);
+        verify(userCatalog).priceHistory(USER_ID, 1L, 1L, NOW.minus(90, ChronoUnit.DAYS), NOW);
     }
 
     @Test
     void getPriceHistory_fromOnly_defaultsToToNow() {
         Instant from = Instant.parse("2026-01-01T00:00:00Z");
-        when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
-        when(priceRecordRepository.findByTrackedItemAndObservedAtBetweenOrderByObservedAtDesc(
-                        eq(itemA), any(Instant.class), any(Instant.class)))
-                .thenReturn(List.of());
+        when(userCatalog.priceHistory(eq(USER_ID), eq(1L), eq(1L), any(Instant.class), any(Instant.class)))
+                .thenReturn(Optional.of(new ListingHistory(LISTING_A, List.of())));
 
         service.getPriceHistory(1L, 1L, from, null);
 
-        verify(priceRecordRepository).findByTrackedItemAndObservedAtBetweenOrderByObservedAtDesc(itemA, from, NOW);
+        verify(userCatalog).priceHistory(USER_ID, 1L, 1L, from, NOW);
     }
 
     @Test
     void getPriceHistory_toOnly_defaultsFromWindowDaysBefore() {
         Instant to = Instant.parse("2026-04-01T00:00:00Z");
-        when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
-        when(priceRecordRepository.findByTrackedItemAndObservedAtBetweenOrderByObservedAtDesc(
-                        eq(itemA), any(Instant.class), any(Instant.class)))
-                .thenReturn(List.of());
+        when(userCatalog.priceHistory(eq(USER_ID), eq(1L), eq(1L), any(Instant.class), any(Instant.class)))
+                .thenReturn(Optional.of(new ListingHistory(LISTING_A, List.of())));
 
         service.getPriceHistory(1L, 1L, null, to);
 
         ArgumentCaptor<Instant> fromCaptor = ArgumentCaptor.forClass(Instant.class);
-        verify(priceRecordRepository)
-                .findByTrackedItemAndObservedAtBetweenOrderByObservedAtDesc(eq(itemA), fromCaptor.capture(), eq(to));
+        verify(userCatalog).priceHistory(eq(USER_ID), eq(1L), eq(1L), fromCaptor.capture(), eq(to));
         assertThat(fromCaptor.getValue()).isEqualTo(to.minus(90, ChronoUnit.DAYS));
     }
 
@@ -355,13 +363,12 @@ class ProductQueryServiceTest {
     void getPriceHistory_bothBounds_usesExplicitBounds() {
         Instant from = Instant.parse("2026-01-01T00:00:00Z");
         Instant to = Instant.parse("2026-04-01T00:00:00Z");
-        when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
-        when(priceRecordRepository.findByTrackedItemAndObservedAtBetweenOrderByObservedAtDesc(itemA, from, to))
-                .thenReturn(List.of());
+        when(userCatalog.priceHistory(USER_ID, 1L, 1L, from, to))
+                .thenReturn(Optional.of(new ListingHistory(LISTING_A, List.of())));
 
         service.getPriceHistory(1L, 1L, from, to);
 
-        verify(priceRecordRepository).findByTrackedItemAndObservedAtBetweenOrderByObservedAtDesc(itemA, from, to);
+        verify(userCatalog).priceHistory(USER_ID, 1L, 1L, from, to);
     }
 
     @Test
@@ -369,22 +376,18 @@ class ProductQueryServiceTest {
         Instant to = Instant.parse("2026-04-01T00:00:00Z");
         Instant farBack = to.minus(365L * 3, ChronoUnit.DAYS);
         Instant expectedFrom = to.minus(365L * 2, ChronoUnit.DAYS);
-        when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
-        when(priceRecordRepository.findByTrackedItemAndObservedAtBetweenOrderByObservedAtDesc(
-                        eq(itemA), any(Instant.class), any(Instant.class)))
-                .thenReturn(List.of());
+        when(userCatalog.priceHistory(eq(USER_ID), eq(1L), eq(1L), any(Instant.class), any(Instant.class)))
+                .thenReturn(Optional.of(new ListingHistory(LISTING_A, List.of())));
 
         service.getPriceHistory(1L, 1L, farBack, to);
 
-        verify(priceRecordRepository)
-                .findByTrackedItemAndObservedAtBetweenOrderByObservedAtDesc(itemA, expectedFrom, to);
+        verify(userCatalog).priceHistory(USER_ID, 1L, 1L, expectedFrom, to);
     }
 
     @Test
     void getPriceHistory_fromAfterTo_throwsBadRequest() {
         Instant from = Instant.parse("2026-06-03T00:00:00Z");
         Instant to = Instant.parse("2026-06-01T00:00:00Z");
-        when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
 
         assertThatThrownBy(() -> service.getPriceHistory(1L, 1L, from, to))
                 .isInstanceOfSatisfying(ValidationException.class, ex -> {
@@ -393,15 +396,11 @@ class ProductQueryServiceTest {
     }
 
     @Test
-    void getPriceHistory_wrongProduct_throwsNotFound() {
-        Product other = Product.builder().id(99L).name("Other").build();
-        TrackedItem foreignItem = TrackedItem.builder()
-                .id(1L)
-                .url("http://x.com")
-                .shopName("x")
-                .product(other)
-                .build();
-        when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(foreignItem));
+    void getPriceHistory_notTheCallers_throwsNotFound() {
+        // "Under another product", "another user's product" and "does not exist" are one empty answer
+        // from the port (#246): the service cannot tell them apart, which is the point — 404, never 403.
+        when(userCatalog.priceHistory(eq(USER_ID), eq(1L), eq(1L), any(Instant.class), any(Instant.class)))
+                .thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.getPriceHistory(1L, 1L, null, null)).isInstanceOf(NotFoundException.class);
     }
@@ -411,9 +410,8 @@ class ProductQueryServiceTest {
         PriceRecord observation = priceRecord(itemA, "100", "USD");
         Instant from = Instant.parse("2026-01-01T00:00:00Z");
         Instant to = Instant.parse("2026-04-01T00:00:00Z");
-        when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
-        when(priceRecordRepository.findByTrackedItemAndObservedAtBetweenOrderByObservedAtDesc(itemA, from, to))
-                .thenReturn(List.of(observation));
+        when(userCatalog.priceHistory(USER_ID, 1L, 1L, from, to))
+                .thenReturn(Optional.of(new ListingHistory(LISTING_A, List.of(observation))));
 
         PriceHistoryResponse response = service.getPriceHistory(1L, 1L, from, to);
 
@@ -427,13 +425,94 @@ class ProductQueryServiceTest {
         PriceRecord observation = priceRecord(itemA, "100", "USD");
         Instant from = Instant.parse("2026-01-01T00:00:00Z");
         Instant to = Instant.parse("2026-04-01T00:00:00Z");
-        when(trackedItemRepository.findById(1L)).thenReturn(Optional.of(itemA));
-        when(priceRecordRepository.findByTrackedItemAndObservedAtBetweenOrderByObservedAtDesc(itemA, from, to))
-                .thenReturn(List.of(observation));
+        when(userCatalog.priceHistory(USER_ID, 1L, 1L, from, to))
+                .thenReturn(Optional.of(new ListingHistory(LISTING_A, List.of(observation))));
 
         PriceHistoryResponse response = service.getPriceHistory(1L, 1L, from, to);
 
         assertThat(response.history().get(0).price()).isEqualTo("100.0000");
+    }
+
+    // --- getPriceTrend (#145; scoped through membership in #246) ---
+
+    @Test
+    void getPriceTrend_unknownOrForeignProduct_is404_beforeTheEngineRuns() {
+        when(userCatalog.trackedProduct(USER_ID, 42L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.getPriceTrend(42L, null, ILS))
+                .isInstanceOf(NotFoundException.class)
+                .hasMessageContaining("Product not found");
+
+        verifyNoInteractions(trendService);
+    }
+
+    @Test
+    void getPriceTrend_formatsSeriesPricesAsFixedScaleDecimalStrings() {
+        // The calculator emits scale 2 here, so a mapper that merely stringified it would say "199.5" —
+        // this pins that the point goes through WireMoney (#175).
+        when(userCatalog.trackedProduct(USER_ID, 1L)).thenReturn(Optional.of(PRODUCT_REF));
+        List<DashboardListingRef> listings = List.of(new DashboardListingRef(10L, 1L, "KSP"));
+        when(userCatalog.listings(USER_ID, 1L)).thenReturn(listings);
+        when(trendService.computeProductTrends(Map.of(1L, listings), null, ILS))
+                .thenReturn(Map.of(
+                        1L,
+                        new ProductTrend(
+                                List.of(new TrendPoint(
+                                        NOW.minus(1, ChronoUnit.DAYS),
+                                        new BigDecimal("199.50"),
+                                        new BestOffer(10L, "KSP", NOW.minus(2, ChronoUnit.DAYS)))),
+                                null,
+                                LocalDate.of(2026, 5, 24),
+                                false)));
+
+        PriceTrendResponse response = service.getPriceTrend(1L, null, ILS);
+
+        assertThat(response.sparkline().get(0).price()).isEqualTo("199.5000");
+    }
+
+    @Test
+    void getPriceTrend_mapsEngineOutputOntoTheResponse() {
+        when(userCatalog.trackedProduct(USER_ID, 1L)).thenReturn(Optional.of(PRODUCT_REF));
+        List<DashboardListingRef> listings = List.of(new DashboardListingRef(10L, 1L, "KSP"));
+        when(userCatalog.listings(USER_ID, 1L)).thenReturn(listings);
+        Instant observed = NOW.minus(2, ChronoUnit.DAYS);
+        LocalDate today = LocalDate.of(2026, 5, 24);
+        when(trendService.computeProductTrends(Map.of(1L, listings), 90, ILS))
+                .thenReturn(Map.of(
+                        1L,
+                        new ProductTrend(
+                                List.of(new TrendPoint(
+                                        NOW.minus(1, ChronoUnit.DAYS),
+                                        new BigDecimal("199.0000"),
+                                        new BestOffer(10L, "KSP", observed))),
+                                new BigDecimal("-5.25"),
+                                today,
+                                false)));
+
+        PriceTrendResponse response = service.getPriceTrend(1L, 90, ILS);
+
+        assertThat(response.productId()).isEqualTo(1L);
+        assertThat(response.displayCurrency()).isEqualTo(ILS);
+        assertThat(response.delta7d()).isEqualByComparingTo("-5.25");
+        assertThat(response.conversionAsOf()).isEqualTo(today);
+        assertThat(response.conversionStale()).isFalse();
+        assertThat(response.sparkline()).hasSize(1);
+        assertThat(response.sparkline().get(0).bestOffer().trackedItemId()).isEqualTo(10L);
+        assertThat(response.sparkline().get(0).bestOffer().shopName()).isEqualTo("KSP");
+        assertThat(response.sparkline().get(0).bestOffer().observedAt()).isEqualTo(observed);
+    }
+
+    @Test
+    void getPriceTrend_productWithoutListings_isAnEmptyTrend() {
+        when(userCatalog.trackedProduct(USER_ID, 1L)).thenReturn(Optional.of(PRODUCT_REF));
+        when(userCatalog.listings(USER_ID, 1L)).thenReturn(List.of());
+        when(trendService.computeProductTrends(Map.of(1L, List.of()), null, ILS))
+                .thenReturn(Map.of());
+
+        PriceTrendResponse response = service.getPriceTrend(1L, null, ILS);
+
+        assertThat(response.sparkline()).isEmpty();
+        assertThat(response.delta7d()).isNull();
     }
 
     // --- fixtures ---

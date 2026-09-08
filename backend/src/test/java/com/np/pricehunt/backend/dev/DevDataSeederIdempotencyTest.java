@@ -3,11 +3,13 @@ package com.np.pricehunt.backend.dev;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.np.pricehunt.backend.config.UrlValidationProperties;
+import com.np.pricehunt.backend.domain.AppUser;
 import com.np.pricehunt.backend.domain.AvailabilityStatus;
 import com.np.pricehunt.backend.domain.ExchangeRate;
 import com.np.pricehunt.backend.domain.PriceRecord;
 import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.domain.TrackedItem;
+import com.np.pricehunt.backend.repository.AppUserRepository;
 import com.np.pricehunt.backend.repository.ExchangeRateRepository;
 import com.np.pricehunt.backend.repository.PriceRecordRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
@@ -22,6 +24,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -31,6 +34,7 @@ import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -78,6 +82,12 @@ class DevDataSeederIdempotencyTest {
     @Autowired
     private ExchangeRateRepository exchangeRateRepository;
 
+    @Autowired
+    private AppUserRepository appUserRepository;
+
+    @Autowired
+    private JdbcTemplate jdbc;
+
     /** The real, bound validation config — the test below starts from it rather than a hand-made copy. */
     @Autowired
     private UrlValidationProperties urlValidationProperties;
@@ -87,6 +97,35 @@ class DevDataSeederIdempotencyTest {
     void clean() {
         productRepository.deleteAll();
         exchangeRateRepository.deleteAll();
+        // H2 runs no migrations, so the V15 bootstrap account — what the seeder tracks its fixtures
+        // for — is seeded by hand; a second account proves the seeder leaves it alone.
+        appUserRepository.deleteAll();
+        appUserRepository.save(
+                AppUser.builder().issuer("https://t.invalid/").sub("owner").build());
+        appUserRepository.save(
+                AppUser.builder().issuer("https://t.invalid/").sub("guest").build());
+    }
+
+    @Test
+    void tracksEverySeededProduct_forTheOwnerAccountOnly() {
+        seeder.run();
+
+        // Plain rows: the test runs outside a session, so the entity's lazy proxies cannot be walked.
+        long owner = appUserRepository.findBootstrapAccount().orElseThrow().getId();
+        List<Map<String, Object>> memberships =
+                jdbc.queryForList("SELECT user_id, product_id, added_at FROM user_product");
+        assertThat(memberships).hasSize((int) productRepository.count());
+        assertThat(memberships).allSatisfy(row -> assertThat(((Number) row.get("user_id")).longValue())
+                .isEqualTo(owner));
+        // added_at follows the back-dated product, so the recently-added order (#226) is not a tie.
+        assertThat(memberships).allSatisfy(row -> {
+            long productId = ((Number) row.get("product_id")).longValue();
+            Instant addedAt = ((java.time.OffsetDateTime) row.get("added_at"))
+                    .toInstant(); // H2 hands back OffsetDateTime for timestamptz
+            assertThat(addedAt)
+                    .isEqualTo(
+                            productRepository.findById(productId).orElseThrow().getCreatedAt());
+        });
     }
 
     @Test

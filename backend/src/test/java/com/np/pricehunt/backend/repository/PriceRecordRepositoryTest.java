@@ -110,8 +110,8 @@ class PriceRecordRepositoryTest {
 
     @Test
     void findBetween_returnsOnlyRecordsInRange_orderedDesc() {
-        List<PriceRecord> results =
-                priceRecordRepository.findByTrackedItemAndObservedAtBetweenOrderByObservedAtDesc(item, t1, t2);
+        List<PriceRecord> results = priceRecordRepository.findByTrackedItemIdAndObservedAtBetweenOrderByObservedAtDesc(
+                item.getId(), t1, t2);
 
         assertThat(results).hasSize(2);
         assertThat(results.get(0).getObservedAt()).isEqualTo(t2);

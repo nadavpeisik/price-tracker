@@ -15,7 +15,7 @@ import java.time.Instant;
  * <p><b>The wire order is the display order.</b> The backend sorts, because only it holds the exact
  * decimals and the FX-normalized amounts; the client renders the list as received and does no money
  * arithmetic. The ordering rule itself lives with the query that applies it,
- * {@code ProductQueryService#getListings}.
+ * {@code TrackedProductQueryService#getListings}.
  *
  * <p><b>Nullability.</b> {@code priceOriginal}/{@code priceOriginalCurrency} are null when the
  * listing has no <em>current</em> observation, and {@code availability} is then {@code UNKNOWN}.

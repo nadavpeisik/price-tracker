@@ -15,6 +15,7 @@ import org.springframework.boot.security.oauth2.server.resource.autoconfigure.OA
 import org.springframework.boot.security.oauth2.server.resource.autoconfigure.servlet.JwkSetUriJwtDecoderBuilderCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.ObjectPostProcessor;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -81,6 +82,12 @@ public class SecurityConfig {
                         .requestMatchers(EndpointRequest.toAnyEndpoint())
                         .hasRole(ADMIN_ROLE)
                         .requestMatchers("/api/dev/**")
+                        .access(allOf(authenticated(), hasRole(ADMIN_ROLE), admission))
+                        // Editing or hard-deleting a catalog row changes it for every user, so those
+                        // verbs are admin (#246). A user's own removal is DELETE /api/tracked-products/{id}.
+                        .requestMatchers(HttpMethod.PATCH, "/api/products/**")
+                        .access(allOf(authenticated(), hasRole(ADMIN_ROLE), admission))
+                        .requestMatchers(HttpMethod.DELETE, "/api/products/**")
                         .access(allOf(authenticated(), hasRole(ADMIN_ROLE), admission))
                         .requestMatchers("/api/**")
                         .access(allOf(authenticated(), admission))

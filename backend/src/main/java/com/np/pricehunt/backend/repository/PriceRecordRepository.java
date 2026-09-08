@@ -22,9 +22,10 @@ public interface PriceRecordRepository extends JpaRepository<PriceRecord, Long> 
     // 2. Get ONLY the very latest price for a store link
     Optional<PriceRecord> findFirstByTrackedItemOrderByObservedAtDesc(TrackedItem trackedItem);
 
-    // 3. Find prices within a specific date range, newest first
-    List<PriceRecord> findByTrackedItemAndObservedAtBetweenOrderByObservedAtDesc(
-            TrackedItem trackedItem, Instant start, Instant end);
+    // 3. Find prices within a specific date range, newest first. By id: the caller holds a listing
+    // ref it resolved through membership (UserScopedCatalog), never a managed entity.
+    List<PriceRecord> findByTrackedItemIdAndObservedAtBetweenOrderByObservedAtDesc(
+            Long trackedItemId, Instant start, Instant end);
 
     /**
      * One batched window fetch across many listings for the price-trend engine (issue #145).
@@ -80,10 +81,12 @@ public interface PriceRecordRepository extends JpaRepository<PriceRecord, Long> 
      * <p><b>Aliases are quoted deliberately</b> — Postgres folds unquoted identifiers to lowercase,
      * and the interface projection binds by exact column label.
      *
-     * <p>Whole-set by design: single-tenant, so there is no item-id IN list to bind. Served by {@code
-     * idx_price_record_observed_at} (V10); the composite {@code (tracked_item_id, observed_at)} cannot
-     * help because its leading column does not appear in the predicate.
+     * <p>Bounded to the caller's listings (#246): {@code itemIds} is the set the tenancy port resolved
+     * through membership, so the composite {@code (tracked_item_id, observed_at)} index serves both
+     * branches. Callers must skip the query when the set is empty rather than bind an empty {@code
+     * IN} list.
      *
+     * @param itemIds the listings to evaluate — every listing under every product the caller tracks
      * @param currentFloor oldest observation the CURRENT side may carry forward from (inclusive)
      * @param asOf the request instant; nothing after it may be selected (inclusive)
      * @param baselineFloor oldest observation the BASELINE side may carry forward from (inclusive)
@@ -108,7 +111,8 @@ public interface PriceRecordRepository extends JpaRepository<PriceRecord, Long> 
                                    PARTITION BY c.tracked_item_id
                                    ORDER BY c.observed_at DESC, c.id DESC) AS rn
                         FROM price_record c
-                        WHERE c.observed_at >= :currentFloor AND c.observed_at <= :asOf
+                        WHERE c.tracked_item_id IN (:itemIds)
+                          AND c.observed_at >= :currentFloor AND c.observed_at <= :asOf
                         UNION ALL
                         SELECT b.tracked_item_id, b.id, b.price, b.currency, b.availability_status,
                                b.observed_at,
@@ -117,11 +121,13 @@ public interface PriceRecordRepository extends JpaRepository<PriceRecord, Long> 
                                    PARTITION BY b.tracked_item_id
                                    ORDER BY b.observed_at DESC, b.id DESC) AS rn
                         FROM price_record b
-                        WHERE b.observed_at >= :baselineFloor AND b.observed_at <= :baselineCutoff
+                        WHERE b.tracked_item_id IN (:itemIds)
+                          AND b.observed_at >= :baselineFloor AND b.observed_at <= :baselineCutoff
                     ) r
                     WHERE r.rn = 1
                     """)
     List<CutoffObservationRow> findCutoffObservations(
+            @Param("itemIds") Collection<Long> itemIds,
             @Param("currentFloor") Instant currentFloor,
             @Param("asOf") Instant asOf,
             @Param("baselineFloor") Instant baselineFloor,

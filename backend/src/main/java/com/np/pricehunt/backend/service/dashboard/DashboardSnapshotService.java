@@ -33,8 +33,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 /**
- * Computes every tracked product's headline price, availability rollup and 7-day delta in one pass
- * (issue #146).
+ * Computes every product the caller tracks — headline price, availability rollup and 7-day delta —
+ * in one pass (issue #146; per-user since #246).
  *
  * <p><b>Why a lean pass exists at all.</b> The dashboard's two summary tiles aggregate {@code delta7d}
  * over the <em>whole</em> tracked set — "3 price drops this week", "biggest drop: −18%" — so the delta
@@ -67,7 +67,8 @@ public class DashboardSnapshotService {
 
     /**
      * @param listingsByProductId every product to snapshot, including those with no listings (they
-     *     get an empty rollup rather than being dropped from the result)
+     *     get an empty rollup rather than being dropped from the result) — resolved through the
+     *     tenancy port, which is what makes the fetch below the caller's data and nobody else's
      * @param asOf evaluation instant, captured once by the caller so every product in the response
      *     describes the same moment
      * @param displayCurrency already validated by the caller
@@ -81,9 +82,18 @@ public class DashboardSnapshotService {
         Instant currentCarryForwardFloor = asOf.minus(carryForwardDays, ChronoUnit.DAYS);
         Instant baselineCarryForwardFloor = baselineCutoff.minus(carryForwardDays, ChronoUnit.DAYS);
 
-        Map<Long, ListingCutoffObservations> observationsByListingId =
-                collectByListingId(priceRecordRepository.findCutoffObservations(
-                        currentCarryForwardFloor, asOf, baselineCarryForwardFloor, baselineCutoff));
+        Set<Long> listingIds = new HashSet<>();
+        listingsByProductId.values().forEach(listings -> {
+            if (listings != null) {
+                listings.forEach(listing -> listingIds.add(listing.trackedItemId()));
+            }
+        });
+        // Skipped entirely when the caller tracks nothing with a listing, rather than binding an
+        // empty IN list.
+        Map<Long, ListingCutoffObservations> observationsByListingId = listingIds.isEmpty()
+                ? Map.of()
+                : collectByListingId(priceRecordRepository.findCutoffObservations(
+                        listingIds, currentCarryForwardFloor, asOf, baselineCarryForwardFloor, baselineCutoff));
 
         HistoricalRateWindow baselineRates =
                 loadBaselineRates(observationsByListingId.values(), baselineCutoff, displayCurrency);

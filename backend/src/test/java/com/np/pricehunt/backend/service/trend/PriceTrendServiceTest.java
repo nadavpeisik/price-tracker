@@ -13,14 +13,9 @@ import static org.mockito.Mockito.when;
 
 import com.np.pricehunt.backend.config.PriceTrendProperties;
 import com.np.pricehunt.backend.domain.AvailabilityStatus;
-import com.np.pricehunt.backend.domain.Product;
-import com.np.pricehunt.backend.domain.TrackedItem;
-import com.np.pricehunt.backend.dto.PriceTrendResponse;
-import com.np.pricehunt.backend.exception.NotFoundException;
 import com.np.pricehunt.backend.exception.ValidationException;
 import com.np.pricehunt.backend.repository.PriceRecordRepository;
-import com.np.pricehunt.backend.repository.ProductRepository;
-import com.np.pricehunt.backend.repository.TrackedItemRepository;
+import com.np.pricehunt.backend.repository.projection.DashboardListingRef;
 import com.np.pricehunt.backend.repository.projection.TrendRecordView;
 import com.np.pricehunt.backend.service.fx.HistoricalRateWindow;
 import com.np.pricehunt.backend.service.fx.HistoricalRateWindowLoader;
@@ -32,7 +27,6 @@ import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -41,19 +35,18 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-/** Loading, batching, clamping and DTO mapping — the calculator's own maths is covered separately. */
+/**
+ * The trend engine's loading and windowing (issue #145): one record query and one rate load per
+ * batch, the fetch floor, and the {@code days} bounds. The engine takes listing refs the tenancy port
+ * resolved (#246) and never sees a user; the endpoint that resolves the product and maps the response
+ * is {@code TrackedProductQueryService}, tested there.
+ */
 @ExtendWith(MockitoExtension.class)
 class PriceTrendServiceTest {
 
     private static final Instant NOW = Instant.parse("2026-03-20T12:00:00Z");
     private static final LocalDate TODAY = LocalDate.of(2026, 3, 20);
     private static final String ILS = "ILS";
-
-    @Mock
-    private ProductRepository productRepository;
-
-    @Mock
-    private TrackedItemRepository trackedItemRepository;
 
     @Mock
     private PriceRecordRepository priceRecordRepository;
@@ -70,8 +63,6 @@ class PriceTrendServiceTest {
     void setUp() {
         // Construct here, not as a field initializer: @Mock fields are injected after field init.
         service = new PriceTrendService(
-                productRepository,
-                trackedItemRepository,
                 priceRecordRepository,
                 rateWindowLoader,
                 calculator,
@@ -80,99 +71,37 @@ class PriceTrendServiceTest {
     }
 
     @Test
-    void getProductTrend_unknownProduct_is404() {
-        when(productRepository.findById(42L)).thenReturn(Optional.empty());
+    void defaultWindowIsThirtyDays() {
+        stubBatchOnly();
 
-        assertThatThrownBy(() -> service.getProductTrend(42L, null, ILS))
-                .isInstanceOf(NotFoundException.class)
-                .hasMessageContaining("Product not found");
-
-        verifyNoInteractions(priceRecordRepository, rateWindowLoader, calculator);
-    }
-
-    @Test
-    void getProductTrend_formatsSeriesPricesAsFixedScaleDecimalStrings() {
-        // The calculator emits scale 2 here, so a mapper that merely stringified it would say "199.5" —
-        // this pins that the point goes through WireMoney (#175).
-        Product product = product(1L);
-        TrackedItem item = item(10L, "KSP", product);
-        stubLoad(product, List.of(item));
-        when(calculator.compute(any(), any(), any(), anyString(), any(), anyInt()))
-                .thenReturn(new ProductTrend(
-                        List.of(new TrendPoint(
-                                midnight(1),
-                                new BigDecimal("199.50"),
-                                new BestOffer(10L, "KSP", NOW.minus(2, ChronoUnit.DAYS)))),
-                        null,
-                        TODAY,
-                        false));
-
-        PriceTrendResponse response = service.getProductTrend(1L, null, ILS);
-
-        assertThat(response.sparkline().get(0).price()).isEqualTo("199.5000");
-    }
-
-    @Test
-    void getProductTrend_mapsCalculatorOutputOntoTheResponse() {
-        Product product = product(1L);
-        TrackedItem item = item(10L, "KSP", product);
-        stubLoad(product, List.of(item));
-        Instant observed = NOW.minus(2, ChronoUnit.DAYS);
-        when(calculator.compute(any(), any(), any(), anyString(), any(), anyInt()))
-                .thenReturn(new ProductTrend(
-                        List.of(new TrendPoint(
-                                midnight(1), new BigDecimal("199.0000"), new BestOffer(10L, "KSP", observed))),
-                        new BigDecimal("-5.25"),
-                        TODAY,
-                        false));
-
-        PriceTrendResponse response = service.getProductTrend(1L, null, ILS);
-
-        assertThat(response.productId()).isEqualTo(1L);
-        assertThat(response.displayCurrency()).isEqualTo(ILS);
-        assertThat(response.delta7d()).isEqualByComparingTo("-5.25");
-        assertThat(response.conversionAsOf()).isEqualTo(TODAY);
-        assertThat(response.conversionStale()).isFalse();
-        assertThat(response.sparkline()).hasSize(1);
-        assertThat(response.sparkline().get(0).price()).isEqualTo("199.0000");
-        assertThat(response.sparkline().get(0).bestOffer().trackedItemId()).isEqualTo(10L);
-        assertThat(response.sparkline().get(0).bestOffer().shopName()).isEqualTo("KSP");
-        assertThat(response.sparkline().get(0).bestOffer().observedAt()).isEqualTo(observed);
-    }
-
-    @Test
-    void getProductTrend_defaultWindowIsThirtyDays() {
-        stubSingleProductWithOneItem();
-
-        service.getProductTrend(1L, null, ILS);
+        service.computeProductTrends(oneProductWithOneListing(), null, ILS);
 
         assertThat(capturedWindowStart()).isEqualTo(TODAY.minusDays(29));
     }
 
     @Test
-    void getProductTrend_windowAboveTheMaximumIsClamped() {
-        stubSingleProductWithOneItem();
+    void windowAboveTheMaximumIsClamped() {
+        stubBatchOnly();
 
-        service.getProductTrend(1L, 9999, ILS);
+        service.computeProductTrends(oneProductWithOneListing(), 9999, ILS);
 
         assertThat(capturedWindowStart()).isEqualTo(TODAY.minusDays(729));
     }
 
     @Test
-    void getProductTrend_nonPositiveWindowIs400() {
-        when(productRepository.findById(1L)).thenReturn(Optional.of(product(1L)));
-        when(trackedItemRepository.findByProduct(any())).thenReturn(List.of());
-
-        assertThatThrownBy(() -> service.getProductTrend(1L, 0, ILS))
+    void nonPositiveWindowIs400() {
+        assertThatThrownBy(() -> service.computeProductTrends(oneProductWithOneListing(), 0, ILS))
                 .isInstanceOf(ValidationException.class)
                 .hasMessageContaining("days must be >= 1");
+
+        verifyNoInteractions(priceRecordRepository, rateWindowLoader, calculator);
     }
 
     @Test
     void fetchWindowAlwaysReachesTheDeltaBaseline_evenForAShortSparkline() {
-        stubSingleProductWithOneItem();
+        stubBatchOnly();
 
-        service.getProductTrend(1L, 7, ILS);
+        service.computeProductTrends(oneProductWithOneListing(), 7, ILS);
 
         ArgumentCaptor<Instant> from = ArgumentCaptor.forClass(Instant.class);
         verify(priceRecordRepository).findTrendRecords(any(), from.capture(), eq(NOW));
@@ -183,11 +112,6 @@ class PriceTrendServiceTest {
 
     @Test
     void multipleProducts_shareOneRecordQueryAndOneRateLoad_withoutLeakingAcrossProducts() {
-        Product first = product(1L);
-        Product second = product(2L);
-        TrackedItem kspA = item(10L, "KSP", first);
-        TrackedItem amazonB = item(20L, "Amazon", second);
-
         when(priceRecordRepository.findTrendRecords(any(), any(), any()))
                 .thenReturn(List.of(
                         trendRecord(10L, "100", ILS, NOW.minus(2, ChronoUnit.DAYS)),
@@ -197,7 +121,10 @@ class PriceTrendServiceTest {
                 .thenReturn(ProductTrend.empty());
 
         // Product 3 has no listings at all — it must still get an entry, without extra queries.
-        service.computeProductTrends(Map.of(1L, List.of(kspA), 2L, List.of(amazonB), 3L, List.of()), 30, ILS);
+        service.computeProductTrends(
+                Map.of(1L, List.of(listing(10L, 1L, "KSP")), 2L, List.of(listing(20L, 2L, "Amazon")), 3L, List.of()),
+                30,
+                ILS);
 
         verify(priceRecordRepository, times(1)).findTrendRecords(any(), any(), any());
         verify(rateWindowLoader, times(1)).load(any(), any(), any());
@@ -242,25 +169,15 @@ class PriceTrendServiceTest {
         verify(calculator).compute(any(), eq(TODAY.minusDays(29)), eq(NOW), anyString(), any(), anyInt());
     }
 
-    private void stubBatchOnly() {
-        when(priceRecordRepository.findTrendRecords(any(), any(), any())).thenReturn(List.of());
+    @Test
+    void rateWindowIsLoadedForEveryCurrencySeenPlusTheDisplayCurrency() {
+        when(priceRecordRepository.findTrendRecords(any(), any(), any()))
+                .thenReturn(List.of(trendRecord(10L, "50", "USD", NOW.minus(1, ChronoUnit.DAYS))));
         when(rateWindowLoader.load(any(), any(), any())).thenReturn(HistoricalRateWindow.empty());
         when(calculator.compute(any(), any(), any(), anyString(), any(), anyInt()))
                 .thenReturn(ProductTrend.empty());
-    }
 
-    private static Map<Long, List<TrackedItem>> oneProductWithOneListing() {
-        Product product = product(1L);
-        return Map.of(1L, List.of(item(10L, "KSP", product)));
-    }
-
-    @Test
-    void rateWindowIsLoadedForEveryCurrencySeenPlusTheDisplayCurrency() {
-        stubSingleProductWithOneItem();
-        when(priceRecordRepository.findTrendRecords(any(), any(), any()))
-                .thenReturn(List.of(trendRecord(10L, "50", "USD", NOW.minus(1, ChronoUnit.DAYS))));
-
-        service.getProductTrend(1L, 30, ILS);
+        service.computeProductTrends(oneProductWithOneListing(), 30, ILS);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Set<String>> quotes = ArgumentCaptor.forClass(Set.class);
@@ -270,11 +187,13 @@ class PriceTrendServiceTest {
 
     @Test
     void singleCurrencyProduct_asksForNoRatesSoTheLoaderSkipsTheDatabase() {
-        stubSingleProductWithOneItem();
         when(priceRecordRepository.findTrendRecords(any(), any(), any()))
                 .thenReturn(List.of(trendRecord(10L, "50", ILS, NOW.minus(1, ChronoUnit.DAYS))));
+        when(rateWindowLoader.load(any(), any(), any())).thenReturn(HistoricalRateWindow.empty());
+        when(calculator.compute(any(), any(), any(), anyString(), any(), anyInt()))
+                .thenReturn(ProductTrend.empty());
 
-        service.getProductTrend(1L, 30, ILS);
+        service.computeProductTrends(oneProductWithOneListing(), 30, ILS);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Set<String>> quotes = ArgumentCaptor.forClass(Set.class);
@@ -285,34 +204,28 @@ class PriceTrendServiceTest {
 
     @Test
     void productWithoutListings_skipsTheRecordQueryEntirely() {
-        Product product = product(1L);
-        when(productRepository.findById(1L)).thenReturn(Optional.of(product));
-        when(trackedItemRepository.findByProduct(product)).thenReturn(List.of());
         when(rateWindowLoader.load(any(), any(), any())).thenReturn(HistoricalRateWindow.empty());
         when(calculator.compute(any(), any(), any(), anyString(), any(), anyInt()))
                 .thenReturn(ProductTrend.empty());
 
-        PriceTrendResponse response = service.getProductTrend(1L, null, ILS);
+        Map<Long, ProductTrend> trends = service.computeProductTrends(Map.of(1L, List.of()), null, ILS);
 
-        assertThat(response.sparkline()).isEmpty();
-        assertThat(response.delta7d()).isNull();
+        assertThat(trends.get(1L).points()).isEmpty();
+        assertThat(trends.get(1L).delta7d()).isNull();
         verifyNoInteractions(priceRecordRepository);
     }
 
     // --- helpers ---
 
-    private void stubSingleProductWithOneItem() {
-        Product product = product(1L);
-        stubLoad(product, List.of(item(10L, "KSP", product)));
+    private void stubBatchOnly() {
+        when(priceRecordRepository.findTrendRecords(any(), any(), any())).thenReturn(List.of());
+        when(rateWindowLoader.load(any(), any(), any())).thenReturn(HistoricalRateWindow.empty());
         when(calculator.compute(any(), any(), any(), anyString(), any(), anyInt()))
                 .thenReturn(ProductTrend.empty());
     }
 
-    private void stubLoad(Product product, List<TrackedItem> items) {
-        when(productRepository.findById(product.getId())).thenReturn(Optional.of(product));
-        when(trackedItemRepository.findByProduct(product)).thenReturn(items);
-        when(priceRecordRepository.findTrendRecords(any(), any(), any())).thenReturn(List.of());
-        when(rateWindowLoader.load(any(), any(), any())).thenReturn(HistoricalRateWindow.empty());
+    private static Map<Long, List<DashboardListingRef>> oneProductWithOneListing() {
+        return Map.of(1L, List.of(listing(10L, 1L, "KSP")));
     }
 
     private LocalDate capturedWindowStart() {
@@ -321,21 +234,8 @@ class PriceTrendServiceTest {
         return windowStart.getValue();
     }
 
-    private static Instant midnight(int daysAgo) {
-        return TODAY.minusDays(daysAgo).atStartOfDay(ZoneOffset.UTC).toInstant();
-    }
-
-    private static Product product(Long id) {
-        return Product.builder().id(id).name("Product " + id).build();
-    }
-
-    private static TrackedItem item(Long id, String shop, Product product) {
-        return TrackedItem.builder()
-                .id(id)
-                .url("https://" + shop.toLowerCase(java.util.Locale.ROOT) + ".example/item/" + id)
-                .shopName(shop)
-                .product(product)
-                .build();
+    private static DashboardListingRef listing(Long id, Long productId, String shop) {
+        return new DashboardListingRef(id, productId, shop);
     }
 
     private static TrendRecordView trendRecord(Long itemId, String price, String currency, Instant at) {

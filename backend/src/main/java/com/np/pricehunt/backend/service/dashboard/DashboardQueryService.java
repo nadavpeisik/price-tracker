@@ -1,7 +1,6 @@
 package com.np.pricehunt.backend.service.dashboard;
 
-import com.np.pricehunt.backend.domain.Product;
-import com.np.pricehunt.backend.domain.TrackedItem;
+import com.np.pricehunt.backend.auth.CurrentUser;
 import com.np.pricehunt.backend.dto.DashboardAvailabilityResponse;
 import com.np.pricehunt.backend.dto.DashboardBiggestDrop;
 import com.np.pricehunt.backend.dto.DashboardFacets;
@@ -12,11 +11,11 @@ import com.np.pricehunt.backend.dto.DashboardQueryRequest;
 import com.np.pricehunt.backend.dto.DashboardResponse;
 import com.np.pricehunt.backend.dto.DashboardSortKey;
 import com.np.pricehunt.backend.dto.DashboardSummary;
-import com.np.pricehunt.backend.repository.ProductRepository;
-import com.np.pricehunt.backend.repository.TrackedItemRepository;
 import com.np.pricehunt.backend.repository.projection.DashboardListingRef;
+import com.np.pricehunt.backend.repository.projection.TrackedProductRef;
 import com.np.pricehunt.backend.service.trend.PriceTrendService;
 import com.np.pricehunt.backend.service.trend.ProductTrend;
+import com.np.pricehunt.backend.tenancy.UserScopedCatalog;
 import com.np.pricehunt.backend.util.ShopIdentity;
 import com.np.pricehunt.backend.util.WireMoney;
 import java.math.BigDecimal;
@@ -32,13 +31,17 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
-import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Serves the tracked-items dashboard: one request, one response (issue #146).
+ * Serves the tracked-items dashboard: one request, one response (issue #146), scoped to the caller
+ * (issue #246).
+ *
+ * <p><b>Whose data.</b> The whole set is "every product the caller tracks and every listing under
+ * those products", read through {@link UserScopedCatalog}. The two summary tiles, the facets and the
+ * page all describe that set and only that set.
  *
  * <p><b>Why filtering and sorting happen in Java rather than SQL.</b> The two summary tiles aggregate
  * over the <em>whole</em> tracked set regardless of the active query, so every product's name, shops
@@ -48,9 +51,9 @@ import org.springframework.transaction.annotation.Transactional;
  * database work that <em>does</em> matter is the fetch, and that is where the two-cutoff query earns
  * its keep: it replaced a per-listing N+1 with a single bounded pass.
  *
- * <p><b>What this costs, and when to revisit.</b> Per-request cost scales with the size of the
- * tracked set, and nothing bounds that — the per-product listing cap shapes individual products, not
- * the catalogue (issue #172). The
+ * <p><b>What this costs, and when to revisit.</b> Per-request cost scales with the caller's tracked
+ * set — tenant-limited, not bounded: nothing caps how many products one user may track (that is
+ * #172's decision record), and the cutoff query's {@code IN} list grows with the same set. The
  * documented escape hatch is a materialized per-product projection refreshed on write; it is
  * deliberately deferred until measurement says it is needed, because it trades a real correctness
  * property — everything computed from live data at one instant — for latency nobody has yet observed
@@ -72,19 +75,18 @@ import org.springframework.transaction.annotation.Transactional;
  * oversight: no network I/O happens inside, which is what the project's hard rule against long
  * transactions actually guards; at {@code READ_COMMITTED} the enclosing transaction buys no
  * cross-statement consistency to trade away, but {@code readOnly = true} does give Hibernate a
- * flush-free session for a whole-catalogue read; and splitting it would multiply connection
- * checkouts rather than shorten total hold time. {@code ProductQueryService} has the same shape. The
- * trigger to revisit is observable, not architectural: connection-pool wait time appearing under
- * concurrent dashboard load — at which point the projection escape hatch above removes most of the
- * in-transaction work anyway.
+ * flush-free session for the read; and splitting it would multiply connection checkouts rather than
+ * shorten total hold time. {@code TrackedProductQueryService} has the same shape. The trigger to revisit is
+ * observable, not architectural: connection-pool wait time appearing under concurrent dashboard load —
+ * at which point the projection escape hatch above removes most of the in-transaction work anyway.
  */
 @Service
 @Transactional(readOnly = true)
 @RequiredArgsConstructor
 public class DashboardQueryService {
 
-    private final ProductRepository productRepository;
-    private final TrackedItemRepository trackedItemRepository;
+    private final CurrentUser currentUser;
+    private final UserScopedCatalog userCatalog;
     private final DashboardSnapshotService snapshotService;
     private final PriceTrendService trendService;
     private final Clock clock;
@@ -96,15 +98,16 @@ public class DashboardQueryService {
         Instant asOf = clock.instant();
         String displayCurrency = request.displayCurrency();
 
-        List<Product> products = productRepository.findAll();
-        List<DashboardListingRef> listings = trackedItemRepository.findAllForDashboard();
+        long userId = currentUser.userId();
+        List<TrackedProductRef> products = userCatalog.trackedProducts(userId);
+        List<DashboardListingRef> listings = userCatalog.listingsOfTrackedProducts(userId);
 
         Map<Long, List<DashboardListingRef>> listingsByProductId = groupListingsByProductId(products, listings);
         Map<Long, ProductDashboardSnapshot> snapshotsByProductId =
                 snapshotService.snapshotAll(listingsByProductId, asOf, displayCurrency);
 
         List<DashboardRow> allRows = products.stream()
-                .map(product -> new DashboardRow(product, snapshotsByProductId.get(product.getId())))
+                .map(product -> new DashboardRow(product, snapshotsByProductId.get(product.productId())))
                 .toList();
 
         Map<Long, Set<String>> shopIdentitiesByProductId = collectShopIdentities(listingsByProductId);
@@ -117,7 +120,8 @@ public class DashboardQueryService {
                 .toList();
 
         List<DashboardRow> pageRows = selectPage(matchingRows, request.page(), request.size());
-        Map<Long, ProductTrend> pageTrendsByProductId = loadPageTrends(pageRows, displayCurrency, asOf);
+        Map<Long, ProductTrend> pageTrendsByProductId =
+                loadPageTrends(pageRows, listingsByProductId, displayCurrency, asOf);
 
         return new DashboardResponse(
                 pageRows.stream()
@@ -136,12 +140,12 @@ public class DashboardQueryService {
     // --- loading ---
 
     private static Map<Long, List<DashboardListingRef>> groupListingsByProductId(
-            List<Product> products, List<DashboardListingRef> listings) {
+            List<TrackedProductRef> products, List<DashboardListingRef> listings) {
 
         // Seeded from the product list so a product with no listings still gets an entry, and any
         // listing whose product vanished between the two queries is dropped rather than inventing a row.
         Map<Long, List<DashboardListingRef>> listingsByProductId = new LinkedHashMap<>();
-        products.forEach(product -> listingsByProductId.put(product.getId(), new ArrayList<>()));
+        products.forEach(product -> listingsByProductId.put(product.productId(), new ArrayList<>()));
         for (DashboardListingRef listing : listings) {
             List<DashboardListingRef> productListings = listingsByProductId.get(listing.productId());
             if (productListings != null) {
@@ -155,21 +159,23 @@ public class DashboardQueryService {
      * Sparklines for the visible page only.
      *
      * <p>The series is the expensive part of the trend engine — a full multi-week window per listing —
-     * and it is the one thing off-screen rows do not need. Skipped entirely on an empty page rather
-     * than binding an empty {@code IN} list.
+     * and it is the one thing off-screen rows do not need. The page's listings are picked out of the
+     * refs already in memory (no second listing query); skipped entirely on an empty page rather than
+     * binding an empty {@code IN} list.
      */
-    private Map<Long, ProductTrend> loadPageTrends(List<DashboardRow> pageRows, String displayCurrency, Instant asOf) {
+    private Map<Long, ProductTrend> loadPageTrends(
+            List<DashboardRow> pageRows,
+            Map<Long, List<DashboardListingRef>> listingsByProductId,
+            String displayCurrency,
+            Instant asOf) {
         if (pageRows.isEmpty()) {
             return Map.of();
         }
-        List<Long> productIds = pageRows.stream().map(DashboardRow::productId).toList();
-
-        // Entities, not the light refs: computeProductTrends takes TrackedItem.
-        Map<Long, List<TrackedItem>> listingsByProductId = trackedItemRepository.findByProductIdIn(productIds).stream()
-                .collect(Collectors.groupingBy(item -> item.getProduct().getId()));
-        productIds.forEach(id -> listingsByProductId.computeIfAbsent(id, key -> List.of()));
-
-        return trendService.computeProductTrendsAsOf(listingsByProductId, null, displayCurrency, asOf);
+        Map<Long, List<DashboardListingRef>> pageListingsByProductId = new LinkedHashMap<>();
+        for (DashboardRow row : pageRows) {
+            pageListingsByProductId.put(row.productId(), listingsByProductId.getOrDefault(row.productId(), List.of()));
+        }
+        return trendService.computeProductTrendsAsOf(pageListingsByProductId, null, displayCurrency, asOf);
     }
 
     // --- filtering ---
@@ -200,7 +206,7 @@ public class DashboardQueryService {
             List<String> requestedShopIdentities,
             Map<Long, Set<String>> shopIdentitiesByProductId) {
 
-        if (caseFoldedSearchTerm != null && !nameContains(row.product().getName(), caseFoldedSearchTerm)) {
+        if (caseFoldedSearchTerm != null && !nameContains(row.product().name(), caseFoldedSearchTerm)) {
             return false;
         }
         if (requestedShopIdentities.isEmpty()) {
@@ -231,7 +237,7 @@ public class DashboardQueryService {
                 switch (sort) {
                     case NAME ->
                         Comparator.comparing(
-                                row -> row.product().getName(), Comparator.nullsLast(String.CASE_INSENSITIVE_ORDER));
+                                row -> row.product().name(), Comparator.nullsLast(String.CASE_INSENSITIVE_ORDER));
                     case LOWEST_CURRENT_PRICE ->
                         Comparator.comparing(
                                 DashboardRow::bestPriceConverted, Comparator.nullsLast(Comparator.naturalOrder()));
@@ -329,7 +335,7 @@ public class DashboardQueryService {
                         ? null
                         : new DashboardBiggestDrop(
                                 biggestDropRow.productId(),
-                                biggestDropRow.product().getName(),
+                                biggestDropRow.product().name(),
                                 biggestDropRow.delta7d()));
     }
 
@@ -345,7 +351,7 @@ public class DashboardQueryService {
         boolean hasBestPrice = snapshot.bestPriceConverted() != null;
         return new DashboardProductResponse(
                 row.productId(),
-                row.product().getName(),
+                row.product().name(),
                 null, // imageUrl — no column yet (#95)
                 null, // category — no column yet
                 WireMoney.decimalString(snapshot.bestPriceConverted()),
@@ -381,10 +387,10 @@ public class DashboardQueryService {
      * <p>Sorting reads the snapshot rather than re-deriving anything, which is what guarantees
      * "cheapest first" orders by the same number the row displays.
      */
-    private record DashboardRow(Product product, ProductDashboardSnapshot snapshot) {
+    private record DashboardRow(TrackedProductRef product, ProductDashboardSnapshot snapshot) {
 
         Long productId() {
-            return product.getId();
+            return product.productId();
         }
 
         BigDecimal bestPriceConverted() {

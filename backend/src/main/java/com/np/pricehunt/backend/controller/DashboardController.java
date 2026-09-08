@@ -5,6 +5,7 @@ import com.np.pricehunt.backend.dto.DashboardQueryRequest;
 import com.np.pricehunt.backend.dto.DashboardResponse;
 import com.np.pricehunt.backend.dto.DashboardSortKey;
 import com.np.pricehunt.backend.exception.ValidationException;
+import com.np.pricehunt.backend.service.ProductTrackingService;
 import com.np.pricehunt.backend.service.dashboard.DashboardQueryService;
 import com.np.pricehunt.backend.util.ShopIdentity;
 import java.util.LinkedHashSet;
@@ -14,13 +15,17 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.util.MultiValueMap;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * The tracked-items dashboard's single endpoint (issue #146).
+ * The caller's tracked products (issue #146; per-user since #246): the dashboard query, and removing a
+ * product from it. The removal lives here rather than under {@code /api/products} because it deletes
+ * the caller's membership and nothing else — the catalog row is shared and stays.
  *
  * <p><b>Pagination is 1-based on both boundaries.</b> {@code ?page=1} is the first page and the
  * response echoes that number back, so any page number the client receives is a page number it can
@@ -44,6 +49,7 @@ public class DashboardController {
     private static final String SHOPS_PARAM = "shops";
 
     private final DashboardQueryService queryService;
+    private final ProductTrackingService trackingService;
     private final DisplayCurrencyResolver displayCurrencyResolver;
     private final DashboardProperties dashboardProperties;
 
@@ -74,6 +80,13 @@ public class DashboardController {
                 displayCurrencyResolver.resolve(displayCurrency));
 
         return ResponseEntity.ok(queryService.query(request));
+    }
+
+    /** Stop tracking a product: 204, or 404 when the caller never tracked it (or it does not exist). */
+    @DeleteMapping("/{productId}")
+    public ResponseEntity<Void> stopTracking(@PathVariable Long productId) {
+        trackingService.stopTracking(productId);
+        return ResponseEntity.noContent().build();
     }
 
     /** An empty or whitespace-only search is no search at all, not a match-everything substring. */

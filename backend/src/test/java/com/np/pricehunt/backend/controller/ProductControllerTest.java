@@ -16,10 +16,9 @@ import com.np.pricehunt.backend.exception.ErrorCode;
 import com.np.pricehunt.backend.exception.NotFoundException;
 import com.np.pricehunt.backend.exception.ValidationException;
 import com.np.pricehunt.backend.service.ProductCatalogService;
-import com.np.pricehunt.backend.service.ProductQueryService;
 import com.np.pricehunt.backend.service.ProductTrackingService;
+import com.np.pricehunt.backend.service.TrackedProductQueryService;
 import com.np.pricehunt.backend.service.fx.ExchangeRateService;
-import com.np.pricehunt.backend.service.trend.PriceTrendService;
 import java.math.BigDecimal;
 import java.sql.SQLException;
 import java.time.Instant;
@@ -60,13 +59,10 @@ class ProductControllerTest {
     private ProductTrackingService trackingService;
 
     @MockitoBean
-    private ProductQueryService queryService;
+    private TrackedProductQueryService trackedProductQueryService;
 
     @MockitoBean
     private ExchangeRateService rateService;
-
-    @MockitoBean
-    private PriceTrendService trendService;
 
     @Test
     void listProducts_isGone_supersededByTheDashboardEndpoint() throws Exception {
@@ -87,7 +83,7 @@ class ProductControllerTest {
                 AvailabilityStatus.AVAILABLE,
                 Instant.now());
         ProductDetailResponse detail = new ProductDetailResponse(1L, "Laptop", null, List.of(item));
-        when(queryService.getProduct(1L)).thenReturn(detail);
+        when(trackedProductQueryService.getProduct(1L)).thenReturn(detail);
 
         mvc.perform(get("/api/products/1"))
                 .andExpect(status().isOk())
@@ -100,7 +96,7 @@ class ProductControllerTest {
 
     @Test
     void getProduct_notFound_returns404() throws Exception {
-        when(queryService.getProduct(99L)).thenThrow(new NotFoundException("not found"));
+        when(trackedProductQueryService.getProduct(99L)).thenThrow(new NotFoundException("not found"));
 
         mvc.perform(get("/api/products/99")).andExpect(status().isNotFound());
     }
@@ -110,7 +106,7 @@ class ProductControllerTest {
     @Test
     void getListings_returnsTheOrderedPanelRows_withMoneyAsStrings() throws Exception {
         when(rateService.isDefinitelyUnsupported("ILS")).thenReturn(false);
-        when(queryService.getListings(1L, "ILS"))
+        when(trackedProductQueryService.getListings(1L, "ILS"))
                 .thenReturn(List.of(
                         new ProductListingResponse(
                                 7L,
@@ -154,22 +150,22 @@ class ProductControllerTest {
     @Test
     void getListings_omittedDisplayCurrency_fallsBackToTheConfiguredDefault() throws Exception {
         when(rateService.isDefinitelyUnsupported("ILS")).thenReturn(false);
-        when(queryService.getListings(1L, "ILS")).thenReturn(List.of());
+        when(trackedProductQueryService.getListings(1L, "ILS")).thenReturn(List.of());
 
         mvc.perform(get("/api/products/1/listings")).andExpect(status().isOk());
 
-        verify(queryService).getListings(1L, "ILS");
+        verify(trackedProductQueryService).getListings(1L, "ILS");
     }
 
     @Test
     void getListings_explicitDisplayCurrencyIsNormalized() throws Exception {
         when(rateService.isDefinitelyUnsupported("USD")).thenReturn(false);
-        when(queryService.getListings(1L, "USD")).thenReturn(List.of());
+        when(trackedProductQueryService.getListings(1L, "USD")).thenReturn(List.of());
 
         mvc.perform(get("/api/products/1/listings").param("displayCurrency", "usd"))
                 .andExpect(status().isOk());
 
-        verify(queryService).getListings(1L, "USD");
+        verify(trackedProductQueryService).getListings(1L, "USD");
     }
 
     @Test
@@ -177,13 +173,13 @@ class ProductControllerTest {
         mvc.perform(get("/api/products/1/listings").param("displayCurrency", "xxxx"))
                 .andExpect(status().isBadRequest());
 
-        verify(queryService, never()).getListings(anyLong(), anyString());
+        verify(trackedProductQueryService, never()).getListings(anyLong(), anyString());
     }
 
     @Test
     void getListings_unknownProduct_propagates404() throws Exception {
         when(rateService.isDefinitelyUnsupported("ILS")).thenReturn(false);
-        when(queryService.getListings(99L, "ILS")).thenThrow(new NotFoundException("Product not found"));
+        when(trackedProductQueryService.getListings(99L, "ILS")).thenThrow(new NotFoundException("Product not found"));
 
         mvc.perform(get("/api/products/99/listings")).andExpect(status().isNotFound());
     }
@@ -220,7 +216,7 @@ class ProductControllerTest {
         // GlobalExceptionHandler. Pins the advice wiring and that ProblemDetail serializes under
         // this project's Jackson 3 web layer.
         SQLException unique = new SQLException("duplicate key", "23505");
-        when(catalogService.createProduct(any()))
+        when(trackingService.createProduct(any()))
                 .thenThrow(new DataIntegrityViolationException(
                         "could not execute statement",
                         new ConstraintViolationException("dup", unique, "uq_product_name_ci")));
@@ -265,7 +261,7 @@ class ProductControllerTest {
 
     @Test
     void uncodedApplicationException_omitsErrorCode() throws Exception {
-        when(queryService.getProduct(99L)).thenThrow(new NotFoundException("Product not found"));
+        when(trackedProductQueryService.getProduct(99L)).thenThrow(new NotFoundException("Product not found"));
 
         mvc.perform(get("/api/products/99"))
                 .andExpect(status().isNotFound())
@@ -322,7 +318,8 @@ class ProductControllerTest {
                 "999.9900", "USD", AvailabilityStatus.AVAILABLE, Instant.parse("2026-03-19T10:15:30Z"), "STRUCTURED");
         PriceHistoryResponse history =
                 new PriceHistoryResponse(1L, "amazon.com", "https://amazon.com/dp/123", List.of(point));
-        when(queryService.getPriceHistory(eq(1L), eq(1L), isNull(), isNull())).thenReturn(history);
+        when(trackedProductQueryService.getPriceHistory(eq(1L), eq(1L), isNull(), isNull()))
+                .thenReturn(history);
 
         mvc.perform(get("/api/products/1/tracked-items/1/price-history"))
                 .andExpect(status().isOk())
@@ -340,20 +337,21 @@ class ProductControllerTest {
     void getPriceHistory_withFromParam_parsesDateAndCallsService() throws Exception {
         PriceHistoryResponse history =
                 new PriceHistoryResponse(1L, "amazon.com", "https://amazon.com/dp/123", List.of());
-        when(queryService.getPriceHistory(eq(1L), eq(1L), any(Instant.class), isNull()))
+        when(trackedProductQueryService.getPriceHistory(eq(1L), eq(1L), any(Instant.class), isNull()))
                 .thenReturn(history);
 
         mvc.perform(get("/api/products/1/tracked-items/1/price-history").param("from", "2026-01-01T00:00:00Z"))
                 .andExpect(status().isOk());
 
-        verify(queryService).getPriceHistory(eq(1L), eq(1L), eq(Instant.parse("2026-01-01T00:00:00Z")), isNull());
+        verify(trackedProductQueryService)
+                .getPriceHistory(eq(1L), eq(1L), eq(Instant.parse("2026-01-01T00:00:00Z")), isNull());
     }
 
     @Test
     void getPriceHistory_withBothParams_passesBothToService() throws Exception {
         PriceHistoryResponse history =
                 new PriceHistoryResponse(1L, "amazon.com", "https://amazon.com/dp/123", List.of());
-        when(queryService.getPriceHistory(eq(1L), eq(1L), any(Instant.class), any(Instant.class)))
+        when(trackedProductQueryService.getPriceHistory(eq(1L), eq(1L), any(Instant.class), any(Instant.class)))
                 .thenReturn(history);
 
         mvc.perform(get("/api/products/1/tracked-items/1/price-history")
@@ -361,7 +359,7 @@ class ProductControllerTest {
                         .param("to", "2026-04-01T00:00:00Z"))
                 .andExpect(status().isOk());
 
-        verify(queryService)
+        verify(trackedProductQueryService)
                 .getPriceHistory(
                         eq(1L),
                         eq(1L),
@@ -374,7 +372,8 @@ class ProductControllerTest {
     @Test
     void getPriceTrend_returnsSeriesWithBestOfferProvenance() throws Exception {
         when(rateService.isDefinitelyUnsupported("ILS")).thenReturn(false);
-        when(trendService.getProductTrend(eq(1L), isNull(), eq("ILS"))).thenReturn(trendFixture());
+        when(trackedProductQueryService.getPriceTrend(eq(1L), isNull(), eq("ILS")))
+                .thenReturn(trendFixture());
 
         mvc.perform(get("/api/products/1/price-trend"))
                 .andExpect(status().isOk())
@@ -393,7 +392,7 @@ class ProductControllerTest {
     @Test
     void getPriceTrend_nullDeltaSerializesAsNull() throws Exception {
         when(rateService.isDefinitelyUnsupported("ILS")).thenReturn(false);
-        when(trendService.getProductTrend(eq(1L), isNull(), eq("ILS")))
+        when(trackedProductQueryService.getPriceTrend(eq(1L), isNull(), eq("ILS")))
                 .thenReturn(new PriceTrendResponse(1L, "ILS", null, null, false, List.of()));
 
         mvc.perform(get("/api/products/1/price-trend"))
@@ -405,22 +404,24 @@ class ProductControllerTest {
     @Test
     void getPriceTrend_passesDaysThrough() throws Exception {
         when(rateService.isDefinitelyUnsupported("ILS")).thenReturn(false);
-        when(trendService.getProductTrend(eq(1L), eq(90), eq("ILS"))).thenReturn(trendFixture());
+        when(trackedProductQueryService.getPriceTrend(eq(1L), eq(90), eq("ILS")))
+                .thenReturn(trendFixture());
 
         mvc.perform(get("/api/products/1/price-trend").param("days", "90")).andExpect(status().isOk());
 
-        verify(trendService).getProductTrend(1L, 90, "ILS");
+        verify(trackedProductQueryService).getPriceTrend(1L, 90, "ILS");
     }
 
     @Test
     void getPriceTrend_explicitDisplayCurrencyIsNormalized() throws Exception {
         when(rateService.isDefinitelyUnsupported("USD")).thenReturn(false);
-        when(trendService.getProductTrend(eq(1L), isNull(), eq("USD"))).thenReturn(trendFixture());
+        when(trackedProductQueryService.getPriceTrend(eq(1L), isNull(), eq("USD")))
+                .thenReturn(trendFixture());
 
         mvc.perform(get("/api/products/1/price-trend").param("displayCurrency", "usd"))
                 .andExpect(status().isOk());
 
-        verify(trendService).getProductTrend(1L, null, "USD");
+        verify(trackedProductQueryService).getPriceTrend(1L, null, "USD");
     }
 
     @Test
@@ -428,7 +429,7 @@ class ProductControllerTest {
         mvc.perform(get("/api/products/1/price-trend").param("displayCurrency", "ZZZZ"))
                 .andExpect(status().isBadRequest());
 
-        verify(trendService, never()).getProductTrend(anyLong(), any(), anyString());
+        verify(trackedProductQueryService, never()).getPriceTrend(anyLong(), any(), anyString());
     }
 
     @Test
@@ -438,13 +439,13 @@ class ProductControllerTest {
         mvc.perform(get("/api/products/1/price-trend").param("displayCurrency", "JPY"))
                 .andExpect(status().isBadRequest());
 
-        verify(trendService, never()).getProductTrend(anyLong(), any(), anyString());
+        verify(trackedProductQueryService, never()).getPriceTrend(anyLong(), any(), anyString());
     }
 
     @Test
     void getPriceTrend_unknownProduct_propagates404() throws Exception {
         when(rateService.isDefinitelyUnsupported("ILS")).thenReturn(false);
-        when(trendService.getProductTrend(eq(99L), isNull(), eq("ILS")))
+        when(trackedProductQueryService.getPriceTrend(eq(99L), isNull(), eq("ILS")))
                 .thenThrow(new NotFoundException("Product not found"));
 
         mvc.perform(get("/api/products/99/price-trend")).andExpect(status().isNotFound());
@@ -453,7 +454,7 @@ class ProductControllerTest {
     @Test
     void getPriceTrend_nonPositiveDays_propagates400() throws Exception {
         when(rateService.isDefinitelyUnsupported("ILS")).thenReturn(false);
-        when(trendService.getProductTrend(eq(1L), eq(0), eq("ILS")))
+        when(trackedProductQueryService.getPriceTrend(eq(1L), eq(0), eq("ILS")))
                 .thenThrow(new ValidationException("days must be >= 1"));
 
         mvc.perform(get("/api/products/1/price-trend").param("days", "0")).andExpect(status().isBadRequest());

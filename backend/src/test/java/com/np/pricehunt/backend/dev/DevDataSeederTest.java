@@ -5,8 +5,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 
+import com.np.pricehunt.backend.repository.AppUserRepository;
 import com.np.pricehunt.backend.repository.ExchangeRateRepository;
 import com.np.pricehunt.backend.repository.ProductRepository;
+import com.np.pricehunt.backend.repository.UserProductRepository;
 import java.time.Clock;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -21,6 +23,8 @@ class DevDataSeederTest {
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withBean(ProductRepository.class, () -> mock(ProductRepository.class))
             .withBean(ExchangeRateRepository.class, () -> mock(ExchangeRateRepository.class))
+            .withBean(AppUserRepository.class, () -> mock(AppUserRepository.class))
+            .withBean(UserProductRepository.class, () -> mock(UserProductRepository.class))
             .withBean(Clock.class, Clock::systemUTC)
             .withUserConfiguration(DevDataSeeder.class);
 
@@ -60,6 +64,8 @@ class DevDataSeederTest {
         new ApplicationContextRunner()
                 .withBean(ProductRepository.class, () -> productRepository)
                 .withBean(ExchangeRateRepository.class, () -> exchangeRateRepository)
+                .withBean(AppUserRepository.class, () -> mock(AppUserRepository.class))
+                .withBean(UserProductRepository.class, () -> mock(UserProductRepository.class))
                 .withBean(Clock.class, Clock::systemUTC)
                 .withUserConfiguration(DevDataSeeder.class)
                 .withInitializer(c -> c.getEnvironment().setActiveProfiles("seed", "seed-clean"))
