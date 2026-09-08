@@ -5,8 +5,8 @@ import com.np.pricehunt.backend.repository.PriceRecordRepository;
 import com.np.pricehunt.backend.repository.UserProductRepository;
 import com.np.pricehunt.backend.repository.projection.DashboardListingRef;
 import com.np.pricehunt.backend.repository.projection.ListingLatestObservationRow;
-import com.np.pricehunt.backend.repository.projection.ProductRef;
 import com.np.pricehunt.backend.repository.projection.TrackedListingRef;
+import com.np.pricehunt.backend.repository.projection.TrackedProductDetailRef;
 import com.np.pricehunt.backend.repository.projection.TrackedProductRef;
 import java.time.Clock;
 import java.time.Instant;
@@ -52,7 +52,7 @@ public class UserScopedCatalog {
     }
 
     @Transactional(readOnly = true)
-    public Optional<ProductRef> trackedProduct(long userId, long productId) {
+    public Optional<TrackedProductDetailRef> trackedProduct(long userId, long productId) {
         return userProducts.findTrackedProduct(userId, productId);
     }
 

@@ -28,8 +28,8 @@ import com.np.pricehunt.backend.exception.NotFoundException;
 import com.np.pricehunt.backend.exception.ValidationException;
 import com.np.pricehunt.backend.repository.projection.DashboardListingRef;
 import com.np.pricehunt.backend.repository.projection.ListingLatestObservationRow;
-import com.np.pricehunt.backend.repository.projection.ProductRef;
 import com.np.pricehunt.backend.repository.projection.TrackedListingRef;
+import com.np.pricehunt.backend.repository.projection.TrackedProductDetailRef;
 import com.np.pricehunt.backend.service.fx.ConvertedAmount;
 import com.np.pricehunt.backend.service.fx.PriceConverter;
 import com.np.pricehunt.backend.service.trend.BestOffer;
@@ -64,7 +64,7 @@ class TrackedProductQueryServiceTest {
     private static final String USD = "USD";
 
     private static final long USER_ID = 7L;
-    private static final ProductRef PRODUCT_REF = new ProductRef(1L, "Laptop", null);
+    private static final TrackedProductDetailRef PRODUCT_REF = new TrackedProductDetailRef(1L, "Laptop", null);
     private static final TrackedListingRef LISTING_A =
             new TrackedListingRef(1L, "https://amazon.com/dp/1", "amazon.com", null);
 
@@ -72,7 +72,7 @@ class TrackedProductQueryServiceTest {
     private CurrentUser currentUser;
 
     @Mock
-    private UserScopedCatalog catalog;
+    private UserScopedCatalog userCatalog;
 
     @Mock
     private PriceTrendService trendService;
@@ -89,7 +89,7 @@ class TrackedProductQueryServiceTest {
     void setUp() {
         service = new TrackedProductQueryService(
                 currentUser,
-                catalog,
+                userCatalog,
                 trendService,
                 new PriceHistoryProperties(90),
                 new PriceTrendProperties(30, 730, TTL_DAYS),
@@ -109,15 +109,15 @@ class TrackedProductQueryServiceTest {
 
     @Test
     void getProduct_notFound_throwsException() {
-        when(catalog.trackedProduct(USER_ID, 99L)).thenReturn(Optional.empty());
+        when(userCatalog.trackedProduct(USER_ID, 99L)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.getProduct(99L)).isInstanceOf(NotFoundException.class);
     }
 
     @Test
     void getProduct_found_includesLatestPricePerItem() {
-        when(catalog.trackedProduct(USER_ID, 1L)).thenReturn(Optional.of(PRODUCT_REF));
-        when(catalog.listingsWithLatestObservation(USER_ID, 1L, NOW))
+        when(userCatalog.trackedProduct(USER_ID, 1L)).thenReturn(Optional.of(PRODUCT_REF));
+        when(userCatalog.listingsWithLatestObservation(USER_ID, 1L, NOW))
                 .thenReturn(List.of(row(1L, "Amazon", ShopNameSource.MAPPING, "999.99", USD, daysAgo(1))));
 
         ProductDetailResponse detail = service.getProduct(1L);
@@ -132,8 +132,9 @@ class TrackedProductQueryServiceTest {
 
     @Test
     void getProduct_itemWithNoPrice_currentPriceIsNullAndAvailabilityUnknown() {
-        when(catalog.trackedProduct(USER_ID, 1L)).thenReturn(Optional.of(PRODUCT_REF));
-        when(catalog.listingsWithLatestObservation(USER_ID, 1L, NOW)).thenReturn(List.of(neverObserved(1L, "Amazon")));
+        when(userCatalog.trackedProduct(USER_ID, 1L)).thenReturn(Optional.of(PRODUCT_REF));
+        when(userCatalog.listingsWithLatestObservation(USER_ID, 1L, NOW))
+                .thenReturn(List.of(neverObserved(1L, "Amazon")));
 
         ProductDetailResponse detail = service.getProduct(1L);
 
@@ -145,8 +146,8 @@ class TrackedProductQueryServiceTest {
     void getProduct_keepsItsRawMeaning_expiredAndUnavailableObservationsStayVisible() {
         // The detail endpoint never applied the carry-forward rule; sharing the panel's query must not
         // quietly change that (#157). Only the listings panel prunes.
-        when(catalog.trackedProduct(USER_ID, 1L)).thenReturn(Optional.of(PRODUCT_REF));
-        when(catalog.listingsWithLatestObservation(USER_ID, 1L, NOW))
+        when(userCatalog.trackedProduct(USER_ID, 1L)).thenReturn(Optional.of(PRODUCT_REF));
+        when(userCatalog.listingsWithLatestObservation(USER_ID, 1L, NOW))
                 .thenReturn(List.of(
                         row(1L, "TMS", "8890", ILS, daysAgo(9)),
                         row(2L, "KSP", "1849", ILS, daysAgo(1), AvailabilityStatus.UNAVAILABLE)));
@@ -165,10 +166,10 @@ class TrackedProductQueryServiceTest {
 
         @Test
         void unknownProduct_is404_beforeAnyQueryRuns() {
-            when(catalog.trackedProduct(USER_ID, 99L)).thenReturn(Optional.empty());
+            when(userCatalog.trackedProduct(USER_ID, 99L)).thenReturn(Optional.empty());
 
             assertThatThrownBy(() -> service.getListings(99L, ILS)).isInstanceOf(NotFoundException.class);
-            verify(catalog, never()).listingsWithLatestObservation(anyLong(), anyLong(), any());
+            verify(userCatalog, never()).listingsWithLatestObservation(anyLong(), anyLong(), any());
         }
 
         @Test
@@ -312,8 +313,8 @@ class TrackedProductQueryServiceTest {
         }
 
         private void stubProduct(ListingLatestObservationRow... rows) {
-            when(catalog.trackedProduct(USER_ID, 1L)).thenReturn(Optional.of(PRODUCT_REF));
-            when(catalog.listingsWithLatestObservation(USER_ID, 1L, NOW)).thenReturn(List.of(rows));
+            when(userCatalog.trackedProduct(USER_ID, 1L)).thenReturn(Optional.of(PRODUCT_REF));
+            when(userCatalog.listingsWithLatestObservation(USER_ID, 1L, NOW)).thenReturn(List.of(rows));
         }
 
         private void stubIdentityConversion() {
@@ -326,35 +327,35 @@ class TrackedProductQueryServiceTest {
 
     @Test
     void getPriceHistory_noBounds_defaultsToWindowEndingNow() {
-        when(catalog.priceHistory(eq(USER_ID), eq(1L), eq(1L), any(Instant.class), any(Instant.class)))
+        when(userCatalog.priceHistory(eq(USER_ID), eq(1L), eq(1L), any(Instant.class), any(Instant.class)))
                 .thenReturn(Optional.of(new ListingHistory(LISTING_A, List.of())));
 
         service.getPriceHistory(1L, 1L, null, null);
 
-        verify(catalog).priceHistory(USER_ID, 1L, 1L, NOW.minus(90, ChronoUnit.DAYS), NOW);
+        verify(userCatalog).priceHistory(USER_ID, 1L, 1L, NOW.minus(90, ChronoUnit.DAYS), NOW);
     }
 
     @Test
     void getPriceHistory_fromOnly_defaultsToToNow() {
         Instant from = Instant.parse("2026-01-01T00:00:00Z");
-        when(catalog.priceHistory(eq(USER_ID), eq(1L), eq(1L), any(Instant.class), any(Instant.class)))
+        when(userCatalog.priceHistory(eq(USER_ID), eq(1L), eq(1L), any(Instant.class), any(Instant.class)))
                 .thenReturn(Optional.of(new ListingHistory(LISTING_A, List.of())));
 
         service.getPriceHistory(1L, 1L, from, null);
 
-        verify(catalog).priceHistory(USER_ID, 1L, 1L, from, NOW);
+        verify(userCatalog).priceHistory(USER_ID, 1L, 1L, from, NOW);
     }
 
     @Test
     void getPriceHistory_toOnly_defaultsFromWindowDaysBefore() {
         Instant to = Instant.parse("2026-04-01T00:00:00Z");
-        when(catalog.priceHistory(eq(USER_ID), eq(1L), eq(1L), any(Instant.class), any(Instant.class)))
+        when(userCatalog.priceHistory(eq(USER_ID), eq(1L), eq(1L), any(Instant.class), any(Instant.class)))
                 .thenReturn(Optional.of(new ListingHistory(LISTING_A, List.of())));
 
         service.getPriceHistory(1L, 1L, null, to);
 
         ArgumentCaptor<Instant> fromCaptor = ArgumentCaptor.forClass(Instant.class);
-        verify(catalog).priceHistory(eq(USER_ID), eq(1L), eq(1L), fromCaptor.capture(), eq(to));
+        verify(userCatalog).priceHistory(eq(USER_ID), eq(1L), eq(1L), fromCaptor.capture(), eq(to));
         assertThat(fromCaptor.getValue()).isEqualTo(to.minus(90, ChronoUnit.DAYS));
     }
 
@@ -362,12 +363,12 @@ class TrackedProductQueryServiceTest {
     void getPriceHistory_bothBounds_usesExplicitBounds() {
         Instant from = Instant.parse("2026-01-01T00:00:00Z");
         Instant to = Instant.parse("2026-04-01T00:00:00Z");
-        when(catalog.priceHistory(USER_ID, 1L, 1L, from, to))
+        when(userCatalog.priceHistory(USER_ID, 1L, 1L, from, to))
                 .thenReturn(Optional.of(new ListingHistory(LISTING_A, List.of())));
 
         service.getPriceHistory(1L, 1L, from, to);
 
-        verify(catalog).priceHistory(USER_ID, 1L, 1L, from, to);
+        verify(userCatalog).priceHistory(USER_ID, 1L, 1L, from, to);
     }
 
     @Test
@@ -375,12 +376,12 @@ class TrackedProductQueryServiceTest {
         Instant to = Instant.parse("2026-04-01T00:00:00Z");
         Instant farBack = to.minus(365L * 3, ChronoUnit.DAYS);
         Instant expectedFrom = to.minus(365L * 2, ChronoUnit.DAYS);
-        when(catalog.priceHistory(eq(USER_ID), eq(1L), eq(1L), any(Instant.class), any(Instant.class)))
+        when(userCatalog.priceHistory(eq(USER_ID), eq(1L), eq(1L), any(Instant.class), any(Instant.class)))
                 .thenReturn(Optional.of(new ListingHistory(LISTING_A, List.of())));
 
         service.getPriceHistory(1L, 1L, farBack, to);
 
-        verify(catalog).priceHistory(USER_ID, 1L, 1L, expectedFrom, to);
+        verify(userCatalog).priceHistory(USER_ID, 1L, 1L, expectedFrom, to);
     }
 
     @Test
@@ -398,7 +399,7 @@ class TrackedProductQueryServiceTest {
     void getPriceHistory_notTheCallers_throwsNotFound() {
         // "Under another product", "another user's product" and "does not exist" are one empty answer
         // from the port (#246): the service cannot tell them apart, which is the point — 404, never 403.
-        when(catalog.priceHistory(eq(USER_ID), eq(1L), eq(1L), any(Instant.class), any(Instant.class)))
+        when(userCatalog.priceHistory(eq(USER_ID), eq(1L), eq(1L), any(Instant.class), any(Instant.class)))
                 .thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.getPriceHistory(1L, 1L, null, null)).isInstanceOf(NotFoundException.class);
@@ -409,7 +410,7 @@ class TrackedProductQueryServiceTest {
         PriceRecord observation = priceRecord(itemA, "100", "USD");
         Instant from = Instant.parse("2026-01-01T00:00:00Z");
         Instant to = Instant.parse("2026-04-01T00:00:00Z");
-        when(catalog.priceHistory(USER_ID, 1L, 1L, from, to))
+        when(userCatalog.priceHistory(USER_ID, 1L, 1L, from, to))
                 .thenReturn(Optional.of(new ListingHistory(LISTING_A, List.of(observation))));
 
         PriceHistoryResponse response = service.getPriceHistory(1L, 1L, from, to);
@@ -424,7 +425,7 @@ class TrackedProductQueryServiceTest {
         PriceRecord observation = priceRecord(itemA, "100", "USD");
         Instant from = Instant.parse("2026-01-01T00:00:00Z");
         Instant to = Instant.parse("2026-04-01T00:00:00Z");
-        when(catalog.priceHistory(USER_ID, 1L, 1L, from, to))
+        when(userCatalog.priceHistory(USER_ID, 1L, 1L, from, to))
                 .thenReturn(Optional.of(new ListingHistory(LISTING_A, List.of(observation))));
 
         PriceHistoryResponse response = service.getPriceHistory(1L, 1L, from, to);
@@ -436,7 +437,7 @@ class TrackedProductQueryServiceTest {
 
     @Test
     void getPriceTrend_unknownOrForeignProduct_is404_beforeTheEngineRuns() {
-        when(catalog.trackedProduct(USER_ID, 42L)).thenReturn(Optional.empty());
+        when(userCatalog.trackedProduct(USER_ID, 42L)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.getPriceTrend(42L, null, ILS))
                 .isInstanceOf(NotFoundException.class)
@@ -449,9 +450,9 @@ class TrackedProductQueryServiceTest {
     void getPriceTrend_formatsSeriesPricesAsFixedScaleDecimalStrings() {
         // The calculator emits scale 2 here, so a mapper that merely stringified it would say "199.5" —
         // this pins that the point goes through WireMoney (#175).
-        when(catalog.trackedProduct(USER_ID, 1L)).thenReturn(Optional.of(PRODUCT_REF));
+        when(userCatalog.trackedProduct(USER_ID, 1L)).thenReturn(Optional.of(PRODUCT_REF));
         List<DashboardListingRef> listings = List.of(new DashboardListingRef(10L, 1L, "KSP"));
-        when(catalog.listings(USER_ID, 1L)).thenReturn(listings);
+        when(userCatalog.listings(USER_ID, 1L)).thenReturn(listings);
         when(trendService.computeProductTrends(Map.of(1L, listings), null, ILS))
                 .thenReturn(Map.of(
                         1L,
@@ -471,9 +472,9 @@ class TrackedProductQueryServiceTest {
 
     @Test
     void getPriceTrend_mapsEngineOutputOntoTheResponse() {
-        when(catalog.trackedProduct(USER_ID, 1L)).thenReturn(Optional.of(PRODUCT_REF));
+        when(userCatalog.trackedProduct(USER_ID, 1L)).thenReturn(Optional.of(PRODUCT_REF));
         List<DashboardListingRef> listings = List.of(new DashboardListingRef(10L, 1L, "KSP"));
-        when(catalog.listings(USER_ID, 1L)).thenReturn(listings);
+        when(userCatalog.listings(USER_ID, 1L)).thenReturn(listings);
         Instant observed = NOW.minus(2, ChronoUnit.DAYS);
         LocalDate today = LocalDate.of(2026, 5, 24);
         when(trendService.computeProductTrends(Map.of(1L, listings), 90, ILS))
@@ -503,8 +504,8 @@ class TrackedProductQueryServiceTest {
 
     @Test
     void getPriceTrend_productWithoutListings_isAnEmptyTrend() {
-        when(catalog.trackedProduct(USER_ID, 1L)).thenReturn(Optional.of(PRODUCT_REF));
-        when(catalog.listings(USER_ID, 1L)).thenReturn(List.of());
+        when(userCatalog.trackedProduct(USER_ID, 1L)).thenReturn(Optional.of(PRODUCT_REF));
+        when(userCatalog.listings(USER_ID, 1L)).thenReturn(List.of());
         when(trendService.computeProductTrends(Map.of(1L, List.of()), null, ILS))
                 .thenReturn(Map.of());
 

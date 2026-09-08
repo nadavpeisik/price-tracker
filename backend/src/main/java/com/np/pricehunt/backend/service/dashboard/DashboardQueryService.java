@@ -86,7 +86,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class DashboardQueryService {
 
     private final CurrentUser currentUser;
-    private final UserScopedCatalog catalog;
+    private final UserScopedCatalog userCatalog;
     private final DashboardSnapshotService snapshotService;
     private final PriceTrendService trendService;
     private final Clock clock;
@@ -99,8 +99,8 @@ public class DashboardQueryService {
         String displayCurrency = request.displayCurrency();
 
         long userId = currentUser.userId();
-        List<TrackedProductRef> products = catalog.trackedProducts(userId);
-        List<DashboardListingRef> listings = catalog.listingsOfTrackedProducts(userId);
+        List<TrackedProductRef> products = userCatalog.trackedProducts(userId);
+        List<DashboardListingRef> listings = userCatalog.listingsOfTrackedProducts(userId);
 
         Map<Long, List<DashboardListingRef>> listingsByProductId = groupListingsByProductId(products, listings);
         Map<Long, ProductDashboardSnapshot> snapshotsByProductId =

@@ -39,7 +39,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * The user-facing orchestration (#246): membership is proven through the port before anything else
- * happens, the trackedProductCatalog half and the price check are delegated, and the cooldown rules of a user
+ * happens, the userCatalog half and the price check are delegated, and the cooldown rules of a user
  * refresh hold. The pipeline itself is covered by the {@code PriceCheckPipeline*Test} suites.
  */
 @ExtendWith(MockitoExtension.class)
@@ -57,7 +57,7 @@ class ProductTrackingServiceTest {
     private CurrentUser currentUser;
 
     @Mock
-    private UserScopedCatalog trackedProductCatalog;
+    private UserScopedCatalog userCatalog;
 
     @Mock
     private ProductCatalogService sharedCatalog;
@@ -80,7 +80,7 @@ class ProductTrackingServiceTest {
     void setUp() {
         service = new ProductTrackingService(
                 currentUser,
-                trackedProductCatalog,
+                userCatalog,
                 sharedCatalog,
                 pipeline,
                 urlValidator,
@@ -106,9 +106,9 @@ class ProductTrackingServiceTest {
         CreateProductResponse created = service.createProduct(new CreateProductRequest("Sony"));
 
         assertThat(created.id()).isEqualTo(5L);
-        var order = inOrder(sharedCatalog, trackedProductCatalog);
+        var order = inOrder(sharedCatalog, userCatalog);
         order.verify(sharedCatalog).createProduct(any());
-        order.verify(trackedProductCatalog).track(USER_ID, 5L);
+        order.verify(userCatalog).track(USER_ID, 5L);
         verify(transactionTemplate).execute(any());
     }
 
@@ -116,7 +116,7 @@ class ProductTrackingServiceTest {
     void createProduct_nullRequest_returns400_beforeResolvingTheCaller() {
         assertThatThrownBy(() -> service.createProduct(null)).isInstanceOf(ValidationException.class);
 
-        verifyNoInteractions(currentUser, sharedCatalog, trackedProductCatalog);
+        verifyNoInteractions(currentUser, sharedCatalog, userCatalog);
     }
 
     // --- trackUrl ---
@@ -134,10 +134,10 @@ class ProductTrackingServiceTest {
         assertThat(response).isSameAs(RESPONSE);
         // Validate → admit + track (one transaction) → check. The submitted URL was just validated,
         // so the pipeline is told not to resolve it again.
-        var order = inOrder(urlValidator, sharedCatalog, trackedProductCatalog, pipeline);
+        var order = inOrder(urlValidator, sharedCatalog, userCatalog, pipeline);
         order.verify(urlValidator).validate(URL);
         order.verify(sharedCatalog).admitListing(1L, URL);
-        order.verify(trackedProductCatalog).track(USER_ID, 1L);
+        order.verify(userCatalog).track(USER_ID, 1L);
         order.verify(pipeline).checkPrice(LISTING_ID, URL, false);
         verifyNoInteractions(cooldownLimiter);
     }
@@ -152,7 +152,7 @@ class ProductTrackingServiceTest {
         assertThatThrownBy(() -> service.trackUrl(999L, new TrackRequest(URL))).isInstanceOf(NotFoundException.class);
 
         verify(urlValidator, never()).validate(any());
-        verify(trackedProductCatalog, never()).track(anyLong(), anyLong());
+        verify(userCatalog, never()).track(anyLong(), anyLong());
         verifyNoInteractions(pipeline);
     }
 
@@ -167,7 +167,7 @@ class ProductTrackingServiceTest {
         assertThatThrownBy(() -> service.trackUrl(1L, new TrackRequest(URL))).isInstanceOf(ValidationException.class);
 
         verify(sharedCatalog, never()).admitListing(anyLong(), any());
-        verify(trackedProductCatalog, never()).track(anyLong(), anyLong());
+        verify(userCatalog, never()).track(anyLong(), anyLong());
         verifyNoInteractions(pipeline, transactionTemplate);
     }
 
@@ -175,7 +175,7 @@ class ProductTrackingServiceTest {
     void trackUrl_nullRequest_returns400_withoutValidating() {
         assertThatThrownBy(() -> service.trackUrl(1L, null)).isInstanceOf(ValidationException.class);
 
-        verifyNoInteractions(urlValidator, sharedCatalog, trackedProductCatalog, pipeline);
+        verifyNoInteractions(urlValidator, sharedCatalog, userCatalog, pipeline);
     }
 
     // --- refreshTrackedItem ---
@@ -184,7 +184,7 @@ class ProductTrackingServiceTest {
     void refreshTrackedItem_notTheCallers_throwsNotFound_beforeAnyCooldown() {
         // A foreign product, a foreign item or a missing one are the same empty answer from the port.
         when(currentUser.userId()).thenReturn(USER_ID);
-        when(trackedProductCatalog.listing(USER_ID, 1L, 99L)).thenReturn(Optional.empty());
+        when(userCatalog.listing(USER_ID, 1L, 99L)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.refreshTrackedItem(1L, 99L)).isInstanceOf(NotFoundException.class);
 
@@ -194,7 +194,7 @@ class ProductTrackingServiceTest {
     @Test
     void refreshTrackedItem_recentlyRefreshed_throwsTooManyRequests() {
         when(currentUser.userId()).thenReturn(USER_ID);
-        when(trackedProductCatalog.listing(USER_ID, 1L, 1L))
+        when(userCatalog.listing(USER_ID, 1L, 1L))
                 .thenReturn(Optional.of(new TrackedListingRef(
                         1L, URL, "example.com", Instant.now().minusSeconds(10))));
 
@@ -209,7 +209,7 @@ class ProductTrackingServiceTest {
         // DB lastChecked is null (durable check passes), but the in-memory limiter rejects —
         // e.g. a rapid retry after a failed scrape. Must 429 before scraping.
         when(currentUser.userId()).thenReturn(USER_ID);
-        when(trackedProductCatalog.listing(USER_ID, 1L, 1L))
+        when(userCatalog.listing(USER_ID, 1L, 1L))
                 .thenReturn(Optional.of(new TrackedListingRef(1L, URL, "example.com", null)));
         when(cooldownLimiter.tryAcquire(1L)).thenReturn(false);
 
@@ -221,7 +221,7 @@ class ProductTrackingServiceTest {
     @Test
     void refreshTrackedItem_found_revalidatesTheStoredUrlThroughThePipeline() {
         when(currentUser.userId()).thenReturn(USER_ID);
-        when(trackedProductCatalog.listing(USER_ID, 1L, 1L))
+        when(userCatalog.listing(USER_ID, 1L, 1L))
                 .thenReturn(Optional.of(new TrackedListingRef(1L, URL, "example.com", null)));
         when(cooldownLimiter.tryAcquire(1L)).thenReturn(true);
         when(pipeline.checkPrice(LISTING_ID, URL, true)).thenReturn(RESPONSE);
@@ -237,7 +237,7 @@ class ProductTrackingServiceTest {
         // Intentional ordering: the volatile cooldown is consumed BEFORE the pipeline's chokepoint
         // check, so a blocked refresh still burns the window (locks the ordering against a reorder).
         when(currentUser.userId()).thenReturn(USER_ID);
-        when(trackedProductCatalog.listing(USER_ID, 1L, 1L))
+        when(userCatalog.listing(USER_ID, 1L, 1L))
                 .thenReturn(Optional.of(new TrackedListingRef(1L, URL, "example.com", null)));
         when(cooldownLimiter.tryAcquire(1L)).thenReturn(true);
         when(pipeline.checkPrice(LISTING_ID, URL, true)).thenThrow(new ValidationException("URL host is not allowed"));
@@ -252,18 +252,18 @@ class ProductTrackingServiceTest {
     @Test
     void stopTracking_deletesOnlyTheCallersMembership() {
         when(currentUser.userId()).thenReturn(USER_ID);
-        when(trackedProductCatalog.stopTracking(USER_ID, 3L)).thenReturn(true);
+        when(userCatalog.stopTracking(USER_ID, 3L)).thenReturn(true);
 
         service.stopTracking(3L);
 
-        verify(trackedProductCatalog).stopTracking(USER_ID, 3L);
+        verify(userCatalog).stopTracking(USER_ID, 3L);
         verifyNoInteractions(sharedCatalog);
     }
 
     @Test
     void stopTracking_neverTracked_throwsNotFound() {
         when(currentUser.userId()).thenReturn(USER_ID);
-        when(trackedProductCatalog.stopTracking(USER_ID, 3L)).thenReturn(false);
+        when(userCatalog.stopTracking(USER_ID, 3L)).thenReturn(false);
 
         assertThatThrownBy(() -> service.stopTracking(3L)).isInstanceOf(NotFoundException.class);
     }

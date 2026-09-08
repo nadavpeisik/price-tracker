@@ -3,8 +3,8 @@ package com.np.pricehunt.backend.repository;
 import com.np.pricehunt.backend.domain.UserProduct;
 import com.np.pricehunt.backend.repository.projection.DashboardListingRef;
 import com.np.pricehunt.backend.repository.projection.ListingLatestObservationRow;
-import com.np.pricehunt.backend.repository.projection.ProductRef;
 import com.np.pricehunt.backend.repository.projection.TrackedListingRef;
+import com.np.pricehunt.backend.repository.projection.TrackedProductDetailRef;
 import com.np.pricehunt.backend.repository.projection.TrackedProductRef;
 import java.time.Instant;
 import java.util.List;
@@ -45,11 +45,12 @@ public interface UserProductRepository extends JpaRepository<UserProduct, Long> 
     // No join to trackedItems: one row per membership, and a product with zero listings must resolve.
     @Query(
             """
-            SELECT new com.np.pricehunt.backend.repository.projection.ProductRef(p.id, p.name, p.description)
+            SELECT new com.np.pricehunt.backend.repository.projection.TrackedProductDetailRef(p.id, p.name, p.description)
             FROM UserProduct up JOIN up.product p
             WHERE up.user.id = :userId AND p.id = :productId
             """)
-    Optional<ProductRef> findTrackedProduct(@Param("userId") long userId, @Param("productId") long productId);
+    Optional<TrackedProductDetailRef> findTrackedProduct(
+            @Param("userId") long userId, @Param("productId") long productId);
 
     @Query(
             """

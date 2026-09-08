@@ -53,7 +53,7 @@ class DashboardQueryServiceTest {
     private CurrentUser currentUser;
 
     @Mock
-    private UserScopedCatalog catalog;
+    private UserScopedCatalog userCatalog;
 
     @Mock
     private DashboardSnapshotService snapshotService;
@@ -72,7 +72,7 @@ class DashboardQueryServiceTest {
     @BeforeEach
     void setUp() {
         service = new DashboardQueryService(
-                currentUser, catalog, snapshotService, trendService, Clock.fixed(NOW, ZoneOffset.UTC));
+                currentUser, userCatalog, snapshotService, trendService, Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
     // --- filtering ---
@@ -510,8 +510,8 @@ class DashboardQueryServiceTest {
 
     private void stubCatalogue() {
         when(currentUser.userId()).thenReturn(USER_ID);
-        when(catalog.trackedProducts(USER_ID)).thenReturn(List.copyOf(products));
-        when(catalog.listingsOfTrackedProducts(USER_ID)).thenReturn(List.copyOf(listings));
+        when(userCatalog.trackedProducts(USER_ID)).thenReturn(List.copyOf(products));
+        when(userCatalog.listingsOfTrackedProducts(USER_ID)).thenReturn(List.copyOf(listings));
         when(snapshotService.snapshotAll(any(), any(), anyString())).thenReturn(Map.copyOf(snapshots));
         // Sparklines are deliberately NOT stubbed here: Mockito's defaults already return an empty
         // list and an empty map, which is the right "no series" answer for most cases, and stubbing

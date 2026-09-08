@@ -35,7 +35,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 public class ProductTrackingService {
 
     private final CurrentUser currentUser;
-    private final UserScopedCatalog trackedProductCatalog;
+    private final UserScopedCatalog userCatalog;
     private final ProductCatalogService sharedCatalog;
     private final PriceCheckPipeline pipeline;
     private final UrlValidator urlValidator;
@@ -53,7 +53,7 @@ public class ProductTrackingService {
         long userId = currentUser.userId();
         return transactionTemplate.execute(status -> {
             CreateProductResponse created = sharedCatalog.createProduct(request);
-            trackedProductCatalog.track(userId, created.id());
+            userCatalog.track(userId, created.id());
             return created;
         });
     }
@@ -74,7 +74,7 @@ public class ProductTrackingService {
         // under the product write lock, released before any network I/O.
         Long listingId = transactionTemplate.execute(status -> {
             Long admitted = sharedCatalog.admitListing(productId, request.url());
-            trackedProductCatalog.track(userId, productId);
+            userCatalog.track(userId, productId);
             return admitted;
         });
 
@@ -83,7 +83,7 @@ public class ProductTrackingService {
     }
 
     public TrackResponse refreshTrackedItem(Long productId, Long itemId) {
-        TrackedListingRef listing = trackedProductCatalog
+        TrackedListingRef listing = userCatalog
                 .listing(currentUser.userId(), productId, itemId)
                 .orElseThrow(() -> new NotFoundException("Tracked item not found"));
         enforcePersistedRefreshCooldown(listing.lastChecked());
@@ -99,7 +99,7 @@ public class ProductTrackingService {
 
     /** Deletes the caller's membership and nothing else; the catalog row stays for everyone else. */
     public void stopTracking(Long productId) {
-        if (!trackedProductCatalog.stopTracking(currentUser.userId(), productId)) {
+        if (!userCatalog.stopTracking(currentUser.userId(), productId)) {
             throw new NotFoundException("Product not found");
         }
     }
