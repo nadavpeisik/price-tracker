@@ -14,6 +14,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.InsufficientAuthenticationException;
 import org.springframework.security.web.csrf.MissingCsrfTokenException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 /** Kind of failure to HTTP status, the one mapping in the module. */
@@ -51,6 +52,16 @@ class GlobalExceptionHandlerTest {
         assertThat(handler.handleAccessDenied(new MissingCsrfTokenException("t"))
                         .getStatusCode())
                 .isEqualTo(HttpStatus.FORBIDDEN);
+    }
+
+    @Test
+    void unconvertibleParameter_is400WithABody() {
+        MethodArgumentTypeMismatchException ex =
+                new MethodArgumentTypeMismatchException("maybe", boolean.class, "remember", null, null);
+        ResponseEntity<ProblemDetail> response = handler.handleUnconvertibleParameter(ex);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getDetail()).contains("remember");
     }
 
     @Test

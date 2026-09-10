@@ -8,6 +8,7 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
@@ -45,6 +46,8 @@ class MalformedTargetTest extends BffIntegrationTest {
 
     private int statusCodeOf(String requestTarget) throws Exception {
         try (Socket socket = new Socket("127.0.0.1", port)) {
+            // Without this a container that never answers hangs the build rather than failing it.
+            socket.setSoTimeout((int) Duration.ofSeconds(10).toMillis());
             OutputStream out = socket.getOutputStream();
             out.write(("GET " + requestTarget + " HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
                     .getBytes(StandardCharsets.US_ASCII));

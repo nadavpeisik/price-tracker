@@ -2,6 +2,7 @@ package com.np.pricehunt.bff.auth;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -116,6 +117,18 @@ class LoginFlowTest extends BffIntegrationTest {
         assertThat(maxInactive).isEqualTo((int) Duration.ofHours(24).toSeconds());
         Instant absolute = (Instant) deserialize(attributeBytes(SessionAttributes.ABSOLUTE_EXPIRES_AT));
         assertThat(absolute).isEqualTo(clock.instant().plus(Duration.ofHours(24)));
+    }
+
+    @Test
+    void unconvertibleRememberValue_is400ProblemDetail_notAnEmptyBody() throws Exception {
+        // The advice is the only ProblemDetail writer. A handler that threw would hand this to Spring's
+        // fallback resolver, which answers 400 with no body at all.
+        new Browser()
+                .perform(get(SecurityConfig.LOGIN_PATH).param("remember", "maybe"))
+                .andExpect(status().isBadRequest())
+                .andExpect(header().string(HttpHeaders.CONTENT_TYPE, "application/problem+json"))
+                .andExpect(jsonPath("$.detail").value(org.hamcrest.Matchers.containsString("remember")));
+        assertThat(sessionRows()).isZero();
     }
 
     @Test

@@ -84,7 +84,12 @@ class SingleFlightRefreshCoordinatorTest {
         return outcome;
     };
 
+    /** Long enough that a loaded CI machine cannot turn a scheduling delay into a waiter timeout. */
     private final SingleFlightRefreshCoordinator coordinator =
+            new SingleFlightRefreshCoordinator(repository, manager, clock, policy(Duration.ofSeconds(10)));
+
+    /** The one test that wants a waiter to give up gets its own budget instead of every test sharing it. */
+    private final SingleFlightRefreshCoordinator impatientCoordinator =
             new SingleFlightRefreshCoordinator(repository, manager, clock, policy(Duration.ofMillis(300)));
 
     @Test
@@ -145,11 +150,11 @@ class SingleFlightRefreshCoordinatorTest {
         ExecutorService executor = Executors.newSingleThreadExecutor();
         try {
             Future<Optional<OAuth2AuthorizedClient>> winner = executor.submit(
-                    () -> coordinator.authorizedClient(request(session), new MockHttpServletResponse(), USER));
+                    () -> impatientCoordinator.authorizedClient(request(session), new MockHttpServletResponse(), USER));
             assertThat(managerBlocked.await(5, TimeUnit.SECONDS)).isTrue();
 
-            assertThatThrownBy(
-                            () -> coordinator.authorizedClient(request(session), new MockHttpServletResponse(), USER))
+            assertThatThrownBy(() -> impatientCoordinator.authorizedClient(
+                            request(session), new MockHttpServletResponse(), USER))
                     .isInstanceOf(IdentityProviderUnavailableException.class);
 
             releaseManager.countDown();

@@ -73,16 +73,24 @@ public class GlobalExceptionHandler {
     // there gets a 404 ProblemDetail rather than a container error page (an ERROR dispatch that the
     // security chain would answer 401). ---
 
+    // Every type listed here implements ErrorResponse and carries its own status. Do not add one that
+    // does not: MethodArgumentTypeMismatchException was here once and the cast threw, which cost the
+    // response its ProblemDetail body and left Spring's fallback resolver to answer instead.
     @ExceptionHandler({
         NoResourceFoundException.class,
         HttpRequestMethodNotSupportedException.class,
-        MissingServletRequestParameterException.class,
-        MethodArgumentTypeMismatchException.class
+        MissingServletRequestParameterException.class
     })
-    public ResponseEntity<ProblemDetail> handleRoutingError(Exception ex) {
-        ErrorResponse error = (ErrorResponse) ex;
+    public ResponseEntity<ProblemDetail> handleRoutingError(ErrorResponse error) {
         HttpStatus status = HttpStatus.valueOf(error.getStatusCode().value());
         return problemResponse(status, status.getReasonPhrase());
+    }
+
+    /** A parameter that will not convert, such as {@code /bff/login?remember=maybe}. */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ProblemDetail> handleUnconvertibleParameter(MethodArgumentTypeMismatchException ex) {
+        log.debug("Rejected unconvertible parameter '{}': {}", ex.getName(), ex.getMessage());
+        return problemResponse(HttpStatus.BAD_REQUEST, "Parameter '" + ex.getName() + "' is not a valid value");
     }
 
     private static ResponseEntity<ProblemDetail> problemResponse(HttpStatus status, String detail) {
