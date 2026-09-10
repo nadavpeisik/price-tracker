@@ -6,6 +6,7 @@ services:
       - 'POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD not set — copy .env.example to .env}'
       - 'POSTGRES_USER=${POSTGRES_USER:?POSTGRES_USER not set — copy .env.example to .env}'
       - 'GRAFANA_DB_PASSWORD=${GRAFANA_DB_PASSWORD:?GRAFANA_DB_PASSWORD not set — copy .env.example to .env}'
+      - 'BFF_DB_PASSWORD=${BFF_DB_PASSWORD:?BFF_DB_PASSWORD not set — copy .env.example to .env}'
     ports:
       # Loopback-only binds (#242): nothing on the LAN should reach these dev services.
       - '127.0.0.1:5432:5432'
