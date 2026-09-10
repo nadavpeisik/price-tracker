@@ -29,27 +29,35 @@ class StoredTokensTest {
                 REGISTRATION,
                 "auth0|u",
                 new OAuth2AccessToken(
-                        OAuth2AccessToken.TokenType.BEARER, "at", issued, issued.plusSeconds(300), Set.of("openid")),
-                new OAuth2RefreshToken("rt", issued));
+                        OAuth2AccessToken.TokenType.BEARER,
+                        "access-token-value",
+                        issued,
+                        issued.plusSeconds(300),
+                        Set.of("openid")),
+                new OAuth2RefreshToken("refresh-token-value", issued));
 
         byte[] bytes = serialize(StoredTokens.from(client));
         StoredTokens back = (StoredTokens) deserialize(bytes);
         OAuth2AuthorizedClient rebuilt = back.toAuthorizedClient(REGISTRATION);
 
         assertThat(rebuilt.getPrincipalName()).isEqualTo("auth0|u");
-        assertThat(rebuilt.getAccessToken().getTokenValue()).isEqualTo("at");
+        assertThat(rebuilt.getAccessToken().getTokenValue()).isEqualTo("access-token-value");
         assertThat(rebuilt.getAccessToken().getExpiresAt()).isEqualTo(issued.plusSeconds(300));
         assertThat(rebuilt.getAccessToken().getScopes()).containsExactly("openid");
-        assertThat(rebuilt.getRefreshToken().getTokenValue()).isEqualTo("rt");
+        assertThat(rebuilt.getRefreshToken().getTokenValue()).isEqualTo("refresh-token-value");
         assertThat(rebuilt.getClientRegistration()).isSameAs(REGISTRATION);
         assertThat(new String(bytes, StandardCharsets.ISO_8859_1)).doesNotContain("the-client-secret");
-        assertThat(back.toString()).doesNotContain("at").doesNotContain("rt").contains("auth0|u");
+        // Distinctive values, so this really asserts redaction rather than the absence of two common letters.
+        assertThat(back.toString())
+                .doesNotContain("access-token-value")
+                .doesNotContain("refresh-token-value")
+                .contains("auth0|u");
     }
 
     @Test
     void noRefreshToken_survives() throws Exception {
-        StoredTokens tokens =
-                new StoredTokens("p", "at", Instant.EPOCH, Instant.EPOCH.plusSeconds(1), null, null, null);
+        StoredTokens tokens = new StoredTokens(
+                "p", "access-token-value", Instant.EPOCH, Instant.EPOCH.plusSeconds(1), null, null, null);
         StoredTokens back = (StoredTokens) deserialize(serialize(tokens));
         assertThat(back.scopes()).isEmpty();
         assertThat(back.toAuthorizedClient(REGISTRATION).getRefreshToken()).isNull();
