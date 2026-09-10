@@ -20,6 +20,7 @@ import org.slf4j.MDC;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClient;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -90,26 +91,25 @@ public class BackendProxyHandler {
             spec.body(body);
         }
 
-        BackendResponse fromBackend;
+        ResponseEntity<byte[]> fromBackend;
         try {
-            fromBackend = spec.exchange((backendRequest, backendResponse) -> new BackendResponse(
-                    backendResponse.getStatusCode().value(),
-                    backendResponse.getHeaders().getFirst(HttpHeaders.CONTENT_TYPE),
-                    backendResponse.getHeaders().getFirst(CorrelationIdFilter.HEADER),
-                    backendResponse.getHeaders().getFirst(HttpHeaders.WWW_AUTHENTICATE),
-                    backendResponse.getBody().readAllBytes()));
+            // Every status passes through, so the handler is a no-op: 403, 404 and 409 are the SPA's to
+            // interpret, and the one status we do translate is handled below. toEntity buffers the body.
+            fromBackend = spec.retrieve()
+                    .onStatus(status -> true, (backendRequest, backendResponse) -> {})
+                    .toEntity(byte[].class);
         } catch (RestClientException e) {
             // Method + path only, never headers.
             throw new BackendUnavailableException(
                     "Backend unreachable for " + method + " " + request.getRequestURI(), e);
         }
 
-        if (fromBackend.status() == HttpStatus.UNAUTHORIZED.value()) {
+        if (fromBackend.getStatusCode().value() == HttpStatus.UNAUTHORIZED.value()) {
             log.error(
                     "Backend rejected a gateway-minted token on {} {} (WWW-Authenticate: {})",
                     method,
                     request.getRequestURI(),
-                    fromBackend.wwwAuthenticate());
+                    fromBackend.getHeaders().getFirst(HttpHeaders.WWW_AUTHENTICATE));
             throw new BackendRejectedGatewayTokenException("The backend rejected the gateway's token");
         }
         writeResponse(response, fromBackend);
@@ -162,22 +162,26 @@ public class BackendProxyHandler {
     }
 
     /** Status, {@code Content-Type} and the correlation id only: everything else stays the BFF's own. */
-    private static void writeResponse(HttpServletResponse response, BackendResponse fromBackend) {
-        response.setStatus(fromBackend.status());
-        if (fromBackend.contentType() != null) {
-            response.setContentType(fromBackend.contentType());
-        }
-        if (fromBackend.correlationId() != null) {
-            response.setHeader(CorrelationIdFilter.HEADER, fromBackend.correlationId());
+    private static void writeResponse(HttpServletResponse response, ResponseEntity<byte[]> fromBackend) {
+        response.setStatus(fromBackend.getStatusCode().value());
+        copyBack(response, fromBackend, HttpHeaders.CONTENT_TYPE);
+        copyBack(response, fromBackend, CorrelationIdFilter.HEADER);
+        byte[] body = fromBackend.getBody();
+        if (body == null) {
+            return;
         }
         try {
-            response.getOutputStream().write(fromBackend.body());
+            response.getOutputStream().write(body);
         } catch (IOException e) {
             // The browser went away before the buffered response could be written; nothing to do.
             log.debug("Client aborted while writing the proxied response: {}", e.getMessage());
         }
     }
 
-    private record BackendResponse(
-            int status, String contentType, String correlationId, String wwwAuthenticate, byte[] body) {}
+    private static void copyBack(HttpServletResponse response, ResponseEntity<byte[]> fromBackend, String name) {
+        String value = fromBackend.getHeaders().getFirst(name);
+        if (value != null) {
+            response.setHeader(name, value);
+        }
+    }
 }
