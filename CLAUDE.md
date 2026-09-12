@@ -357,7 +357,7 @@ ever lands on the backend classpath**; the backend sees only the bearer the BFF 
 `export AUTH0_CLIENT_ID=... AUTH0_CLIENT_SECRET=...; set -a; . ./.env; set +a; cd bff; ./mvnw spring-boot:run`
 on `:8082` (health on `127.0.0.1:8083`); Boot's compose integration is deliberately absent, hence the
 `set -a` line. The Vite `/bff` proxy and the login UI are #248's; Caddy and the production compose profile
-are #251's.
+are #263's.
 
 Routes (`config/SecurityConfig`, explicit `/bff` prefixes, no context path because `__Host-` forbids a
 cookie path):

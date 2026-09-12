@@ -76,7 +76,7 @@ public class BackendProxyHandler {
         HttpMethod method = HttpMethod.valueOf(request.getMethod());
         URI target = targetUri(request);
         // No size cap on either buffer, deliberately (#247 subtraction cut S2): only invited, admitted
-        // users reach this, Tomcat already bounds a request body, and the edge limit is #251's. Do not
+        // users reach this, Tomcat already bounds a request body, and the edge limit is #263's. Do not
         // add a 413 here without reopening that decision.
         byte[] body = shouldReadRequestBody(method) ? request.getInputStream().readAllBytes() : new byte[0];
 
