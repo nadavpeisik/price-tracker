@@ -176,7 +176,7 @@ jobs:
       # pre-commit hook's version; unhashed like the uv bootstrap above.
       - name: SQLFluff lint new migrations
         run: |
-          new_migrations=$(git diff --name-only --diff-filter=A "origin/${GITHUB_BASE_REF:-main}...HEAD" -- 'backend/src/main/resources/db/migration/*.sql')
+          new_migrations=$(git diff --name-only --diff-filter=A "origin/${GITHUB_BASE_REF:-main}...HEAD" -- 'backend/src/main/resources/db/migration/*.sql' 'bff/src/main/resources/db/migration/*.sql')
           if [ -z "$new_migrations" ]; then
             echo "No new migrations on this branch — nothing to lint."
             exit 0
@@ -195,6 +195,12 @@ jobs:
         working-directory: backend
         env:
           SPRING_DOCKER_COMPOSE_ENABLED: 'false'
+        run: ./mvnw -B verify
+
+      # The BFF (#247) is its own Spring Boot build. Its suites run Testcontainers Postgres against the
+      # real init script, so Docker is needed here just as it is for the backend's.
+      - name: Build, lint, and test BFF
+        working-directory: bff
         run: ./mvnw -B verify
 
       - name: Run scraper tests with coverage

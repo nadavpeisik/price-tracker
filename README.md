@@ -54,10 +54,11 @@ The scraper response carries an `extractionSource` enum (`STRUCTURED | SNIPPET |
 ```
 price-tracker/
 ├── backend/          Spring Boot 4 — REST API, JPA, price-extraction orchestration
+├── bff/              Spring Boot 4 — browser session gateway: Auth0 login, cookie session, API proxy
 ├── scraper/          Python FastAPI + Playwright — DOM pruning + tier 1/2 extraction
 ├── compose.yaml      Docker Compose — postgres + scraper (auto-started by Spring Boot)
 └── .github/workflows/
-    ├── ci.yml          Backend + scraper tests on every PR
+    ├── ci.yml          Backend + BFF + scraper tests on every PR
     └── e2e-nightly.yml Canary scrapes against real sites, nightly + on-demand
 ```
 
@@ -92,6 +93,22 @@ cd backend
 # Offline / no API key? Run a local model instead (needs `ollama serve` + the qwen models pulled)
 SPRING_PROFILES_ACTIVE=ollama ./mvnw spring-boot:run
 ```
+
+The browser never sees a token: it talks to the **BFF** (`bff/`, issue #247), which logs the user in at
+Auth0, keeps the tokens in a Postgres-backed session behind one `__Host-` cookie, and proxies
+`/bff/api/*` to the backend. It is a second Spring Boot process on `:8082`, run from the same shell
+(it reads `.env` for its database password, and the Auth0 *Regular Web Application* credentials from
+the environment):
+
+```bash
+export AUTH0_CLIENT_ID='...' AUTH0_CLIENT_SECRET='...'   # the Regular Web Application, see CLAUDE.md
+set -a; . ./.env; set +a                                 # BFF_DB_PASSWORD (+ POSTGRES_DB)
+cd bff && ./mvnw spring-boot:run
+# then in Chrome or Firefox: http://localhost:8082/bff/login  (Safari refuses a __Host- cookie on http)
+```
+
+An existing dev database needs the BFF's role and schema created once (a fresh volume gets them on
+first boot): `docker compose exec postgres bash /docker-entrypoint-initdb.d/create-bff-role.sh`.
 
 The `seed` profile writes 22 back-dated demo products (two dashboard pages)
 covering the states that decide the price rules — a sample exactly at the
@@ -145,8 +162,8 @@ curl -X POST http://localhost:8080/api/products/1/track \
 
 Without a token every `/api` route answers `401` with a `ProblemDetail` body. Two routes stay anonymous:
 `/actuator/health`, for liveness probes, and `/.well-known/oauth-protected-resource`, the RFC 9728 metadata
-Spring Security serves so a client can discover how to authenticate. The React UI in `frontend/` calls the API directly and therefore stays dark until the BFF
-login flow (#247/#248) lands.
+Spring Security serves so a client can discover how to authenticate. The React UI in `frontend/` calls the API directly and therefore stays dark until the
+frontend login flow (#248) lands on top of the BFF.
 
 ## API
 
