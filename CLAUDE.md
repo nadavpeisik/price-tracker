@@ -40,6 +40,24 @@ Compose integration of its own on purpose (the backend owns compose auto-start),
 
 `compose.yaml` lives at the repo root (`../compose.yaml`). Spring Boot finds it via `spring.docker.compose.file=../compose.yaml` in `application.properties`. It spins up PostgreSQL (5432), the Python scraper (8001), and Grafana (3000) automatically — no manual `docker-compose up` needed. Price extraction calls **Groq Cloud**, so a `GROQ_API_KEY` must be exported (issue #121); the app fails fast at boot without it. To work offline instead, run `ollama serve` natively (11434, never via Compose) and start with `--spring.profiles.active=ollama`.
 
+**The backend has no `spring.datasource.url` of its own — Boot's Compose integration supplies it.** So
+`SPRING_DOCKER_COMPOSE_ENABLED=false` does not just skip starting containers, it removes the JDBC URL, and
+the boot dies with *"Failed to configure a DataSource: 'url' attribute is not specified"*, which names
+neither Compose nor the real cause. Running against a database you started yourself (a throwaway project,
+a remote instance) therefore needs the connection passed explicitly:
+
+```bash
+SPRING_DOCKER_COMPOSE_ENABLED=false \
+  SPRING_DATASOURCE_URL="jdbc:postgresql://localhost:5432/$POSTGRES_DB" \
+  SPRING_DATASOURCE_USERNAME="$POSTGRES_USER" SPRING_DATASOURCE_PASSWORD="$POSTGRES_PASSWORD" \
+  ./mvnw spring-boot:run
+```
+
+**Before swapping the database under a running app, check nothing is connected** (`lsof -nP -iTCP:8080
+-sTCP:LISTEN`). An IDE-launched backend survives its Postgres being stopped and silently reconnects to
+whatever takes port 5432 next, so a throwaway instance on the same port becomes the live database of a
+process nobody restarted.
+
 ## Code style & linting
 
 CI (`.github/workflows/ci.yml`) fails on formatting violations in **both** languages, so format before pushing:
@@ -345,6 +363,27 @@ absolute lifetime **at least 90 days** (Auth0's default of 30 would cap remember
 and the post-login Action also doing `api.idToken.setCustomClaim("https://pricehunt.app/roles", ...)`, because
 `/bff/me` reads roles from the ID token. No discovery-related tenant setting: the BFF derives every endpoint
 from the issuer and calls `<issuer>oidc/logout` directly.
+
+**Role Management is trial-only on Auth0's Free plan** (the `pricehunt-dev` tenant's trial ends around
+2026-10-05). When it lapses `event.authorization.roles` returns empty, so `/bff/me` reports `roles: []`
+and the admin-gated routes 403: the actuator endpoints, and `PATCH`/`DELETE` on `/api/products`. **That is
+a licensing change, not a regression — do not debug it as a bug.** Nothing else is affected, because login,
+sessions, refresh, logout and all of `/bff/api` authorize on *admission* (an `app_user` row for the
+identity), never on roles. The workaround costs one line and no money, since Actions stay free and Role
+Management is only what populates `event.authorization`:
+
+```js
+const roles = event.user.email === "<owner email>" ? ["ADMIN"] : [];
+```
+
+Free also allows **one tenant**, so the epic's separate dev and production tenants is a paid decision, and
+**Account Linking is trial-only**, so adding social login later would give the same person two
+`(issuer, sub)` identities and therefore two `app_user` rows.
+
+The whole flow was verified against the real tenant on 2026-09-13: login with PKCE, tokens stored
+server-side with no client secret in the session bytes, anonymous requests creating no session rows,
+admission 403 then 200 after relinking, one real Auth0 refresh with rotation, and logout clearing the row
+and cookie.
 
 **BFF (issue #247 — epic #241):** `bff/` is the browser's only counterpart. It is a confidential OAuth2
 client (Authorization Code + PKCE + Auth0's `audience` parameter) that keeps the Auth0 access and refresh
