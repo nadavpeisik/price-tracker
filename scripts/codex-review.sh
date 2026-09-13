@@ -224,11 +224,12 @@ fi
 # a session) appear. If $ERR has no "user" line (e.g. codex failed before starting a
 # session), the whole of $ERR is the preamble. Confirmed via a live false positive:
 # reviewing agy-review.sh's diff matched this regex's own source text, echoed back.
-# On Windows, codex's stderr may use CRLF line endings — strip \r with bash
-# parameter expansion (no subprocess) before the here-string so /^user$/
-# still matches a "user\r" marker line without introducing a tr|awk pipeline
-# that would SIGPIPE when awk exits early on a long transcript.
-ERR_PREAMBLE="$(awk '/^user$/{exit} {print}' <<<"${ERR//$'\r'/}")"
+# On Windows, codex's stderr may use CRLF line endings — awk strips a trailing \r
+# itself so /^user$/ still matches a "user\r" marker line. Not a tr|awk pipeline
+# (awk exiting early on a long transcript would SIGPIPE tr), and NOT bash's
+# ${ERR//$'\r'/}: that substitution is quadratic in bash, and since codex echoes the
+# whole prompt (the diff) back on stderr, a ~300 KB review spun here for an hour (#247).
+ERR_PREAMBLE="$(awk '{ sub(/\r$/, "") } /^user$/ { exit } { print }' <<<"$ERR")"
 if [ "$status" -ne 0 ] || printf '%s' "$ERR_PREAMBLE" | grep -qiE \
   'rate[ _-]?limit(ed| exceeded| reached)?|usage limit|quota exceeded|exceeded your[^.]*quota|too many requests|(^|[^0-9])429([^0-9]|$)|not authenticated|authentication failed|invalid api key|please sign in|session expired'; then
   {

@@ -14,10 +14,16 @@ of a working symlink; verify with `cat AGENTS.md` after checkout if in doubt.
 ```text
 price-tracker/
 ├── compose.yaml      ← orchestrates postgres, scraper, and grafana (the LLM is hosted; local Ollama runs natively)
-├── backend/          ← Spring Boot backend
+├── backend/          ← Spring Boot backend (bearer-only resource server)
+├── bff/              ← Spring Boot BFF: Auth0 login, cookie session in Postgres, /bff/api proxy (#247)
 ├── scraper/          ← Python FastAPI + Playwright scraper
 └── infra/grafana/    ← provisioned Grafana datasource + dashboards
 ```
+
+The BFF is a second Maven build with the backend's layout (`auth/`, `config/`, `controller/`, `exception/`, plus
+the feature packages `session/`, `token/` and `proxy/`) and the same
+plugins; `cd bff && ./mvnw verify` runs it (Docker needed: its suites use Testcontainers). It has no Docker
+Compose integration of its own on purpose (the backend owns compose auto-start), no JPA, and no Lombok.
 
 ## Build & Run Commands
 
@@ -33,6 +39,24 @@ price-tracker/
 ```
 
 `compose.yaml` lives at the repo root (`../compose.yaml`). Spring Boot finds it via `spring.docker.compose.file=../compose.yaml` in `application.properties`. It spins up PostgreSQL (5432), the Python scraper (8001), and Grafana (3000) automatically — no manual `docker-compose up` needed. Price extraction calls **Groq Cloud**, so a `GROQ_API_KEY` must be exported (issue #121); the app fails fast at boot without it. To work offline instead, run `ollama serve` natively (11434, never via Compose) and start with `--spring.profiles.active=ollama`.
+
+**The backend has no `spring.datasource.url` of its own — Boot's Compose integration supplies it.** So
+`SPRING_DOCKER_COMPOSE_ENABLED=false` does not just skip starting containers, it removes the JDBC URL, and
+the boot dies with *"Failed to configure a DataSource: 'url' attribute is not specified"*, which names
+neither Compose nor the real cause. Running against a database you started yourself (a throwaway project,
+a remote instance) therefore needs the connection passed explicitly:
+
+```bash
+SPRING_DOCKER_COMPOSE_ENABLED=false \
+  SPRING_DATASOURCE_URL="jdbc:postgresql://localhost:5432/$POSTGRES_DB" \
+  SPRING_DATASOURCE_USERNAME="$POSTGRES_USER" SPRING_DATASOURCE_PASSWORD="$POSTGRES_PASSWORD" \
+  ./mvnw spring-boot:run
+```
+
+**Before swapping the database under a running app, check nothing is connected** (`lsof -nP -iTCP:8080
+-sTCP:LISTEN`). An IDE-launched backend survives its Postgres being stopped and silently reconnects to
+whatever takes port 5432 next, so a throwaway instance on the same port becomes the live database of a
+process nobody restarted.
 
 ## Code style & linting
 
@@ -330,8 +354,108 @@ Auth0 dev tenant checklist: an API with identifier `pricehunt-api` (RS256, acces
 RBAC on), a role `ADMIN`, and a post-login Action
 `api.accessToken.setCustomClaim("https://pricehunt.app/roles", event.authorization?.roles ?? [])`. For a
 manual smoke token before the login flow exists (#248), a machine-to-machine application authorized for the
-API (its `sub` is `<clientId>@clients`). The live UI 401s until #247/#248 land — run a pre-#245 checkout for
-UI work. Connections and refresh-token settings belong to #247.
+API (its `sub` is `<clientId>@clients`). The live UI 401s until #248 lands — run a pre-#245 checkout for UI
+work. For the BFF (#247): a **Regular Web Application** (confidential) with callback URLs
+`http://localhost:8082/bff/login/oauth2/code/auth0` and `http://localhost:5173/bff/login/oauth2/code/auth0`
+and logout URLs `http://localhost:8082/` and `http://localhost:5173/`; the API with **Allow Offline Access**
+on; **Refresh Token Rotation on, reuse interval 0** (a leeway would hide a single-flight bug); refresh-token
+absolute lifetime **at least 90 days** (Auth0's default of 30 would cap remember-me) and inactivity 30 days;
+and the post-login Action also doing `api.idToken.setCustomClaim("https://pricehunt.app/roles", ...)`, because
+`/bff/me` reads roles from the ID token. No discovery-related tenant setting: the BFF derives every endpoint
+from the issuer and calls `<issuer>oidc/logout` directly.
+
+**Role Management is trial-only on Auth0's Free plan** (the `pricehunt-dev` tenant's trial ends around
+2026-10-05). When it lapses `event.authorization.roles` returns empty, so `/bff/me` reports `roles: []`
+and the admin-gated routes 403: the actuator endpoints, and `PATCH`/`DELETE` on `/api/products`. **That is
+a licensing change, not a regression — do not debug it as a bug.** Nothing else is affected, because login,
+sessions, refresh, logout and all of `/bff/api` authorize on *admission* (an `app_user` row for the
+identity), never on roles. The workaround costs one line and no money, since Actions stay free and Role
+Management is only what populates `event.authorization`:
+
+```js
+const roles = event.user.email === "<owner email>" ? ["ADMIN"] : [];
+```
+
+Free also allows **one tenant**, so the epic's separate dev and production tenants is a paid decision, and
+**Account Linking is trial-only**, so adding social login later would give the same person two
+`(issuer, sub)` identities and therefore two `app_user` rows.
+
+The whole flow was verified against the real tenant on 2026-09-13: login with PKCE, tokens stored
+server-side with no client secret in the session bytes, anonymous requests creating no session rows,
+admission 403 then 200 after relinking, one real Auth0 refresh with rotation, and logout clearing the row
+and cookie.
+
+**BFF (issue #247 — epic #241):** `bff/` is the browser's only counterpart. It is a confidential OAuth2
+client (Authorization Code + PKCE + Auth0's `audience` parameter) that keeps the Auth0 access and refresh
+tokens server-side in a Spring Session JDBC row and gives the browser one opaque cookie,
+`__Host-pricehunt-session` (Secure, HttpOnly, SameSite=Lax, Path=/; works on `http://localhost` in Chrome
+and Firefox, not Safari). Restated from this side: **no session, cookie, CSRF or oauth2-client dependency
+ever lands on the backend classpath**; the backend sees only the bearer the BFF forwards. Needs
+`AUTH0_ISSUER_URI` (same value as the backend), `AUTH0_CLIENT_ID`, `AUTH0_CLIENT_SECRET`, `POSTGRES_DB` and
+`BFF_DB_PASSWORD`; every one fails the boot when missing or malformed (`config/*Properties`). Dev loop:
+`export AUTH0_CLIENT_ID=... AUTH0_CLIENT_SECRET=...; set -a; . ./.env; set +a; cd bff; ./mvnw spring-boot:run`
+on `:8082` (health on `127.0.0.1:8083`); Boot's compose integration is deliberately absent, hence the
+`set -a` line. The Vite `/bff` proxy and the login UI are #248's; Caddy and the production compose profile
+are #263's.
+
+Routes (`config/SecurityConfig`, explicit `/bff` prefixes, no context path because `__Host-` forbids a
+cookie path):
+```text
+GET  /bff/login[?remember=true]          anonymous -> records the choice in a pre-login session -> Spring's
+                                         authorization redirect; on a LIVE session it is 302 / and touches nothing
+GET  /bff/oauth2/authorization/auth0     Spring: builds the PKCE + audience request
+GET  /bff/login/oauth2/code/auth0        Spring: callback; success -> 302 /, failure -> 302 /?loginError=<code>
+GET  /bff/me                             {name,email,emailVerified,picture,roles} from the ID token; roles are
+                                         login-time and presentation-only, never a gate
+POST /bff/logout                         authenticated + CSRF -> 200 {"logoutUrl"} (Auth0 end-session URL with
+                                         client_id + logout_hint=<sid> + post_logout_redirect_uri; never id_token_hint)
+ANY  /bff/api/**                         authenticated (+ CSRF on mutations) -> proxied with Authorization: Bearer
+anything else                            401 ProblemDetail (a logged-in browser landing on / gets a 404 one)
+```
+CSRF is the double-submit pair `__Host-XSRF-TOKEN` cookie (readable by the SPA) + `X-XSRF-TOKEN` header; login
+clears the cookie and the next response reissues it, so the SPA reads it per request. The three Spring-provided
+routes are filter-served and pinned by explicit cases in `SecurityPostureTest`, as on the backend.
+
+Session policy (`session/`): the store is Spring Session JDBC in Postgres, own role `bff_session` and own
+schema `bff_sessions` (`infra/postgres/init/create-bff-role.sh`; existing volumes run it once by hand:
+`docker compose exec postgres bash /docker-entrypoint-initdb.d/create-bff-role.sh`), Flyway-managed
+(`bff/src/main/resources/db/migration/`, V1 mirrors Spring Session's DDL; `initialize-schema=never`),
+`flush-mode=immediate` so a rotated refresh token is durable before any waiter is released. Known limit: the
+backend connects as the bootstrap superuser and can read `bff_sessions`; the isolation is BFF->catalog and
+Grafana->sessions, a least-privilege backend role is its own infra item. Lifetimes: unchecked = session cookie,
+24 h inactivity, 24 h absolute; remember-me = Spring Session's persistent cookie (`Max-Age=Integer.MAX_VALUE`,
+by that library's design), 30 d inactivity, 90 d absolute. Inactivity is Spring Session's per-session interval;
+the absolute bound is the `bff.absoluteExpiresAt` attribute `SessionExpiryFilter` checks on every request (live /
+pre-login / invalidate), clamping the row's inactivity so the database expiry never outlives it. A session
+attribute that no longer deserializes becomes `null` + WARN (`springSessionConversionService`) and the filter
+expires the row: a deploy that changes a serialized class logs everyone out once, never 500s. What a row stores
+is `token/StoredTokens` (values + timestamps), never Spring's `OAuth2AuthorizedClient`, which would serialize
+the client secret into every row.
+
+Refresh (`token/`): `RefreshCoordinator` is the seam; `SingleFlightRefreshCoordinator` refreshes at most once
+per session at a time, in process, on the first request that finds the access token within 60 s of expiry;
+concurrent requests wait on its future (`pricehunt.bff.session.refresh-wait-timeout`, 503 for a waiter that
+gives up, the refresh still lands). Auth0 rotates refresh tokens with reuse detection, so two parallel refreshes
+would log the user out; the load path re-reads the committed row for the same reason. Terminal failures
+(`invalid_grant` / `invalid_token`, no refresh token, row gone) are `SessionRevokedException` -> 401 + session
+invalidated; everything else is `IdentityProviderUnavailableException` -> 503 with the session intact. One BFF
+process is assumed until a multi-instance store replaces the coordinator.
+
+Proxy (`proxy/BackendProxyHandler`): buffered both ways, GET/POST/PATCH/DELETE, raw path + query forwarded
+byte-for-byte, only `Content-Type`/`Accept`/`X-Correlation-ID` + the bearer go out and only status,
+`Content-Type` and `X-Correlation-ID` come back. A backend **401 becomes a 502** (`BackendRejectedGatewayTokenException`):
+the token was just minted or refreshed, so a rejection is a configuration fault (audience/issuer/clock), and
+passing it through would loop a SPA that treats 401 as "go log in". Any transport failure is one 502. One read
+timeout for every route (`pricehunt.bff.backend.read-timeout=240s`) sized to outlast `POST /track`. Every
+outbound Auth0 call (token endpoint, ID-token JWKS) runs on a timed HTTP/1.1 client; no OIDC discovery at boot.
+`controller/GlobalExceptionHandler` is the only `ProblemDetail` writer (sealed `exception/BffException`, exhaustive
+switch), reached from the filter chain through `controller/SecurityRejectionRouter` exactly as on the backend.
+
+Testing: MockMvc against a Testcontainers Postgres initialized by the real init script, connected as
+`bff_session`; `testsupport/FakeAuth0` (loopback: authorize, PKCE-verifying token endpoint with rotating refresh
+tokens, JWKS, logout) and `FakeBackend`; a `MutableClock` drives expiry, never sleeps. `SessionStoreConfig` owns
+the cookie serializer because Boot's mapping of `server.servlet.session.cookie.*` is conditional on an embedded
+server and a MockMvc context reads as a WAR (it would silently write `SESSION` with no attributes).
 
 **Validation layer** (in `ProductTrackingService`, before saving `PriceRecord`):
 - Price must be > 0
