@@ -16,7 +16,7 @@ set -euo pipefail
 
 MODEL="${CODEX_REVIEW_MODEL-gpt-5.6-sol}"          # shared with codex-review.sh; pinned, set to "" for Codex's own default
 REASONING="${CODEX_REVIEW_REASONING_EFFORT:-high}" # shared with codex-review.sh
-TIMEOUT="${CODEX_REVIEW_TIMEOUT:-240s}"            # shared with codex-review.sh
+TIMEOUT="${CODEX_REVIEW_TIMEOUT:-900s}"            # shared with codex-review.sh
 # Falls back to AGY_PLAN_DIR if set — both tools read the same plan directory by
 # default, so one override (AGY_PLAN_DIR) covers both unless they need to diverge.
 PLAN_DIR="${CODEX_PLAN_DIR:-${AGY_PLAN_DIR:-$HOME/.claude/plans}}"
@@ -55,7 +55,7 @@ Environment:
                       high). Shared with codex-review.sh.
   CODEX_REVIEW_TIMEOUT
                       Best-effort wall-clock timeout for the codex call (default:
-                      240s). Wraps the call with `timeout`/`gtimeout` if either is on
+                      900s). Wraps the call with `timeout`/`gtimeout` if either is on
                       PATH (a `timeout` that isn't GNU coreutils, e.g. Windows'
                       timeout.exe, is ignored); otherwise no timeout is enforced.
                       Shared with codex-review.sh.

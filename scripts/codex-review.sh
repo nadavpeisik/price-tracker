@@ -12,7 +12,7 @@ set -euo pipefail
 
 MODEL="${CODEX_REVIEW_MODEL-gpt-5.6-sol}"          # pinned so reviews don't drift with ~/.codex/config.toml; set to "" to use Codex's own default
 REASONING="${CODEX_REVIEW_REASONING_EFFORT:-high}" # passed as -c model_reasoning_effort="<value>"
-TIMEOUT="${CODEX_REVIEW_TIMEOUT:-240s}"
+TIMEOUT="${CODEX_REVIEW_TIMEOUT:-900s}"
 BASE_REF="${CODEX_REVIEW_BASE:-origin/main}"
 FETCH="${CODEX_REVIEW_FETCH:-1}"
 MAX_UNTRACKED="${CODEX_REVIEW_MAX_FILE_BYTES:-102400}"
@@ -48,7 +48,7 @@ Environment:
                       — better critique quality for a second-opinion reviewer).
   CODEX_REVIEW_TIMEOUT
                       Best-effort wall-clock timeout for the codex call (default:
-                      240s). Wraps the call with `timeout`/`gtimeout` if either is on
+                      900s). Wraps the call with `timeout`/`gtimeout` if either is on
                       PATH (a `timeout` that isn't GNU coreutils, e.g. Windows'
                       timeout.exe, is ignored); otherwise no timeout is enforced.
   CODEX_REVIEW_BASE   Base ref for the default scope (default: origin/main).
