@@ -15,7 +15,7 @@
 set -euo pipefail
 
 MODEL="${AGY_REVIEW_MODEL:-Gemini 3.8 Flash (High)}"
-TIMEOUT="${AGY_REVIEW_TIMEOUT:-240s}"
+TIMEOUT="${AGY_REVIEW_TIMEOUT:-900s}"
 SANDBOX="${AGY_REVIEW_SANDBOX:-1}" # sandbox ON unless explicitly "0" (fail-safe); restricts the terminal, NOT file access (see usage)
 PLAN_DIR="${AGY_PLAN_DIR:-$HOME/.claude/plans}"
 PLAN_DIR="${PLAN_DIR/#\~/$HOME}" # expand a leading ~ if AGY_PLAN_DIR was set with a literal/quoted tilde
@@ -38,7 +38,7 @@ Environment:
   AGY_REVIEW_MODEL    Model (default: "Gemini 3.8 Flash (High)"; switch to
                       "Gemini 3.1 Pro (High)" when off the free tier). Shared with
                       agy-review.sh so both tools use one set of dials.
-  AGY_REVIEW_TIMEOUT  agy --print-timeout value (default: 240s).
+  AGY_REVIEW_TIMEOUT  agy --print-timeout value (default: 900s).
   AGY_REVIEW_SANDBOX  On by default — runs agy with --sandbox ("terminal restrictions"),
                       which defends against prompt injection in the plan. ONLY the value 0
                       disables it (fail-safe: a typo can't silently turn off the sandbox).
