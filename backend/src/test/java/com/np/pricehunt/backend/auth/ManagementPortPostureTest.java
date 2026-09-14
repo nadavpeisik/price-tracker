@@ -1,7 +1,11 @@
 package com.np.pricehunt.backend.auth;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.reset;
 
+import com.np.pricehunt.backend.repository.AppUserRepository;
 import com.np.pricehunt.backend.service.fx.FxRateProvider;
 import java.io.IOException;
 import java.net.URI;
@@ -19,6 +23,8 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.transaction.CannotCreateTransactionException;
 
 /**
  * The actuator rules on the production topology: management on its own port, in Boot's child context
@@ -57,6 +63,9 @@ class ManagementPortPostureTest {
     @MockitoBean
     private FxRateProvider fxRateProvider;
 
+    @MockitoSpyBean
+    private AppUserRepository appUsers;
+
     private final HttpClient http = HttpClient.newHttpClient();
 
     @Test
@@ -83,6 +92,23 @@ class ManagementPortPostureTest {
         // exposed endpoints either.
         assertThat(get("/actuator", null).statusCode()).isEqualTo(401);
         assertThat(get("/actuator", IDP.userToken()).statusCode()).isEqualTo(403);
+    }
+
+    @Test
+    void managementPort_keepsAnsweringWhileTheAccountStoreIsDown() throws Exception {
+        // The actuator authorizes by role, so #248's app_user lookup must not run on its chain: an
+        // operator reaching for loggers or a thread dump is often diagnosing the database outage itself.
+        doThrow(new CannotCreateTransactionException("Could not open JPA EntityManager for transaction"))
+                .when(appUsers)
+                .findByIssuerAndSub(anyString(), anyString());
+        try {
+            assertThat(get("/actuator/metrics", IDP.adminToken()).statusCode()).isEqualTo(200);
+            assertThat(get("/actuator/health", null).statusCode()).isEqualTo(200);
+            // Role is still enforced from the token alone.
+            assertThat(get("/actuator/metrics", IDP.userToken()).statusCode()).isEqualTo(403);
+        } finally {
+            reset(appUsers);
+        }
     }
 
     private HttpResponse<String> get(String path, String bearer) throws IOException, InterruptedException {

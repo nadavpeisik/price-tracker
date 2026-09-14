@@ -27,12 +27,14 @@ import com.np.pricehunt.backend.dto.DashboardSortKey;
 import com.np.pricehunt.backend.dto.DashboardSummary;
 import com.np.pricehunt.backend.exception.NotFoundException;
 import com.np.pricehunt.backend.service.ProductTrackingService;
+import com.np.pricehunt.backend.service.UserPreferenceService;
 import com.np.pricehunt.backend.service.dashboard.DashboardQueryService;
 import com.np.pricehunt.backend.service.fx.ExchangeRateService;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -68,6 +70,9 @@ class DashboardControllerTest {
 
     @MockitoBean
     private ExchangeRateService rateService;
+
+    @MockitoBean
+    private UserPreferenceService preferences;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -256,6 +261,18 @@ class DashboardControllerTest {
         mvc.perform(get("/api/tracked-products")).andExpect(status().isOk());
 
         assertThat(capturedRequest().displayCurrency()).isEqualTo("ILS");
+    }
+
+    @Test
+    void omittedDisplayCurrencyPrefersTheCallersStoredPreference() throws Exception {
+        // #248: the preference beats the configured default and travels into the query request, which
+        // is where every row's bestPriceConvertedCurrency comes from.
+        stubEmptyResponse();
+        when(preferences.displayCurrencyPreference()).thenReturn(Optional.of("USD"));
+
+        mvc.perform(get("/api/tracked-products")).andExpect(status().isOk());
+
+        assertThat(capturedRequest().displayCurrency()).isEqualTo("USD");
     }
 
     // --- response shape ---

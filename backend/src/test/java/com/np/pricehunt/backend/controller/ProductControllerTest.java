@@ -18,6 +18,7 @@ import com.np.pricehunt.backend.exception.ValidationException;
 import com.np.pricehunt.backend.service.ProductCatalogService;
 import com.np.pricehunt.backend.service.ProductTrackingService;
 import com.np.pricehunt.backend.service.TrackedProductQueryService;
+import com.np.pricehunt.backend.service.UserPreferenceService;
 import com.np.pricehunt.backend.service.fx.ExchangeRateService;
 import java.math.BigDecimal;
 import java.sql.SQLException;
@@ -63,6 +64,9 @@ class ProductControllerTest {
 
     @MockitoBean
     private ExchangeRateService rateService;
+
+    @MockitoBean
+    private UserPreferenceService preferences;
 
     @Test
     void listProducts_isGone_supersededByTheDashboardEndpoint() throws Exception {

@@ -17,11 +17,25 @@ public final class TestTenants {
 
     private TestTenants() {}
 
-    /** Idempotent: shared contexts are not transactional, and a second save would trip the identity index. */
+    /**
+     * Idempotent: shared contexts are not transactional, and a second save would trip the identity index.
+     * A reused row has its display-currency preference reset, so every test starts from "no preference"
+     * and one test's write cannot make a later one order-dependent (#248).
+     */
     public static AppUser admit(AppUserRepository appUsers, String sub) {
-        return appUsers.findByIssuerAndSub(ISSUER, sub)
+        AppUser user = appUsers.findByIssuerAndSub(ISSUER, sub)
                 .orElseGet(() ->
                         appUsers.save(AppUser.builder().issuer(ISSUER).sub(sub).build()));
+        if (user.getDisplayCurrency() != null) {
+            user.setDisplayCurrency(null);
+            user = appUsers.save(user);
+        }
+        return user;
+    }
+
+    public static AppUser setDisplayCurrency(AppUserRepository appUsers, AppUser user, String displayCurrency) {
+        user.setDisplayCurrency(displayCurrency);
+        return appUsers.save(user);
     }
 
     public static UserProduct track(UserProductRepository memberships, AppUser user, Product product) {

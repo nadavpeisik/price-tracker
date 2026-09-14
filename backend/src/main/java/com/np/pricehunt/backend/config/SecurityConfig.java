@@ -5,7 +5,9 @@ import static org.springframework.security.authorization.AuthorityAuthorizationM
 import static org.springframework.security.authorization.AuthorizationManagers.allOf;
 
 import com.np.pricehunt.backend.auth.AdmissionAuthorizationManager;
+import com.np.pricehunt.backend.auth.EnrichingJwtAuthenticationConverter;
 import com.np.pricehunt.backend.controller.SecurityRejectionRouter;
+import com.np.pricehunt.backend.repository.AppUserRepository;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.http.HttpClient;
@@ -15,11 +17,15 @@ import org.springframework.boot.security.oauth2.server.resource.autoconfigure.OA
 import org.springframework.boot.security.oauth2.server.resource.autoconfigure.servlet.JwkSetUriJwtDecoderBuilderCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.annotation.Order;
+import org.springframework.core.convert.converter.Converter;
 import org.springframework.http.HttpMethod;
+import org.springframework.security.authentication.AbstractAuthenticationToken;
 import org.springframework.security.config.ObjectPostProcessor;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter;
 import org.springframework.security.web.SecurityFilterChain;
@@ -31,7 +37,11 @@ import org.springframework.web.client.RestTemplate;
  * nothing cookie-shaped exists here because the browser talks to a separate BFF (#247). Token
  * validation is Boot's own — {@code issuer-uri}, {@code jwk-set-uri}, {@code audiences} and the
  * roles-claim converter are properties, not classes, because a hand-built decoder would replace Boot's
- * validators rather than add to them.
+ * validators rather than add to them. The one class-level piece on the authentication side wraps that
+ * roles converter to resolve the {@code app_user} row once per request (#248).
+ *
+ * <p>Two chains: the actuator's, which authorizes by role and therefore must not depend on the account
+ * store, and the API's, which requires admission. {@link #configureBearerChain} holds everything they share.
  *
  * <p>{@code authenticated()} is composed in front of {@link AdmissionAuthorizationManager} so the rules
  * state the invariant themselves rather than relying on the manager's internals.
@@ -47,12 +57,68 @@ public class SecurityConfig {
                 resourceServer.getJwt().getIssuerUri(), resourceServer.getJwt().getAudiences());
     }
 
+    /**
+     * The actuator, on its own chain so its requests never reach the {@code app_user} lookup (#248).
+     * Ops authorizes by role alone — an ops identity needs no account row — and this chain keeps that
+     * true of the <em>authentication</em> step too, by using Boot's plain converter rather than the
+     * enriching one. Otherwise a database outage would answer 503 on {@code loggers} and
+     * {@code threaddump}, the endpoints an operator reaches for while diagnosing exactly that: pool
+     * exhaustion presents as a hung application, and the thread dump is what shows threads parked on
+     * {@code getConnection}. Ordered ahead of the API chain, which matches every remaining request.
+     */
     @Bean
+    @Order(1)
+    SecurityFilterChain actuatorFilterChain(
+            HttpSecurity http,
+            SecurityRejectionRouter router,
+            JwtAuthenticationConverter bootJwtAuthenticationConverter)
+            throws Exception {
+        return configureBearerChain(http, router, bootJwtAuthenticationConverter)
+                .securityMatcher(EndpointRequest.toAnyEndpoint())
+                .authorizeHttpRequests(authorize -> authorize
+                        .requestMatchers(EndpointRequest.to("health"))
+                        .permitAll()
+                        // toAnyEndpoint() includes the /actuator links root. Loggers and thread dumps
+                        // make this an admin resource even on a loopback-only port.
+                        .anyRequest()
+                        .hasRole(ADMIN_ROLE))
+                .build();
+    }
+
+    @Bean
+    @Order(2)
     SecurityFilterChain securityFilterChain(
             HttpSecurity http,
             SecurityRejectionRouter router,
             AdmissionAuthorizationManager admission,
-            JwtAuthenticationConverter jwtAuthenticationConverter)
+            EnrichingJwtAuthenticationConverter jwtAuthenticationConverter)
+            throws Exception {
+        return configureBearerChain(http, router, jwtAuthenticationConverter)
+                .authorizeHttpRequests(authorize -> authorize
+                        .requestMatchers("/api/dev/**")
+                        .access(allOf(authenticated(), hasRole(ADMIN_ROLE), admission))
+                        // Editing or hard-deleting a catalog row changes it for every user, so those
+                        // verbs are admin (#246). A user's own removal is DELETE /api/tracked-products/{id}.
+                        .requestMatchers(HttpMethod.PATCH, "/api/products/**")
+                        .access(allOf(authenticated(), hasRole(ADMIN_ROLE), admission))
+                        .requestMatchers(HttpMethod.DELETE, "/api/products/**")
+                        .access(allOf(authenticated(), hasRole(ADMIN_ROLE), admission))
+                        .requestMatchers("/api/**")
+                        .access(allOf(authenticated(), admission))
+                        .anyRequest()
+                        .authenticated())
+                .build();
+    }
+
+    /**
+     * Everything both chains share: no cookie surface, no session, and rejections written by the advice
+     * rather than by Spring Security's defaults. Factored out so the two chains cannot drift into
+     * different postures — only the converter and the rule ladder differ between them.
+     */
+    private static HttpSecurity configureBearerChain(
+            HttpSecurity http,
+            SecurityRejectionRouter router,
+            Converter<Jwt, ? extends AbstractAuthenticationToken> jwtAuthenticationConverter)
             throws Exception {
         return http
                 // Bearer transport has no cookie to forge, so there is no CSRF surface (Sonar S4502).
@@ -73,27 +139,14 @@ public class SecurityConfig {
                                 // exceptionHandling entry point above covers everything else.
                                 .authenticationEntryPoint(router)
                                 .accessDeniedHandler(router)
-                                .withObjectPostProcessor(routeIdpOutagesThroughTheAdvice(router)))
-                .authorizeHttpRequests(authorize -> authorize
-                        .requestMatchers(EndpointRequest.to("health"))
-                        .permitAll()
-                        // toAnyEndpoint() includes the /actuator links root. Loggers and thread dumps
-                        // make this an admin resource even on a loopback-only port.
-                        .requestMatchers(EndpointRequest.toAnyEndpoint())
-                        .hasRole(ADMIN_ROLE)
-                        .requestMatchers("/api/dev/**")
-                        .access(allOf(authenticated(), hasRole(ADMIN_ROLE), admission))
-                        // Editing or hard-deleting a catalog row changes it for every user, so those
-                        // verbs are admin (#246). A user's own removal is DELETE /api/tracked-products/{id}.
-                        .requestMatchers(HttpMethod.PATCH, "/api/products/**")
-                        .access(allOf(authenticated(), hasRole(ADMIN_ROLE), admission))
-                        .requestMatchers(HttpMethod.DELETE, "/api/products/**")
-                        .access(allOf(authenticated(), hasRole(ADMIN_ROLE), admission))
-                        .requestMatchers("/api/**")
-                        .access(allOf(authenticated(), admission))
-                        .anyRequest()
-                        .authenticated())
-                .build();
+                                .withObjectPostProcessor(routeIdpOutagesThroughTheAdvice(router)));
+    }
+
+    /** The enriched principal (#248); see the class for why it is a bean here and not a component. */
+    @Bean
+    EnrichingJwtAuthenticationConverter enrichingJwtAuthenticationConverter(
+            JwtAuthenticationConverter bootJwtAuthenticationConverter, AppUserRepository appUsers) {
+        return new EnrichingJwtAuthenticationConverter(bootJwtAuthenticationConverter, appUsers);
     }
 
     /**
