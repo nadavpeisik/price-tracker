@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronLeft, ChevronRight, Moon, RefreshCw, Sun } from 'lucide-react'
+import { ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { dashboardQueryOptions, PAGE_SIZE } from '@/lib/queries'
 import { safeStorage } from '@/lib/safe-storage'
 import { collectCelebrations, createCelebrationState } from '@/lib/celebration'
 import { canonicalizeShops, sameShops } from '@/lib/shop-identity'
-import { useTheme } from '@/hooks/use-theme'
 import { useDashboardUrlState } from '@/hooks/use-dashboard-url-state'
 import { SummaryTiles } from '@/components/dashboard/SummaryTiles'
 import { Toolbar } from '@/components/dashboard/Toolbar'
@@ -31,8 +30,12 @@ function sameIdOrder(a: DashboardResponse, b: DashboardResponse): boolean {
   return a.items.every((item, i) => item.id === b.items[i].id)
 }
 
+/**
+ * The dashboard page (#144). Page content only: the container and the chrome
+ * (brand, theme, account) belong to `AppShell` (#248), so this knows nothing
+ * about auth.
+ */
 export function Dashboard() {
-  const { theme, toggle } = useTheme()
   const { state, update } = useDashboardUrlState()
 
   const query: DashboardQuery = useMemo(
@@ -200,30 +203,7 @@ export function Dashboard() {
   }
 
   return (
-    <div className="mx-auto max-w-[1080px] px-5 pb-24 pt-6">
-      <header className="mb-6 flex items-center justify-between gap-4">
-        <div className="flex items-center gap-2.5">
-          <span
-            aria-hidden="true"
-            className="relative size-[30px] rounded-[9px] bg-[linear-gradient(145deg,#D63C93,var(--iris)_55%,#2F6FE0)] shadow-[0_5px_14px_-4px_color-mix(in_srgb,var(--iris)_60%,transparent)] after:absolute after:inset-[9px] after:rounded-full after:border-[2.5px] after:border-surface after:content-['']"
-          />
-          <span className="font-display text-xl font-bold tracking-tight">PriceHunt</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="icon"
-            onClick={toggle}
-            aria-label="Toggle light and dark theme"
-            className="size-9 rounded-[10px] border-line-strong bg-surface text-ink-muted"
-          >
-            {theme === 'dark' ? <Moon className="size-4" /> : <Sun className="size-4" />}
-          </Button>
-          {/* Add-product flow is out of scope this issue — visual stub. */}
-          <Button className="rounded-[10px] font-semibold">+ Track a product</Button>
-        </div>
-      </header>
-
+    <div>
       {data !== undefined && (
         <SummaryTiles
           global={data.globalSummary}
@@ -237,7 +217,13 @@ export function Dashboard() {
         />
       )}
 
-      <Toolbar state={state} update={update} shops={data?.facets.shops} />
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <Toolbar state={state} update={update} shops={data?.facets.shops} />
+        </div>
+        {/* Add-product flow is out of scope this issue — visual stub. A page action, not chrome (#248). */}
+        <Button className="rounded-[10px] font-semibold">+ Track a product</Button>
+      </div>
 
       <div className="overflow-hidden rounded-2xl border border-line bg-surface shadow-card">
         <div className="hidden border-b border-line bg-surface-2 px-4.5 py-2.5 text-[10.5px] font-bold uppercase tracking-wider text-ink-faint md:grid md:grid-cols-[minmax(190px,1fr)_76px_132px_92px_130px_32px] md:gap-3">

@@ -53,6 +53,14 @@ SPRING_DOCKER_COMPOSE_ENABLED=false \
   ./mvnw spring-boot:run
 ```
 
+**Running the backend from a git worktree needs that same block.** Compose derives its project name
+from the directory holding `compose.yaml`, so from `.claude/worktrees/<branch>/` Boot starts a *second*
+stack named after the branch (`<branch>-postgres-1` and friends) instead of reusing the running one, and
+the duplicates then collide on the published ports — the boot fails with a bare
+`ProcessExitException: 'docker compose ... up --wait' failed with exit code 1` and leaves the strays in
+`Created` state (`docker rm` them). A worktree also has no `.env` of its own, since it is gitignored and
+does not travel, so source the one at the main checkout root.
+
 **Before swapping the database under a running app, check nothing is connected** (`lsof -nP -iTCP:8080
 -sTCP:LISTEN`). An IDE-launched backend survives its Postgres being stopped and silently reconnects to
 whatever takes port 5432 next, so a throwaway instance on the same port becomes the live database of a
@@ -301,13 +309,24 @@ it must match the token's `iss` byte-for-byte and the JWKS URL is derived from i
 
 The authorization ladder is the whole policy, top rule wins:
 ```text
+--- actuator chain (@Order(1), securityMatcher = EndpointRequest.toAnyEndpoint()) ---
 /actuator/health                                anonymous
-/.well-known/oauth-protected-resource           anonymous (filter-provided, see below)
 /actuator/**  (incl. root)    ROLE_ADMIN                       (role from the token; no app_user row needed)
+--- API chain (@Order(2), matches everything else) ---
+/.well-known/oauth-protected-resource           anonymous (filter-provided, see below)
 /api/dev/**                   authenticated + ROLE_ADMIN + admitted
 /api/**                       authenticated + admitted          (403 without an app_user row)
 anything else                 authenticated
 ```
+**Two chains, and the split is load-bearing** (#248): the actuator's uses Boot's plain
+`JwtAuthenticationConverter`, the API's uses the enriching one. Authentication runs before
+authorization, so a single chain would make every bearer-carrying actuator request pay the `app_user`
+lookup that its own rule says it does not need — and a database outage would then answer 503 on
+`loggers` and `threaddump`, the endpoints an operator reaches for while diagnosing exactly that
+(connection-pool exhaustion presents as a hung app, and the thread dump is what shows it).
+`SecurityConfig.configureBearerChain` holds everything the two share so they cannot drift apart; only the
+converter and the rule ladder differ. `ManagementPortPostureTest` pins the actuator side, including the
+account-store-down case, because a MOCK environment creates no management child context.
 Two routes come from filters rather than controllers, so the enumeration test cannot see them: Spring's
 `LogoutFilter`, disabled in `SecurityConfig` because it would answer `/logout` with a 302 ahead of the
 rules, and Security 7's `OAuth2ProtectedResourceMetadataFilter`, which serves RFC 9728 metadata at
@@ -316,13 +335,29 @@ rules, and Security 7's `OAuth2ProtectedResourceMetadataFilter`, which serves RF
 `SecurityPostureTest` pins both the 200 and the absence of our tenant URL. **Any new filter-provided route
 needs its own case there.**
 
-*Admitted* = the token's raw `(iss, sub)` names an `app_user` row (`AdmissionAuthorizationManager` backed by
-`CurrentUser.resolveUserId`). There is **no just-in-time account creation** — an unknown identity is a 403 — and
-no identity cache. Only #249's invitation redemption may create or relink rows; it will be the one
-`authenticated()`-only `/api` route, placed above the admission rule. `CurrentUser.userId()` is what services
-call (#246); it throws `ForbiddenException` (403) for an unknown identity and `IllegalStateException` when
-there is no authentication at all — that is a wiring bug (a scheduler or the seeder reaching a user-scoped
-service), never a client error. Services never see the JWT.
+*Admitted* = the token's raw `(iss, sub)` names an `app_user` row. Since #248 that row is resolved **once per
+request, at authentication**: `auth/EnrichingJwtAuthenticationConverter` wraps Boot's property-built
+`JwtAuthenticationConverter` (roles mapping untouched), does the one `findByIssuerAndSub`, and returns an
+`AdmissionJwtAuthentication` whose principal is `Optional<AdmittedUser(id, displayCurrency)>` — empty means
+*authenticated but not admitted*, so admission still answers 403, never 401. `AdmissionAuthorizationManager`
+is a presence check on that principal and cannot throw; a database failure during the lookup is rethrown as
+`AuthenticationServiceException` and reaches the advice as the same 503 an Auth0 outage does. There is **no
+just-in-time account creation** — an unknown identity is a 403 — and no cross-request identity cache (the
+principal lives exactly as long as the request). Only #249's invitation redemption may create or relink rows;
+it will be the one `authenticated()`-only `/api` route, placed above the admission rule. `CurrentUser.userId()`
+and `CurrentUser.displayCurrencyPreference()` are what services call (#246, #248); they run no query, throw
+`ForbiddenException` (403) for an unknown identity and `IllegalStateException` when there is no authentication
+at all — that is a wiring bug (a scheduler or the seeder reaching a user-scoped service), never a client
+error. Services never see the JWT. The converter is a `@Bean` in `SecurityConfig`, not a component: a
+`@WebMvcTest` slice includes every scanned `Converter`, and this one needs a repository the slice lacks.
+
+**Display currency (#248):** `controller/DisplayCurrencyResolver` resolves `?displayCurrency=` → the caller's
+stored `app_user.display_currency` (via `service/UserPreferenceService`, which reads it off the principal) →
+`pricehunt.currency.default-display`, and validates whichever won, so a bad stored preference 400s exactly
+like a bad parameter. `GET /api/me` returns `{displayCurrency}` — the effective, validated value, the same code
+every money-quoting endpoint echoes — and nothing else (identity attributes come from `/bff/me`). No write path
+yet: a settings screen is a follow-up; the only writer today is a hand `UPDATE`. `TenancyRouteMatrixTest` pins
+the query count: one `findByIssuerAndSub` per request, never a `findById`.
 
 401/403/503 keep the #231 contract: Security's entry point and access-denied handler run outside
 `DispatcherServlet`, so `SecurityRejectionRouter` feeds them to the `handlerExceptionResolver` and
@@ -353,9 +388,8 @@ WHERE issuer = 'https://auth0-tenant-pending.invalid/' AND sub = 'nadav';   -- e
 Auth0 dev tenant checklist: an API with identifier `pricehunt-api` (RS256, access-token lifetime 300 s,
 RBAC on), a role `ADMIN`, and a post-login Action
 `api.accessToken.setCustomClaim("https://pricehunt.app/roles", event.authorization?.roles ?? [])`. For a
-manual smoke token before the login flow exists (#248), a machine-to-machine application authorized for the
-API (its `sub` is `<clientId>@clients`). The live UI 401s until #248 lands — run a pre-#245 checkout for UI
-work. For the BFF (#247): a **Regular Web Application** (confidential) with callback URLs
+manual smoke token without going through the browser, a machine-to-machine application authorized for the
+API (its `sub` is `<clientId>@clients`). For the BFF (#247): a **Regular Web Application** (confidential) with callback URLs
 `http://localhost:8082/bff/login/oauth2/code/auth0` and `http://localhost:5173/bff/login/oauth2/code/auth0`
 and logout URLs `http://localhost:8082/` and `http://localhost:5173/`; the API with **Allow Offline Access**
 on; **Refresh Token Rotation on, reuse interval 0** (a leeway would hide a single-flight bug); refresh-token
@@ -395,8 +429,13 @@ ever lands on the backend classpath**; the backend sees only the bearer the BFF 
 `BFF_DB_PASSWORD`; every one fails the boot when missing or malformed (`config/*Properties`). Dev loop:
 `export AUTH0_CLIENT_ID=... AUTH0_CLIENT_SECRET=...; set -a; . ./.env; set +a; cd bff; ./mvnw spring-boot:run`
 on `:8082` (health on `127.0.0.1:8083`); Boot's compose integration is deliberately absent, hence the
-`set -a` line. The Vite `/bff` proxy and the login UI are #248's; Caddy and the production compose profile
-are #263's.
+`set -a` line. The SPA (#248) talks to the BFF only: the Vite dev server proxies `/bff` → `:8082` with
+`changeOrigin` **off** (the BFF derives its OAuth redirect URIs from the `Host` header, and the Auth0 app
+registers the `:5173` callback), every data call goes through `/bff/api/**`, and a 401 on any `/bff/*` call is
+the one "session gone" signal (a backend 401 never reaches the browser — the BFF turns it into a 502). The
+`AuthGate` component renders sign-in / not-admitted (the account query's 403 = no `app_user` row) / the
+`AppShell` around the dashboard; there is no client-side router yet (#160). Caddy and the production compose
+profile are #263's, so the built SPA is **mergeable now, deployable only with #263**.
 
 Routes (`config/SecurityConfig`, explicit `/bff` prefixes, no context path because `__Host-` forbids a
 cookie path):

@@ -183,3 +183,29 @@ export interface DashboardResponse {
   /** Scoped to the active search/filter → annotation on the current view. */
   summaryForCurrentQuery: DashboardSummary
 }
+
+/* ── Session + account (#248) ────────────────────────────────────────── */
+
+/**
+ * What the SPA reads from the BFF's `/bff/me` response: the two ID-token
+ * claims the header shows. Both are declared nullable because the Java
+ * record's String fields serialize as `null` when the ID token lacks the
+ * claim; Auth0 always supplies at least the email. The response carries more
+ * (`emailVerified`, `picture`, `roles`) — unmodelled until something renders
+ * them, since roles are login-time presentation and never a gate.
+ */
+export interface User {
+  name: string | null
+  email: string | null
+}
+
+/**
+ * The session state as a discriminated union (≈ a sealed interface with two
+ * records): "anonymous" is an expected answer from `/bff/me`, not an error.
+ */
+export type Me = { status: 'signed-in'; user: User } | { status: 'anonymous' }
+
+/** The backend's `GET /api/me`: the effective, validated display currency. */
+export interface Account {
+  displayCurrency: string
+}

@@ -30,9 +30,16 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       proxy: {
-        // Dev-only reverse proxy: the browser calls the Vite origin, Vite
-        // forwards /api/* to the Spring backend — no CORS involved.
-        '/api': 'http://localhost:8080',
+        // Dev-only reverse proxy (#248): the browser calls the Vite origin,
+        // Vite forwards /bff/* to the BFF — no CORS, and the session cookie
+        // is first-party. The backend is bearer-only, so a browser-side
+        // /api proxy could only ever produce 401s. `changeOrigin` must be
+        // OFF: the BFF builds the OAuth redirect URIs from the Host header
+        // (forward-headers-strategy=framework), and the Auth0 app registers
+        // http://localhost:5173/..., not :8082. The object form is required
+        // for that — Vite's string shorthand silently expands to
+        // `{ target, changeOrigin: true }` (pinned in vite.config.test.ts).
+        '/bff': { target: 'http://localhost:8082', changeOrigin: false },
       },
     },
     test: {

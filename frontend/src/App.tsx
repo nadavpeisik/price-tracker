@@ -1,13 +1,19 @@
+import { AuthGate } from '@/components/auth/AuthGate'
 import { Dashboard } from '@/components/dashboard/Dashboard'
 
 /**
- * The app IS the dashboard (#157). Whether it reads live data or the typed
- * mock is decided inside `api-client.ts` (DEV + VITE_USE_MOCK), not here —
- * the prod gate that used to render a placeholder retired with the mock
- * default once #145/#146 landed.
+ * The app IS the dashboard (#157), behind the session gate (#248): the gate
+ * renders sign-in / not-admitted / the shell around it depending on what the
+ * BFF says about the session. Whether the dashboard reads live data or the
+ * typed mock is decided inside `api-client.ts` / `auth-client.ts` (DEV +
+ * VITE_USE_MOCK), not here.
  */
 function App() {
-  return <Dashboard />
+  return (
+    <AuthGate>
+      <Dashboard />
+    </AuthGate>
+  )
 }
 
 export default App

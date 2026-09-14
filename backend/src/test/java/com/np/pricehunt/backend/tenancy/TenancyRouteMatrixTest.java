@@ -1,8 +1,11 @@
 package com.np.pricehunt.backend.tenancy;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
@@ -39,6 +42,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.client.RestClientException;
@@ -98,7 +102,7 @@ class TenancyRouteMatrixTest {
     @Autowired
     private TrackedItemRepository trackedItemRepository;
 
-    @Autowired
+    @MockitoSpyBean
     private AppUserRepository appUsers;
 
     @Autowired
@@ -229,6 +233,38 @@ class TenancyRouteMatrixTest {
                 .getResponse()
                 .getContentAsString();
         return body.replaceAll("\"instance\":\"[^\"]*\",?", "");
+    }
+
+    // --- the account off the principal (#248) ---
+
+    @Test
+    void me_quotesEachCallersOwnPreference_orTheDefault() throws Exception {
+        // Projection, admission and isolation in one: Alice's stored USD is hers, Bob has none and gets
+        // the configured default. /api/me and not the dashboard rows, because this fixture seeds no
+        // price and every row's bestPriceConvertedCurrency would be null either way.
+        TestTenants.setDisplayCurrency(appUsers, alice, "USD");
+
+        mvc.perform(get("/api/me").header(HttpHeaders.AUTHORIZATION, as("auth0|alice")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.displayCurrency").value("USD"));
+        mvc.perform(get("/api/me").header(HttpHeaders.AUTHORIZATION, as("auth0|bob")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.displayCurrency").value("ILS"));
+    }
+
+    @Test
+    void oneRequest_readsAppUserExactlyOnce_withOrWithoutAnExplicitCurrency() throws Exception {
+        // The enriched principal (#248): admission, the service's userId() and the currency fallback all
+        // read the row the converter loaded, so a request costs one identity lookup and never a findById.
+        for (String path : List.of("/api/tracked-products", "/api/tracked-products?displayCurrency=USD")) {
+            clearInvocations(appUsers);
+
+            mvc.perform(get(path).header(HttpHeaders.AUTHORIZATION, as("auth0|alice")))
+                    .andExpect(status().isOk());
+
+            verify(appUsers, times(1)).findByIssuerAndSub(anyString(), anyString());
+            verify(appUsers, never()).findById(anyLong());
+        }
     }
 
     // --- mutations ---

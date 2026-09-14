@@ -2,6 +2,9 @@ package com.np.pricehunt.backend.auth;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.startsWith;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.reset;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -30,10 +33,12 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
+import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.web.method.HandlerMethod;
 import org.springframework.web.servlet.mvc.method.RequestMappingInfo;
 import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
@@ -87,7 +92,7 @@ class SecurityPostureTest {
     @Autowired
     private RequestMappingHandlerMapping mappings;
 
-    @Autowired
+    @MockitoSpyBean
     private AppUserRepository appUsers;
 
     @MockitoBean
@@ -143,7 +148,11 @@ class SecurityPostureTest {
                 .isNotEmpty();
         assertThat(routes.stream().map(Route::toString))
                 .describedAs("one sentinel per controller, so the enumeration is known to reach each")
-                .contains("POST /api/products", "GET /api/tracked-products", "GET /api/dev/scrape-attempts/1/fixture");
+                .contains(
+                        "POST /api/products",
+                        "GET /api/tracked-products",
+                        "GET /api/me",
+                        "GET /api/dev/scrape-attempts/1/fixture");
         return routes;
     }
 
@@ -244,6 +253,24 @@ class SecurityPostureTest {
     }
 
     // --- admission and roles ---
+
+    @Test
+    void accountStoreDown_is503_notA401OrA500() throws Exception {
+        // The identity lookup now runs at authentication (#248); a dead database there is the same
+        // posture as a dead identity provider, and must not read as "bad credentials" to the BFF. The
+        // thrown type is the one a stopped Postgres actually produces (not a DataAccessException).
+        doThrow(new CannotCreateTransactionException("Could not open JPA EntityManager for transaction"))
+                .when(appUsers)
+                .findByIssuerAndSub(anyString(), anyString());
+        try {
+            mvc.perform(get("/api/products/1").header(HttpHeaders.AUTHORIZATION, bearer(IDP.userToken())))
+                    .andExpect(status().isServiceUnavailable())
+                    .andExpect(content().contentTypeCompatibleWith(PROBLEM_JSON))
+                    .andExpect(jsonPath("$.detail").value("Authentication service unavailable"));
+        } finally {
+            reset(appUsers);
+        }
+    }
 
     @Test
     void admittedUser_passesTheGate() throws Exception {

@@ -1,43 +1,55 @@
 package com.np.pricehunt.backend.auth;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.mock;
 
+import java.time.Instant;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.authentication.TestingAuthenticationToken;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.web.access.intercept.RequestAuthorizationContext;
 
-/** The admission gate is exactly "resolves to an account": nothing more, and it never throws. */
-@ExtendWith(MockitoExtension.class)
+/** The admission gate is exactly "the principal carries an account": nothing more, and it never throws. */
 class AdmissionAuthorizationManagerTest {
 
-    @Mock
-    private CurrentUser currentUser;
+    private final AdmissionAuthorizationManager admission = new AdmissionAuthorizationManager();
+    private final RequestAuthorizationContext context = mock(RequestAuthorizationContext.class);
 
-    @Mock
-    private RequestAuthorizationContext context;
-
-    @InjectMocks
-    private AdmissionAuthorizationManager admission;
-
-    private final Authentication someone = new TestingAuthenticationToken("someone", null);
-
-    @Test
-    void admittedIdentity_isGranted() {
-        when(currentUser.resolveUserId(any())).thenReturn(Optional.of(1L));
-        assertThat(admission.authorize(() -> someone, context).isGranted()).isTrue();
+    private static AdmissionJwtAuthentication authenticationWith(Optional<AdmittedUser> admitted) {
+        Jwt jwt = new Jwt(
+                "token",
+                Instant.now(),
+                Instant.now().plusSeconds(300),
+                Map.of("alg", "RS256"),
+                Map.of("iss", "https://issuer.invalid/", "sub", "auth0|someone"));
+        return new AdmissionJwtAuthentication(jwt, List.of(), admitted);
     }
 
     @Test
-    void unknownIdentity_isDenied() {
-        when(currentUser.resolveUserId(any())).thenReturn(Optional.empty());
-        assertThat(admission.authorize(() -> someone, context).isGranted()).isFalse();
+    void admittedIdentity_isGranted() {
+        Authentication admitted = authenticationWith(Optional.of(new AdmittedUser(1L, null)));
+        assertThat(admission.authorize(() -> admitted, context).isGranted()).isTrue();
+    }
+
+    @Test
+    void authenticatedButUnknownIdentity_isDenied() {
+        Authentication unknown = authenticationWith(Optional.empty());
+        assertThat(admission.authorize(() -> unknown, context).isGranted()).isFalse();
+    }
+
+    @Test
+    void anyOtherAuthenticationType_isDenied() {
+        // Nothing but the enriched principal proves an account; a foreign token type cannot.
+        Authentication basic = new TestingAuthenticationToken("someone", "secret", "ROLE_ADMIN");
+        assertThat(admission.authorize(() -> basic, context).isGranted()).isFalse();
+    }
+
+    @Test
+    void noAuthentication_isDenied_notAnException() {
+        assertThat(admission.authorize(() -> null, context).isGranted()).isFalse();
     }
 }
