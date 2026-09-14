@@ -34,7 +34,8 @@ describe('toBackendParams', () => {
   })
 })
 
-const okJson = (body: unknown) =>
+/** A 200 carrying `body` as JSON — what every happy-path fetch stub returns. */
+const okJson = (body: unknown): Response =>
   new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
 
 /**

@@ -2,9 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fetchMe, fetchAccount, logout } from '@/lib/auth-client'
 import { ApiError } from '@/lib/api-error'
 
-const okJson = (body: unknown) =>
+/** A 200 carrying `body` as JSON — what every happy-path fetch stub returns. */
+const okJson = (body: unknown): Response =>
   new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
-const status = (code: number) => new Response('', { status: code, statusText: 'x' })
+
+/** An empty response with `code`, for the failure branches; only the status is ever read. */
+const status = (code: number): Response => new Response('', { status: code, statusText: 'x' })
 
 const user = { name: 'Nadav', email: 'n@example.com' }
 
