@@ -25,13 +25,10 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 /**
- * The one branch of {@link RegistrationService#provision} that the route test cannot reach: what a
- * caller sees when a concurrent request for the SAME identity provisioned the account while this one
- * waited on the invitation row lock. Reaching it needs the account to appear <em>between</em> two
- * lookups inside one call, which is a thread race in production and consecutive stubbing here.
- *
- * <p>Everything else about provisioning is proven end to end on real Postgres by
- * {@code invitation.InvitationRouteTest}; this class deliberately does not duplicate it.
+ * The one branch of {@link RegistrationService#provision} the route test cannot reach: the account has
+ * to appear <em>between</em> two lookups inside one call, which is a thread race in production and
+ * consecutive stubbing here. Everything else is proven on real Postgres by
+ * {@code invitation.InvitationRouteTest}, which this deliberately does not duplicate.
  */
 @ExtendWith(MockitoExtension.class)
 class RegistrationServiceTest {
