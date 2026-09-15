@@ -154,9 +154,18 @@ interface ListingPanelProps {
   showHidden: boolean
   /** The panel's own way in: "N hidden · Show hidden" flips the dashboard toggle. */
   onShowHidden: () => void
+  /** Reported after a successful hide/show so the row reorder it causes lands at once. */
+  onListingsChanged: () => void
 }
 
-export function ListingPanel({ productId, open, bestTrackedItemId, showHidden, onShowHidden }: ListingPanelProps) {
+export function ListingPanel({
+  productId,
+  open,
+  bestTrackedItemId,
+  showHidden,
+  onShowHidden,
+  onListingsChanged,
+}: ListingPanelProps) {
   const { data, status, refetch, isRefetching } = useQuery(listingsQueryOptions(productId, open))
   const now = useNow()
   const queryClient = useQueryClient()
@@ -170,9 +179,13 @@ export function ListingPanel({ productId, open, bestTrackedItemId, showHidden, o
     onError: (_error, { trackedItemId }) => setFailedItemId(trackedItemId),
     onSuccess: () => {
       // The panel for the flag; the dashboard for the row's best price, shop
-      // count and facets, which only the backend recomputes.
+      // count and facets, which only the backend recomputes. Hiding the best
+      // shop can reorder the list, so the dashboard is told this reorder was
+      // asked for — otherwise it parks behind "Prices updated" and the row
+      // keeps quoting the shop that was just hidden.
       void queryClient.invalidateQueries({ queryKey: ['product-listings', productId] })
       void queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+      onListingsChanged()
     },
   })
 

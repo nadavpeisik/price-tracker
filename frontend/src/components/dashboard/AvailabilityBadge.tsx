@@ -33,7 +33,11 @@ function StatusBadge({ tone, children }: { tone: Tone; children: React.ReactNode
   )
 }
 
-export function ProductAvailabilityBadge({ rollup }: { rollup: AvailabilityRollup }) {
+interface ProductAvailabilityBadgeProps {
+  rollup: AvailabilityRollup
+}
+
+export function ProductAvailabilityBadge({ rollup }: ProductAvailabilityBadgeProps) {
   if (rollup.total === 0) {
     return <StatusBadge tone="neutral">No visible shops</StatusBadge>
   }

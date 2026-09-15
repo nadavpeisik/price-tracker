@@ -533,9 +533,7 @@ describe('Dashboard', () => {
     expect(within(region).getByText('1 shop hidden')).toBeInTheDocument()
   })
 
-  it('"Show hidden" (toolbar or the panel footer) reveals hidden rows dimmed with a Hidden chip, and never as Best', async () => {
-    // The row still names Bug (12) as best — a parked dashboard refetch can — so the panel must not.
-    fetchDashboardMock.mockResolvedValue(response([product({ id: 1, name: 'Sony WH-1000XM5', bestTrackedItemId: 12 })]))
+  it('the panel footer reveals the hidden row with a Hidden chip, and stops counting it', async () => {
     fetchListingsMock.mockResolvedValue(withHiddenBug())
     const user = userEvent.setup()
     renderDashboard()
@@ -545,12 +543,45 @@ describe('Dashboard', () => {
 
     expect(within(region).getByText('Bug')).toBeInTheDocument()
     expect(within(region).getByText('Hidden')).toBeInTheDocument()
+    expect(within(region).queryByText('1 shop hidden')).not.toBeInTheDocument()
+  })
+
+  it('never marks a revealed hidden row Best, even when the dashboard row still names it', async () => {
+    // A dashboard response parked behind "Prices updated" can still name Bug (12) as the winner.
+    fetchDashboardMock.mockResolvedValue(response([product({ id: 1, name: 'Sony WH-1000XM5', bestTrackedItemId: 12 })]))
+    fetchListingsMock.mockResolvedValue(withHiddenBug())
+    const user = userEvent.setup()
+    renderDashboard()
+    const region = await openSonyPanel(user)
+
+    await user.click(within(region).getByRole('button', { name: 'Show hidden' }))
+
+    expect(within(region).getByText('Bug')).toBeInTheDocument()
     expect(within(region).queryByText('Best')).not.toBeInTheDocument()
-    expect(within(region).queryByText(/hidden$/)).not.toBeInTheDocument()
+  })
+
+  it('the panel footer and the toolbar checkbox are one state', async () => {
+    fetchListingsMock.mockResolvedValue(withHiddenBug())
+    const user = userEvent.setup()
+    renderDashboard()
+    const region = await openSonyPanel(user)
+    expect(screen.getByRole('checkbox', { name: 'Show hidden' })).not.toBeChecked()
+
+    await user.click(within(region).getByRole('button', { name: 'Show hidden' }))
+
     expect(screen.getByRole('checkbox', { name: 'Show hidden' })).toBeChecked()
-    // Toggle it back off from the toolbar: the row disappears again, no refetch involved.
+  })
+
+  it('unticking "Show hidden" hides the row again without refetching the panel', async () => {
+    fetchListingsMock.mockResolvedValue(withHiddenBug())
+    const user = userEvent.setup()
+    renderDashboard()
+    const region = await openSonyPanel(user)
+    await user.click(within(region).getByRole('button', { name: 'Show hidden' }))
     const calls = fetchListingsMock.mock.calls.length
+
     await user.click(screen.getByRole('checkbox', { name: 'Show hidden' }))
+
     expect(within(region).queryByText('Bug')).not.toBeInTheDocument()
     expect(fetchListingsMock.mock.calls.length).toBe(calls)
   })
@@ -568,6 +599,26 @@ describe('Dashboard', () => {
     expect(setListingHiddenMock).toHaveBeenCalledWith(1, 12, true)
     await within(region).findByText('1 shop hidden')
     expect(fetchDashboardMock.mock.calls.length).toBeGreaterThan(dashboardCalls)
+  })
+
+  it('a reorder caused by a hide lands at once, not behind "Prices updated"', async () => {
+    // The background-reorder guard exists to stop rows moving under a READER; someone who
+    // just hid a shop asked for the reorder, so it must commit without a second click.
+    const [sony, airpods] = PRODUCTS
+    fetchDashboardMock.mockResolvedValue(response([sony, airpods]))
+    setListingHiddenMock.mockResolvedValue(undefined)
+    const user = userEvent.setup()
+    renderDashboard()
+    const region = await openSonyPanel(user)
+    fetchDashboardMock.mockResolvedValue(response([airpods, sony]))
+
+    await user.click(within(region).getByRole('button', { name: 'Hide KSP' }))
+
+    await waitFor(() => {
+      const names = screen.getAllByRole('button', { name: /Sony WH-1000XM5|Apple AirPods Pro 2/ })
+      expect(names.map((n) => n.textContent)).toEqual(['Apple AirPods Pro 2', 'Sony WH-1000XM5'])
+    })
+    expect(screen.queryByRole('button', { name: /Prices updated/ })).not.toBeInTheDocument()
   })
 
   it('a failed hide surfaces an alert under the row and leaves the panel usable', async () => {

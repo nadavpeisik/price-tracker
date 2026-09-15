@@ -40,7 +40,7 @@ describe('createQueryClient', () => {
     expect(client.getQueryData(['me'])).toEqual({ status: 'anonymous' })
   })
 
-  it('leaves ["me"] alone when a mutation fails otherwise', async () => {
+  it('leaves ["me"] alone when a mutation fails with 404', async () => {
     const client = createQueryClient()
     client.setQueryData(['me'], { status: 'signed-in', user: { name: 'x' } })
 

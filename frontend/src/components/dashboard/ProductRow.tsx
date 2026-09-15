@@ -40,6 +40,8 @@ interface ProductRowProps {
   /** Dashboard-wide "Show hidden" (#250), forwarded to the panel untouched. */
   showHidden: boolean
   onShowHidden: () => void
+  /** The panel hid or showed a shop: the reorder that follows is wanted, not a background one. */
+  onListingsChanged: () => void
 }
 
 export function ProductRow({
@@ -50,6 +52,7 @@ export function ProductRow({
   celebrate,
   showHidden,
   onShowHidden,
+  onListingsChanged,
 }: ProductRowProps) {
   const reducedMotion = useReducedMotion()
   const nameId = useId()
@@ -203,6 +206,7 @@ export function ProductRow({
               bestTrackedItemId={product.bestTrackedItemId}
               showHidden={showHidden}
               onShowHidden={onShowHidden}
+              onListingsChanged={onListingsChanged}
             />
           </motion.div>
         )}
