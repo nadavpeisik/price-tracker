@@ -162,7 +162,10 @@ public class GlobalExceptionHandler {
     private static final Map<String, Supplier<ConflictException>> CLIENT_FACING_UNIQUE_CONSTRAINTS = Map.of(
             "uq_product_name_ci",
             () -> new ConflictException(
-                    ErrorCode.PRODUCT_NAME_ALREADY_EXISTS, "A product with that name already exists"));
+                    ErrorCode.PRODUCT_NAME_ALREADY_EXISTS, "A product with that name already exists"),
+            "uq_invitation_open_email",
+            () -> new ConflictException(
+                    ErrorCode.INVITATION_ALREADY_PENDING, "An invitation for that email is already pending"));
 
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<ProblemDetail> handleUniqueViolation(DataIntegrityViolationException ex) {

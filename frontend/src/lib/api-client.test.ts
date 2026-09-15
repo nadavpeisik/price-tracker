@@ -119,4 +119,11 @@ describe('request', () => {
     expect((error as ApiError).status).toBe(500)
     expect((error as ApiError).message).toBe('Request failed: 500 Server Error')
   })
+
+  it('resolves to undefined on a 2xx with no body (the 201/204 of account provisioning)', async () => {
+    // A null body, not '': the fetch spec forbids a body on 204 and undici enforces it.
+    vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 204 }))
+
+    await expect(request('/bff/api/me', { method: 'POST' })).resolves.toBeUndefined()
+  })
 })

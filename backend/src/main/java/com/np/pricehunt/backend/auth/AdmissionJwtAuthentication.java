@@ -29,7 +29,7 @@ public class AdmissionJwtAuthentication extends AbstractAuthenticationToken {
         setAuthenticated(true);
     }
 
-    /** The decoded token: the raw claims stay readable for the bootstrap WARN until #249 retires it. */
+    /** The decoded token: what {@link CurrentUser#identity()} reads for a caller with no account (#249). */
     @Override
     public Jwt getCredentials() {
         return token;

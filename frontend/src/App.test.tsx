@@ -22,7 +22,7 @@ vi.mock('@/lib/auth-client', async (importOriginal) => ({
       user: { name: 'Nadav', email: 'n@example.com' },
     }),
   ),
-  fetchAccount: vi.fn(() => Promise.resolve({ displayCurrency: 'ILS' })),
+  ensureAccount: vi.fn(() => Promise.resolve({ displayCurrency: 'ILS' })),
 }))
 
 describe('App', () => {

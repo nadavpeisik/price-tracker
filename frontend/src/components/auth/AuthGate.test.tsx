@@ -10,12 +10,12 @@ import type { Account, Me } from '@/lib/types'
 
 vi.mock('@/lib/auth-client', () => ({
   fetchMe: vi.fn(),
-  fetchAccount: vi.fn(),
+  ensureAccount: vi.fn(),
   logout: vi.fn(),
 }))
 vi.mock('@/lib/navigation', () => ({ navigateTo: vi.fn() }))
 
-import { fetchMe, fetchAccount, logout } from '@/lib/auth-client'
+import { fetchMe, ensureAccount, logout } from '@/lib/auth-client'
 import { navigateTo } from '@/lib/navigation'
 
 const user = { name: 'Nadav', email: 'n@example.com' }
@@ -58,12 +58,12 @@ describe('AuthGate', () => {
     renderGate()
     expect(await screen.findByRole('link', { name: 'Sign in' })).toBeInTheDocument()
     expect(screen.queryByText('the app')).not.toBeInTheDocument()
-    expect(fetchAccount).not.toHaveBeenCalled()
+    expect(ensureAccount).not.toHaveBeenCalled()
   })
 
   it('signed in + account 403 → the not-admitted screen, children never mount', async () => {
     vi.mocked(fetchMe).mockResolvedValue(signedIn)
-    vi.mocked(fetchAccount).mockRejectedValue(new ApiError(403, 'Forbidden'))
+    vi.mocked(ensureAccount).mockRejectedValue(new ApiError(403, 'Forbidden'))
     renderGate()
     expect(await screen.findByText(/isn't set up for PriceHunt yet/)).toBeInTheDocument()
     expect(screen.queryByText('the app')).not.toBeInTheDocument()
@@ -71,7 +71,7 @@ describe('AuthGate', () => {
 
   it('signed in + account ok → the shell around the children, with the currency', async () => {
     vi.mocked(fetchMe).mockResolvedValue(signedIn)
-    vi.mocked(fetchAccount).mockResolvedValue(account)
+    vi.mocked(ensureAccount).mockResolvedValue(account)
     renderGate()
     expect(await screen.findByText('the app')).toBeInTheDocument()
     expect(screen.getByText('Nadav')).toBeInTheDocument()
@@ -80,7 +80,7 @@ describe('AuthGate', () => {
 
   it('a non-403 account failure keeps the gate closed with Retry — admission is unknown, not granted', async () => {
     vi.mocked(fetchMe).mockResolvedValue(signedIn)
-    vi.mocked(fetchAccount).mockRejectedValueOnce(new ApiError(502, 'Bad Gateway')).mockResolvedValue(account)
+    vi.mocked(ensureAccount).mockRejectedValueOnce(new ApiError(502, 'Bad Gateway')).mockResolvedValue(account)
     renderGate()
     expect(await screen.findByText("Couldn't load your account.")).toBeInTheDocument()
     expect(screen.queryByText('the app')).not.toBeInTheDocument()
@@ -93,7 +93,7 @@ describe('AuthGate', () => {
 
   it('offers Sign out on the account error, since a 400 from a stored currency never clears by retrying', async () => {
     vi.mocked(fetchMe).mockResolvedValue(signedIn)
-    vi.mocked(fetchAccount).mockRejectedValue(new ApiError(400, 'Bad Request'))
+    vi.mocked(ensureAccount).mockRejectedValue(new ApiError(400, 'Bad Request'))
     vi.mocked(logout).mockResolvedValue('https://tenant/oidc/logout')
     renderGate()
     expect(await screen.findByText("Couldn't load your account.")).toBeInTheDocument()
@@ -105,7 +105,7 @@ describe('AuthGate', () => {
 
   it('a failed sign-out from the account error says so instead of appearing to do nothing', async () => {
     vi.mocked(fetchMe).mockResolvedValue(signedIn)
-    vi.mocked(fetchAccount).mockRejectedValue(new ApiError(502, 'Bad Gateway'))
+    vi.mocked(ensureAccount).mockRejectedValue(new ApiError(502, 'Bad Gateway'))
     vi.mocked(logout).mockRejectedValue(new Error('BFF unreachable'))
     renderGate()
     await screen.findByText("Couldn't load your account.")
@@ -128,7 +128,7 @@ describe('AuthGate', () => {
 
   it("a child query's 401 flips the gate to sign-in and unmounts the children (production rule)", async () => {
     vi.mocked(fetchMe).mockResolvedValue(signedIn)
-    vi.mocked(fetchAccount).mockResolvedValue(account)
+    vi.mocked(ensureAccount).mockResolvedValue(account)
     let rejectChild: (e: unknown) => void = () => {}
     const fail = () => new Promise((_, reject) => (rejectChild = reject))
     renderGate(<ChildWithQuery fail={fail} />)

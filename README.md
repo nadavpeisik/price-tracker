@@ -118,7 +118,9 @@ product with no listings — plus 35 days of exchange rates. It is safe to
 re-run (it replaces only its own `[dev-seed]` rows and never deletes real
 FX data), and its `*.seed.invalid` URLs are blocklisted so the scheduler
 never scrapes them. The demo products are tracked for the owner's account
-only (the bootstrap `app_user` row, #246) — other accounts do not see them.
+only (the first account provisioned, #246/#249) — other accounts do not see
+them, and on a fresh database that account must exist before you seed (see
+CLAUDE.md "Bootstrap on a fresh database"), or re-run `seed` afterwards.
 Ollama is not needed for it.
 
 The `seed-clean` profile is the way back out (issue #212). Turning the `seed`
@@ -140,9 +142,9 @@ survive it:
 `seed` and `seed-clean` together are refused at startup — they request
 opposite outcomes.
 
-Verify it's up (`TOKEN` is an access token for the `pricehunt-api` audience from your Auth0 tenant —
-until the login flow lands, a machine-to-machine application's token from the API's Test tab; the identity
-must first be linked to an `app_user` row, see CLAUDE.md "Dev bootstrap"):
+Verify it's up (`TOKEN` is an access token for the `pricehunt-api` audience from your Auth0 tenant, e.g.
+a machine-to-machine application's token from the API's Test tab; the identity must hold an `app_user`
+row, which an invitation creates on first sign-in — see CLAUDE.md "Bootstrap on a fresh database"):
 
 ```bash
 # Create a product
@@ -162,8 +164,9 @@ curl -X POST http://localhost:8080/api/products/1/track \
 
 Without a token every `/api` route answers `401` with a `ProblemDetail` body. Two routes stay anonymous:
 `/actuator/health`, for liveness probes, and `/.well-known/oauth-protected-resource`, the RFC 9728 metadata
-Spring Security serves so a client can discover how to authenticate. The React UI in `frontend/` calls the API directly and therefore stays dark until the
-frontend login flow (#248) lands on top of the BFF.
+Spring Security serves so a client can discover how to authenticate. The React UI in `frontend/` talks to the
+BFF only (#248), which signs the user in at Auth0 and forwards a bearer to the backend; an identity needs an
+invitation before it holds an account (#249).
 
 ## API
 
