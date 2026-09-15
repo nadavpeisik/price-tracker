@@ -1,6 +1,8 @@
-import { useQuery } from '@tanstack/react-query'
-import { ExternalLink } from 'lucide-react'
+import { useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { ExternalLink, Eye, EyeOff } from 'lucide-react'
 import { listingsQueryOptions } from '@/lib/queries'
+import { setListingHidden } from '@/lib/api-client'
 import { formatPrice, formatRelativeTime } from '@/lib/format'
 import { safeExternalHref } from '@/lib/safe-url'
 import { shopColorStyle } from '@/lib/shop-colors'
@@ -16,9 +18,25 @@ import type { Listing } from '@/lib/types'
  * failure must never bubble to a page-level boundary or leave a blank
  * panel). This component is the only ticker consumer, so collapsed rows
  * never re-render on the minute tick.
+ *
+ * Hidden shops (#250): the backend returns EVERY listing with a `hidden`
+ * flag and excludes hidden ones from the row's rollups. The panel hides
+ * them unless "Show hidden" is on, and always says how many it is hiding,
+ * so a product whose only shop is hidden never reads as "no shops".
  */
 
-function ListingRow({ listing, isBest, now }: { listing: Listing; isBest: boolean; now: number }) {
+interface ListingRowProps {
+  listing: Listing
+  isBest: boolean
+  now: number
+  onSetHidden: (hidden: boolean) => void
+  /** A visibility mutation is in flight — every row's toggle waits, so two clicks cannot interleave. */
+  busy: boolean
+  /** The last mutation for THIS row failed; text only, the button is the sibling. */
+  error: boolean
+}
+
+function ListingRow({ listing, isBest, now, onSetHidden, busy, error }: ListingRowProps) {
   // Nullable on the wire for legacy rows only; one non-null value feeds the
   // label, the colour hash and the screen-reader text alike.
   const shopName = listing.shopName ?? 'Unknown shop'
@@ -41,13 +59,22 @@ function ListingRow({ listing, isBest, now }: { listing: Listing; isBest: boolea
   const conversionUnavailable = converted === null && original !== null
 
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-dashed border-line-strong px-4.5 py-2.5 ps-7 md:grid md:grid-cols-[minmax(150px,1fr)_120px_110px_130px_90px]">
+    <div
+      className={`flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-dashed border-line-strong px-4.5 py-2.5 ps-7 md:grid md:grid-cols-[minmax(150px,1fr)_120px_110px_130px_130px]${listing.hidden ? ' opacity-60' : ''}`}
+    >
       <span className="shop-color inline-flex min-w-0 items-center gap-1.5 text-[13px] font-semibold" style={shopColorStyle(shopName)}>
         <span className="inline-block size-2 flex-none rounded-full bg-(--sc-dot)" aria-hidden="true" />
         <bdi className="truncate text-(--sc-text)">{shopName}</bdi>
-        {isBest && (
+        {/* Best comes from the row's rollup, which never counts a hidden listing — but a dashboard
+            refetch parked behind "Prices updated" can still name one, so the panel checks too. */}
+        {isBest && !listing.hidden && (
           <span className="ms-0.5 rounded-[5px] bg-good px-1.5 py-px text-[9.5px] font-extrabold uppercase tracking-wider text-white">
             Best
+          </span>
+        )}
+        {listing.hidden && (
+          <span className="ms-0.5 rounded-[5px] bg-ink-faint px-1.5 py-px text-[9.5px] font-extrabold uppercase tracking-wider text-white">
+            Hidden
           </span>
         )}
       </span>
@@ -75,22 +102,42 @@ function ListingRow({ listing, isBest, now }: { listing: Listing; isBest: boolea
         <ListingAvailabilityBadge status={listing.availability} />
       </span>
       <span className="text-xs text-ink-muted">{formatRelativeTime(listing.lastChecked, now)}</span>
-      {href !== null ? (
-        <a
-          href={href}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 justify-self-end rounded-lg border border-line-strong bg-surface px-2 py-1 text-xs font-semibold text-iris-strong transition-colors hover:border-iris"
+      {/* One action cell so the grid keeps its five tracks: the hide toggle beside the Open link. */}
+      <span className="inline-flex items-center gap-1.5 md:justify-self-end">
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          className="size-7 text-ink-muted hover:text-ink"
+          aria-label={listing.hidden ? `Show ${shopName}` : `Hide ${shopName}`}
+          title={listing.hidden ? `Show ${shopName}` : `Hide ${shopName}`}
+          onClick={() => onSetHidden(!listing.hidden)}
+          disabled={busy}
         >
-          Open
-          <ExternalLink className="size-3" aria-hidden="true" />
-          <span className="sr-only"> {shopName} in a new tab</span>
-        </a>
-      ) : (
-        // Unsafe/malformed/missing scraped URL — a non-interactive element,
-        // not a dead link (no href="#" a11y trap).
-        <span className="inline-flex items-center justify-self-end px-2 py-1 text-xs text-ink-faint" title="Link unavailable">
-          Open
+          {listing.hidden ? <Eye className="size-4" aria-hidden="true" /> : <EyeOff className="size-4" aria-hidden="true" />}
+        </Button>
+        {href !== null ? (
+          <a
+            href={href}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 rounded-lg border border-line-strong bg-surface px-2 py-1 text-xs font-semibold text-iris-strong transition-colors hover:border-iris"
+          >
+            Open
+            <ExternalLink className="size-3" aria-hidden="true" />
+            <span className="sr-only"> {shopName} in a new tab</span>
+          </a>
+        ) : (
+          // Unsafe/malformed/missing scraped URL — a non-interactive element,
+          // not a dead link (no href="#" a11y trap).
+          <span className="inline-flex items-center px-2 py-1 text-xs text-ink-faint" title="Link unavailable">
+            Open
+          </span>
+        )}
+      </span>
+      {error && (
+        <span role="alert" className="basis-full text-xs text-bad md:col-span-full">
+          Couldn't {listing.hidden ? 'show' : 'hide'} {shopName}. Try again.
         </span>
       )}
     </div>
@@ -103,11 +150,44 @@ interface ListingPanelProps {
   open: boolean
   /** The row's winning listing (#157) — Best is marked by identity, never by position. */
   bestTrackedItemId: number | null
+  /** Dashboard-wide toggle (#250): render the hidden rows too, dimmed. */
+  showHidden: boolean
+  /** The panel's own way in: "N hidden · Show hidden" flips the dashboard toggle. */
+  onShowHidden: () => void
+  /** Reported after a successful hide/show so the row reorder it causes lands at once. */
+  onListingsChanged: () => void
 }
 
-export function ListingPanel({ productId, open, bestTrackedItemId }: ListingPanelProps) {
+export function ListingPanel({
+  productId,
+  open,
+  bestTrackedItemId,
+  showHidden,
+  onShowHidden,
+  onListingsChanged,
+}: ListingPanelProps) {
   const { data, status, refetch, isRefetching } = useQuery(listingsQueryOptions(productId, open))
   const now = useNow()
+  const queryClient = useQueryClient()
+  // Which row last failed; cleared by the next attempt on any row. One
+  // mutation at a time (every toggle waits on `busy`), so a single slot.
+  const [failedItemId, setFailedItemId] = useState<number | null>(null)
+  const setHiddenMutation = useMutation({
+    mutationFn: ({ trackedItemId, hidden }: { trackedItemId: number; hidden: boolean }) =>
+      setListingHidden(productId, trackedItemId, hidden),
+    onMutate: () => setFailedItemId(null),
+    onError: (_error, { trackedItemId }) => setFailedItemId(trackedItemId),
+    onSuccess: () => {
+      // The panel for the flag; the dashboard for the row's best price, shop
+      // count and facets, which only the backend recomputes. Hiding the best
+      // shop can reorder the list, so the dashboard is told this reorder was
+      // asked for — otherwise it parks behind "Prices updated" and the row
+      // keeps quoting the shop that was just hidden.
+      void queryClient.invalidateQueries({ queryKey: ['product-listings', productId] })
+      void queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+      onListingsChanged()
+    },
+  })
 
   if (status === 'pending') {
     return (
@@ -137,19 +217,40 @@ export function ListingPanel({ productId, open, bestTrackedItemId }: ListingPane
     return <div className="px-4.5 py-3 ps-7 text-sm text-ink-muted">No shops tracked for this product yet.</div>
   }
 
+  const hiddenCount = data.filter((listing) => listing.hidden).length
+  const rows = showHidden ? data : data.filter((listing) => !listing.hidden)
+
   // Rendered in WIRE ORDER — the backend sorts (not out of stock first, then
   // converted price ascending, unpriced last, ties by id); the client does no
   // money math. Best is the row's calculator winner, recognised by id.
   return (
     <div>
-      {data.map((listing) => (
+      {rows.map((listing) => (
         <ListingRow
           key={listing.trackedItemId}
           listing={listing}
           isBest={listing.trackedItemId === bestTrackedItemId}
           now={now}
+          onSetHidden={(hidden) => setHiddenMutation.mutate({ trackedItemId: listing.trackedItemId, hidden })}
+          busy={setHiddenMutation.isPending}
+          error={failedItemId === listing.trackedItemId}
         />
       ))}
+      {hiddenCount > 0 && !showHidden && (
+        <div className="flex items-center gap-2 border-t border-dashed border-line-strong px-4.5 py-2 ps-7 text-xs text-ink-muted">
+          <span>
+            {hiddenCount} {hiddenCount === 1 ? 'shop' : 'shops'} hidden
+          </span>
+          <span aria-hidden="true">·</span>
+          <button
+            type="button"
+            className="font-semibold text-iris-strong hover:underline"
+            onClick={onShowHidden}
+          >
+            Show hidden
+          </button>
+        </div>
+      )}
     </div>
   )
 }

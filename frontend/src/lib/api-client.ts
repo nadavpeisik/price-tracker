@@ -58,17 +58,21 @@ export function toBackendParams(query: DashboardQuery): URLSearchParams {
  * `undefined`; the BFF forwards no `Content-Length`, so the body text, not a
  * header, is what says whether there is JSON to parse.
  */
-export async function request<T>(url: string, init: { method?: 'GET' | 'POST' } = {}): Promise<T> {
+export async function request<T>(
+  url: string,
+  init: { method?: 'GET' | 'POST' | 'PATCH'; body?: unknown } = {},
+): Promise<T> {
   const method = init.method ?? 'GET'
   const headers: Record<string, string> = { Accept: 'application/json' }
-  // The BFF checks CSRF on the methods it proxies as mutations; POST is the only
-  // one the SPA sends today (logout, account provisioning). A PATCH or DELETE
-  // caller adds its own method here, deliberately.
-  if (method === 'POST') {
+  // The BFF checks CSRF on every method it proxies as a mutation, so the rule
+  // is "anything but GET" rather than a list of verbs.
+  if (method !== 'GET') {
     const token = readXsrfToken()
     if (token !== null) headers['X-XSRF-TOKEN'] = token
   }
-  const response = await fetch(url, { method, headers, credentials: 'same-origin' })
+  const body = init.body === undefined ? undefined : JSON.stringify(init.body)
+  if (body !== undefined) headers['Content-Type'] = 'application/json'
+  const response = await fetch(url, { method, headers, body, credentials: 'same-origin' })
   if (!response.ok) {
     throw new ApiError(response.status, response.statusText)
   }
@@ -95,4 +99,21 @@ export async function fetchListings(productId: number): Promise<Listing[]> {
   // per-user preference / configured default (#248), so a row and its panel
   // agree by construction.
   return request<Listing[]>(`${API_BASE}/products/${productId}/listings`)
+}
+
+/**
+ * Hide or show one shop on the caller's own dashboard (#250). 204 on success;
+ * a 404 means the product is not the caller's or the listing is not under it.
+ * The caller invalidates the panel and the dashboard: hiding moves the row's
+ * best price and shop count, which only the backend computes.
+ */
+export async function setListingHidden(productId: number, trackedItemId: number, hidden: boolean): Promise<void> {
+  if (import.meta.env.DEV && import.meta.env.VITE_USE_MOCK === 'true') {
+    const { mockSetListingHidden } = await import('@/mocks/mock-client')
+    return mockSetListingHidden(productId, trackedItemId, hidden)
+  }
+  return request<void>(`${API_BASE}/tracked-products/${productId}/listings/${trackedItemId}`, {
+    method: 'PATCH',
+    body: { hidden },
+  })
 }

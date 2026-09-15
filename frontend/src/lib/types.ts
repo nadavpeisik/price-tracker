@@ -76,6 +76,11 @@ export interface Listing {
    */
   lastChecked: string | null
   /**
+   * The caller hid this shop (#250). The panel receives EVERY listing and
+   * decides how a hidden one renders; the row's rollups never count it.
+   */
+  hidden: boolean
+  /**
    * OPTIONAL and UNFETCHED in v1 — per-shop mini-charts are a follow-up.
    * Comes from a separate per-item call (newest-first on the wire).
    */

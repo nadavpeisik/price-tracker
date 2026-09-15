@@ -514,6 +514,7 @@ export function buildMockDb(now: number): MockDbEntry[] {
         priceConverted,
         priceConvertedCurrency: priceConverted === null ? null : DISPLAY_CURRENCY,
         conversionStale: priceConverted !== null && (l.conversionStale ?? false),
+        hidden: false,
         availability: l.availability,
         lastChecked:
           l.lastCheckedHoursAgo === null

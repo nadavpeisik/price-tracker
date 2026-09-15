@@ -24,6 +24,10 @@ import java.time.Instant;
  * show it. {@code shopName} and {@code url} are nullable for hand-inserted legacy rows only.
  * {@code lastChecked} is the listing's own timestamp and stays populated even when the observation is
  * too old to count — that is what tells "never checked" from "gone cold".
+ *
+ * <p>{@code hidden} is the caller's own preference (issue #250): the panel returns every listing and
+ * the client decides how a hidden one renders. The dashboard row's rollups never count a hidden
+ * listing, so the row and its panel can disagree on shop count only by exactly the hidden ones.
  */
 public record ProductListingResponse(
         Long trackedItemId,
@@ -35,4 +39,5 @@ public record ProductListingResponse(
         String priceConvertedCurrency,
         boolean conversionStale,
         AvailabilityStatus availability,
-        Instant lastChecked) {}
+        Instant lastChecked,
+        boolean hidden) {}

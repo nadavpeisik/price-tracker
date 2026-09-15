@@ -55,15 +55,21 @@ export function Dashboard() {
    * Committed-order model (#144): what the list RENDERS. A background
    * refetch for the SAME params must not silently reorder rows under the
    * reader — if the id order changed, hold it as `pending` behind a
-   * "Prices updated" affordance. A user-initiated change (new params) or an
-   * in-place update (same order) commits immediately.
+   * "Prices updated" affordance. A user-initiated change (new params, or a
+   * hide/show inside a panel) or an in-place update (same order) commits
+   * immediately: the rule exists to stop rows moving under a READER, and
+   * someone who just hid a shop is asking for the reorder they get.
    *
    * Implemented as the guarded adjust-state-during-render pattern (not an
    * effect): TanStack's structural sharing keeps `result.data` reference-
    * stable when nothing changed, so the guards below settle immediately.
+   * `commitNextUpdate` is state rather than a ref for the same reason — under
+   * StrictMode a ref cleared in the first render pass would be gone by the
+   * second, and the update would park after all.
    */
   const [committed, setCommitted] = useState<Committed | null>(null)
   const [pending, setPending] = useState<DashboardResponse | null>(null)
+  const [commitNextUpdate, setCommitNextUpdate] = useState(false)
   const [celebrating, setCelebrating] = useState<ReadonlySet<number>>(new Set())
   const celebrationRef = useRef(createCelebrationState())
 
@@ -74,10 +80,12 @@ export function Dashboard() {
       setCommitted({ key: queryKey, data: incoming })
       if (pending !== null) setPending(null)
     } else if (committed.data !== incoming) {
-      if (sameIdOrder(committed.data, incoming)) {
-        // In-place update (prices moved, order intact) → commit silently.
+      if (commitNextUpdate || sameIdOrder(committed.data, incoming)) {
+        // In-place update (prices moved, order intact), or the answer to a
+        // hide/show the user just made → commit silently.
         setCommitted({ key: queryKey, data: incoming })
         if (pending !== null) setPending(null)
+        if (commitNextUpdate) setCommitNextUpdate(false)
       } else if (pending !== incoming) {
         // Background reorder for the same view — park it, don't yank rows.
         setPending(incoming)
@@ -164,6 +172,10 @@ export function Dashboard() {
   }
 
   const [expandedId, setExpandedId] = useState<number | null>(null)
+  // "Show hidden" (#250) is presentation only: the panel already holds every
+  // listing, so toggling it refetches nothing. Component state, not URL state —
+  // panels collapse on reload, so a persisted toggle would outlive what it shows.
+  const [showHidden, setShowHidden] = useState(false)
 
   // Whether the committed data still describes the CURRENT query. When the
   // user changes search/filter/sort/page, `queryKey` changes immediately but
@@ -198,6 +210,9 @@ export function Dashboard() {
         expanded={expandedId === product.id}
         onToggle={() => setExpandedId((cur) => (cur === product.id ? null : product.id))}
         celebrate={celebrating.has(product.id)}
+        showHidden={showHidden}
+        onShowHidden={() => setShowHidden(true)}
+        onListingsChanged={() => setCommitNextUpdate(true)}
       />
     ))
   }
@@ -219,7 +234,13 @@ export function Dashboard() {
 
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <Toolbar state={state} update={update} shops={data?.facets.shops} />
+          <Toolbar
+            state={state}
+            update={update}
+            shops={data?.facets.shops}
+            showHidden={showHidden}
+            onShowHiddenChange={setShowHidden}
+          />
         </div>
         {/* Add-product flow is out of scope this issue — visual stub. A page action, not chrome (#248). */}
         <Button className="rounded-[10px] font-semibold">+ Track a product</Button>

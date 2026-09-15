@@ -26,6 +26,7 @@ import com.np.pricehunt.backend.service.fx.ExchangeRateService;
 import com.np.pricehunt.backend.service.fx.FxRateProvider;
 import com.np.pricehunt.backend.service.fx.RateSnapshot;
 import com.np.pricehunt.backend.tenancy.TestTenants;
+import com.np.pricehunt.backend.tenancy.UserScopedCatalog;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
@@ -136,6 +137,9 @@ class DashboardQueryIntegrationTest {
 
     @Autowired
     private UserProductRepository memberships;
+
+    @Autowired
+    private UserScopedCatalog userCatalog;
 
     /** The one admitted account every request in this class runs as (#246). */
     private AppUser caller;
@@ -479,6 +483,38 @@ class DashboardQueryIntegrationTest {
 
         mvc.perform(get("/api/products/{id}/price-trend", product.getId()).param("displayCurrency", ILS))
                 .andExpect(jsonPath("$.sparkline[-1:].price").value("1899.0000"));
+    }
+
+    @Test
+    void hidingTheCheapestListing_movesTheBestOffer_shrinksTheRollup_andDropsTheFacet() throws Exception {
+        Product product = seedProduct("Steam Deck OLED");
+        TrackedItem ksp = seedItem(product, "KSP", 6);
+        TrackedItem bug = seedItem(product, "Bug", 7);
+        seedRecord(ksp, "2499", ILS, hoursAgo(4));
+        seedRecord(bug, "2599", ILS, hoursAgo(3));
+
+        // Hidden state is written through the port, exactly as the PATCH does (#250).
+        userCatalog.setListingHidden(caller.getId(), product.getId(), ksp.getId(), true);
+
+        mvc.perform(get("/api/tracked-products").param("displayCurrency", ILS))
+                .andExpect(jsonPath("$.items[0].bestPriceShop").value("Bug"))
+                .andExpect(jsonPath("$.items[0].bestTrackedItemId").value(bug.getId()))
+                .andExpect(jsonPath("$.items[0].availability.total").value(1))
+                .andExpect(jsonPath("$.facets.shops", org.hamcrest.Matchers.contains("Bug")));
+        mvc.perform(get("/api/products/{id}/price-trend", product.getId()).param("displayCurrency", ILS))
+                .andExpect(jsonPath("$.sparkline[-1:].price").value("2599.0000"));
+        // The panel still carries the hidden row, flagged, so it can be shown again.
+        mvc.perform(get("/api/products/{id}/listings", product.getId()).param("displayCurrency", ILS))
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[?(@.shopName == 'KSP')].hidden").value(true));
+
+        // Hide the other one too: the row stays, with nothing visible under it.
+        userCatalog.setListingHidden(caller.getId(), product.getId(), bug.getId(), true);
+        mvc.perform(get("/api/tracked-products").param("displayCurrency", ILS))
+                .andExpect(jsonPath("$.items.length()").value(1))
+                .andExpect(jsonPath("$.items[0].bestPriceConverted").isEmpty())
+                .andExpect(jsonPath("$.items[0].availability.total").value(0))
+                .andExpect(jsonPath("$.facets.shops").isEmpty());
     }
 
     // --- query behaviour over real data ---
