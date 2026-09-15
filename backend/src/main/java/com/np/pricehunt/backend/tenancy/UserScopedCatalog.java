@@ -45,7 +45,10 @@ public class UserScopedCatalog {
         return userProducts.findTrackedProducts(userId);
     }
 
-    /** Every listing under every product the caller tracks — the dashboard's whole-set input. */
+    /**
+     * Every listing under every product the caller tracks, minus the ones they hid (#250) — the
+     * dashboard's whole-set input. {@link #listings} applies the same rule for one product.
+     */
     @Transactional(readOnly = true)
     public List<DashboardListingRef> listingsOfTrackedProducts(long userId) {
         return userProducts.findListingsOfTrackedProducts(userId);
@@ -68,7 +71,8 @@ public class UserScopedCatalog {
 
     /**
      * Empty both when the product is not the caller's and when it has no listings; resolve the product
-     * first ({@link #product}) so the two are told apart.
+     * first ({@link #trackedProduct}) so the two are told apart. Hidden listings are included and
+     * flagged: this is the feed a user shows them again from.
      */
     @Transactional(readOnly = true)
     public List<ListingLatestObservationRow> listingsWithLatestObservation(long userId, long productId, Instant asOf) {
@@ -98,5 +102,26 @@ public class UserScopedCatalog {
     @Transactional
     public boolean stopTracking(long userId, long productId) {
         return userProducts.stopTracking(userId, productId) > 0;
+    }
+
+    /**
+     * Hides or shows one listing for the caller (#250). Membership and listing-under-product are proven
+     * by {@link #listing} first — the same unfiltered lookup refresh uses, so a hidden listing can be
+     * shown again — then one idempotent statement writes the row's presence. Re-hiding or re-showing
+     * is a no-op, not an error.
+     *
+     * @return false when the product is not the caller's or the listing is not under it — the 404
+     */
+    @Transactional
+    public boolean setListingHidden(long userId, long productId, long itemId, boolean hidden) {
+        if (listing(userId, productId, itemId).isEmpty()) {
+            return false;
+        }
+        if (hidden) {
+            userProducts.hideListing(userId, productId, itemId);
+        } else {
+            userProducts.showListing(userId, productId, itemId);
+        }
+        return true;
     }
 }

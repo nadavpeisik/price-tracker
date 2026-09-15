@@ -164,6 +164,10 @@ export function Dashboard() {
   }
 
   const [expandedId, setExpandedId] = useState<number | null>(null)
+  // "Show hidden" (#250) is presentation only: the panel already holds every
+  // listing, so toggling it refetches nothing. Component state, not URL state —
+  // panels collapse on reload, so a persisted toggle would outlive what it shows.
+  const [showHidden, setShowHidden] = useState(false)
 
   // Whether the committed data still describes the CURRENT query. When the
   // user changes search/filter/sort/page, `queryKey` changes immediately but
@@ -198,6 +202,8 @@ export function Dashboard() {
         expanded={expandedId === product.id}
         onToggle={() => setExpandedId((cur) => (cur === product.id ? null : product.id))}
         celebrate={celebrating.has(product.id)}
+        showHidden={showHidden}
+        onShowHidden={() => setShowHidden(true)}
       />
     ))
   }
@@ -219,7 +225,13 @@ export function Dashboard() {
 
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <Toolbar state={state} update={update} shops={data?.facets.shops} />
+          <Toolbar
+            state={state}
+            update={update}
+            shops={data?.facets.shops}
+            showHidden={showHidden}
+            onShowHiddenChange={setShowHidden}
+          />
         </div>
         {/* Add-product flow is out of scope this issue — visual stub. A page action, not chrome (#248). */}
         <Button className="rounded-[10px] font-semibold">+ Track a product</Button>

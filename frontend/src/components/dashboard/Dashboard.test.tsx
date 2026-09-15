@@ -9,15 +9,17 @@ import type { DashboardResponse, Listing, TrackedProduct } from '@/lib/types'
 
 /* ── api-client mock (the Dashboard's only IO boundary) ─────────────── */
 
-const { fetchDashboardMock, fetchListingsMock } = vi.hoisted(() => ({
+const { fetchDashboardMock, fetchListingsMock, setListingHiddenMock } = vi.hoisted(() => ({
   fetchDashboardMock: vi.fn(),
   fetchListingsMock: vi.fn(),
+  setListingHiddenMock: vi.fn(),
 }))
 
 vi.mock('@/lib/api-client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api-client')>()),
   fetchDashboard: fetchDashboardMock,
   fetchListings: fetchListingsMock,
+  setListingHidden: setListingHiddenMock,
 }))
 
 /* ── fixtures ────────────────────────────────────────────────────────── */
@@ -101,6 +103,7 @@ const LISTINGS: Listing[] = [
     priceConverted: '120.00',
     priceConvertedCurrency: 'ILS',
     conversionStale: false,
+    hidden: false,
     availability: 'UNKNOWN',
     lastChecked: null,
   },
@@ -113,6 +116,7 @@ const LISTINGS: Listing[] = [
     priceConverted: '100.00',
     priceConvertedCurrency: 'ILS',
     conversionStale: false,
+    hidden: false,
     availability: 'AVAILABLE',
     lastChecked: new Date(Date.now() - 2 * HOUR).toISOString(),
     // 2 hours ago → "checked 2h ago"
@@ -356,6 +360,7 @@ describe('Dashboard', () => {
         priceConverted: '382.00',
         priceConvertedCurrency: 'ILS',
         conversionStale: true,
+        hidden: false,
         availability: 'AVAILABLE',
         lastChecked: new Date(Date.now() - 2 * HOUR).toISOString(),
       },
@@ -368,6 +373,7 @@ describe('Dashboard', () => {
         priceConverted: null, // no rate → unconvertible
         priceConvertedCurrency: null,
         conversionStale: false,
+        hidden: false,
         availability: 'UNKNOWN',
         lastChecked: new Date(Date.now() - 3 * HOUR).toISOString(),
       },
@@ -380,6 +386,7 @@ describe('Dashboard', () => {
         priceConverted: null,
         priceConvertedCurrency: null,
         conversionStale: false,
+        hidden: false,
         availability: 'UNKNOWN',
         lastChecked: new Date(Date.now() - 9 * 24 * HOUR).toISOString(),
       },
@@ -503,5 +510,93 @@ describe('Dashboard', () => {
     await waitFor(() =>
       expect(within(screen.getByLabelText('Tracking summary')).getByText('4')).toBeInTheDocument(),
     )
+  })
+
+  /* ── hide / show listings (#250) ───────────────────────────────────── */
+
+  const withHiddenBug = (): Listing[] => [{ ...LISTINGS[0], hidden: true }, LISTINGS[1]]
+
+  async function openSonyPanel(user: ReturnType<typeof userEvent.setup>) {
+    await screen.findByRole('button', { name: 'Sony WH-1000XM5' })
+    await user.click(screen.getByRole('button', { name: 'Sony WH-1000XM5' }))
+    const region = await screen.findByRole('region', { name: 'Sony WH-1000XM5' })
+    await within(region).findByText('KSP')
+    return region
+  }
+
+  it('drops hidden rows from the panel by default and says how many it is hiding', async () => {
+    fetchListingsMock.mockResolvedValue(withHiddenBug())
+    const user = userEvent.setup()
+    renderDashboard()
+    const region = await openSonyPanel(user)
+    expect(within(region).queryByText('Bug')).not.toBeInTheDocument()
+    expect(within(region).getByText('1 shop hidden')).toBeInTheDocument()
+  })
+
+  it('"Show hidden" (toolbar or the panel footer) reveals hidden rows dimmed with a Hidden chip, and never as Best', async () => {
+    // The row still names Bug (12) as best — a parked dashboard refetch can — so the panel must not.
+    fetchDashboardMock.mockResolvedValue(response([product({ id: 1, name: 'Sony WH-1000XM5', bestTrackedItemId: 12 })]))
+    fetchListingsMock.mockResolvedValue(withHiddenBug())
+    const user = userEvent.setup()
+    renderDashboard()
+    const region = await openSonyPanel(user)
+
+    await user.click(within(region).getByRole('button', { name: 'Show hidden' }))
+
+    expect(within(region).getByText('Bug')).toBeInTheDocument()
+    expect(within(region).getByText('Hidden')).toBeInTheDocument()
+    expect(within(region).queryByText('Best')).not.toBeInTheDocument()
+    expect(within(region).queryByText(/hidden$/)).not.toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: 'Show hidden' })).toBeChecked()
+    // Toggle it back off from the toolbar: the row disappears again, no refetch involved.
+    const calls = fetchListingsMock.mock.calls.length
+    await user.click(screen.getByRole('checkbox', { name: 'Show hidden' }))
+    expect(within(region).queryByText('Bug')).not.toBeInTheDocument()
+    expect(fetchListingsMock.mock.calls.length).toBe(calls)
+  })
+
+  it('the eye button PATCHes the listing and refetches the panel and the dashboard', async () => {
+    setListingHiddenMock.mockResolvedValue(undefined)
+    const user = userEvent.setup()
+    renderDashboard()
+    const region = await openSonyPanel(user)
+    const dashboardCalls = fetchDashboardMock.mock.calls.length
+    fetchListingsMock.mockResolvedValue(withHiddenBug())
+
+    await user.click(within(region).getByRole('button', { name: 'Hide Bug' }))
+
+    expect(setListingHiddenMock).toHaveBeenCalledWith(1, 12, true)
+    await within(region).findByText('1 shop hidden')
+    expect(fetchDashboardMock.mock.calls.length).toBeGreaterThan(dashboardCalls)
+  })
+
+  it('a failed hide surfaces an alert under the row and leaves the panel usable', async () => {
+    setListingHiddenMock.mockRejectedValue(new Error('boom'))
+    const user = userEvent.setup()
+    renderDashboard()
+    const region = await openSonyPanel(user)
+
+    await user.click(within(region).getByRole('button', { name: 'Hide KSP' }))
+
+    expect(await within(region).findByRole('alert')).toHaveTextContent("Couldn't hide KSP")
+    expect(within(region).getByRole('button', { name: 'Hide KSP' })).toBeEnabled()
+  })
+
+  it('a product with every shop hidden reads "No visible shops", never "0 of 0 in stock"', async () => {
+    fetchDashboardMock.mockResolvedValue(
+      response([
+        product({
+          id: 5,
+          name: 'Hidden-only lamp',
+          bestPriceConverted: null,
+          bestPriceShop: null,
+          bestTrackedItemId: null,
+          availability: { status: 'UNKNOWN', availableCount: 0, total: 0 },
+        }),
+      ]),
+    )
+    renderDashboard()
+    await screen.findByRole('button', { name: 'Hidden-only lamp' })
+    expect(screen.getAllByText('No visible shops')).toHaveLength(2)
   })
 })

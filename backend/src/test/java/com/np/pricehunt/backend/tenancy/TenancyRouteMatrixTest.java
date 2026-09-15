@@ -11,6 +11,7 @@ import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -44,6 +45,7 @@ import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.context.WebApplicationContext;
@@ -227,12 +229,34 @@ class TenancyRouteMatrixTest {
      * therefore tells them nothing. Everything else must match, including any member added later.
      */
     private String problemBodyAsAlice(String path) throws Exception {
-        String body = mvc.perform(get(path).header(HttpHeaders.AUTHORIZATION, as("auth0|alice")))
+        return problemBodyAsAlice(get(path));
+    }
+
+    private String problemBodyAsAlice(MockHttpServletRequestBuilder request) throws Exception {
+        String body = mvc.perform(request.header(HttpHeaders.AUTHORIZATION, as("auth0|alice")))
                 .andExpect(status().isNotFound())
                 .andReturn()
                 .getResponse()
                 .getContentAsString();
         return body.replaceAll("\"instance\":\"[^\"]*\",?", "");
+    }
+
+    private String dashboardAs(String sub) throws Exception {
+        return mvc.perform(get("/api/tracked-products").header(HttpHeaders.AUTHORIZATION, as(sub)))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+    }
+
+    private static MockHttpServletRequestBuilder setHidden(Product product, TrackedItem item, boolean hidden) {
+        return setHidden(product.getId(), item.getId(), hidden);
+    }
+
+    private static MockHttpServletRequestBuilder setHidden(long productId, long itemId, boolean hidden) {
+        return patch("/api/tracked-products/{p}/listings/{i}", productId, itemId)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"hidden\":" + hidden + "}");
     }
 
     // --- the account off the principal (#248) ---
@@ -304,6 +328,57 @@ class TenancyRouteMatrixTest {
                 .getResponse()
                 .getContentAsString();
         assertThat(JsonPath.<List<String>>read(body, "$.items[*].name")).containsExactly("Keychron K8 Pro");
+    }
+
+    // --- hide / show (#250) ---
+
+    @Test
+    void hidingAListing_changesOnlyTheCallersDashboard_andIsIdempotent() throws Exception {
+        // Alice hides the Bug listing Bob added under the shared product.
+        mvc.perform(setHidden(p1Shared, l2UnderP1AddedByBob, true).header(HttpHeaders.AUTHORIZATION, as("auth0|alice")))
+                .andExpect(status().isNoContent());
+        mvc.perform(setHidden(p1Shared, l2UnderP1AddedByBob, true).header(HttpHeaders.AUTHORIZATION, as("auth0|alice")))
+                .andExpect(status().isNoContent());
+        assertThat(hiddenCount(alice, p1Shared, l2UnderP1AddedByBob)).isEqualTo(1);
+        assertThat(hiddenCount(bob, p1Shared, l2UnderP1AddedByBob)).isZero();
+
+        // Her facets drop Bug; the panel still returns it, flagged; Bob's dashboard is untouched.
+        assertThat(JsonPath.<List<String>>read(dashboardAs("auth0|alice"), "$.facets.shops[*]"))
+                .containsExactlyInAnyOrder("KSP", "Ivory");
+        mvc.perform(get("/api/products/{p}/listings", p1Shared.getId())
+                        .header(HttpHeaders.AUTHORIZATION, as("auth0|alice")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.shopName == 'Bug')].hidden").value(true))
+                .andExpect(jsonPath("$[?(@.shopName == 'KSP')].hidden").value(false));
+        assertThat(JsonPath.<List<String>>read(dashboardAs("auth0|bob"), "$.facets.shops[*]"))
+                .containsExactlyInAnyOrder("KSP", "Bug", "TMS");
+
+        // Bob hides it too; Alice shows hers again; Bob's hide survives.
+        mvc.perform(setHidden(p1Shared, l2UnderP1AddedByBob, true).header(HttpHeaders.AUTHORIZATION, as("auth0|bob")))
+                .andExpect(status().isNoContent());
+        mvc.perform(setHidden(p1Shared, l2UnderP1AddedByBob, false)
+                        .header(HttpHeaders.AUTHORIZATION, as("auth0|alice")))
+                .andExpect(status().isNoContent());
+        mvc.perform(setHidden(p1Shared, l2UnderP1AddedByBob, false)
+                        .header(HttpHeaders.AUTHORIZATION, as("auth0|alice")))
+                .andExpect(status().isNoContent());
+        assertThat(hiddenCount(alice, p1Shared, l2UnderP1AddedByBob)).isZero();
+        assertThat(hiddenCount(bob, p1Shared, l2UnderP1AddedByBob)).isEqualTo(1);
+        assertThat(JsonPath.<List<String>>read(dashboardAs("auth0|alice"), "$.facets.shops[*]"))
+                .containsExactlyInAnyOrder("KSP", "Bug", "Ivory");
+    }
+
+    @Test
+    void hidingAListing_is404_forAForeignProduct_orAListingUnderAnotherOfTheCallersProducts() throws Exception {
+        // Bob's product: 404, body identical to a nonexistent one, nothing written.
+        assertThat(problemBodyAsAlice(setHidden(p3BobOnly, l4UnderP3, true)))
+                .isEqualTo(problemBodyAsAlice(setHidden(999_999L, 999_999L, true)));
+        // Alice tracks P1 and P2, but the Bug listing is under P1, not P2.
+        mvc.perform(setHidden(p2AliceOnly, l2UnderP1AddedByBob, true)
+                        .header(HttpHeaders.AUTHORIZATION, as("auth0|alice")))
+                .andExpect(status().isNotFound());
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM hidden_listing", Integer.class))
+                .isZero();
     }
 
     @Test
@@ -412,6 +487,18 @@ class TenancyRouteMatrixTest {
                 Integer.class,
                 user.getId(),
                 product.getId());
+    }
+
+    private int hiddenCount(AppUser user, Product product, TrackedItem item) {
+        return jdbc.queryForObject(
+                """
+                SELECT COUNT(*) FROM hidden_listing h JOIN user_product up ON up.id = h.user_product_id
+                WHERE up.user_id = ? AND up.product_id = ? AND h.tracked_item_id = ?
+                """,
+                Integer.class,
+                user.getId(),
+                product.getId(),
+                item.getId());
     }
 
     private Instant addedAt(AppUser user, Product product) {

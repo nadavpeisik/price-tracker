@@ -122,7 +122,8 @@ class ProductControllerTest {
                                 "ILS",
                                 false,
                                 AvailabilityStatus.AVAILABLE,
-                                Instant.parse("2026-05-23T10:00:00Z")),
+                                Instant.parse("2026-05-23T10:00:00Z"),
+                                false),
                         new ProductListingResponse(
                                 8L,
                                 "TMS",
@@ -133,7 +134,8 @@ class ProductControllerTest {
                                 null,
                                 false,
                                 AvailabilityStatus.UNKNOWN,
-                                Instant.parse("2026-05-15T10:00:00Z"))));
+                                Instant.parse("2026-05-15T10:00:00Z"),
+                                true)));
 
         mvc.perform(get("/api/products/1/listings"))
                 .andExpect(status().isOk())
@@ -145,6 +147,8 @@ class ProductControllerTest {
                 .andExpect(jsonPath("$[0].priceConvertedCurrency").value("ILS"))
                 .andExpect(jsonPath("$[0].conversionStale").value(false))
                 .andExpect(jsonPath("$[0].availability").value("AVAILABLE"))
+                .andExpect(jsonPath("$[0].hidden").value(false))
+                .andExpect(jsonPath("$[1].hidden").value(true))
                 .andExpect(jsonPath("$[1].priceOriginal").isEmpty())
                 .andExpect(jsonPath("$[1].priceConverted").isEmpty())
                 .andExpect(jsonPath("$[1].availability").value("UNKNOWN"))

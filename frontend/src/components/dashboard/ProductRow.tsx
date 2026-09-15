@@ -37,9 +37,20 @@ interface ProductRowProps {
   onToggle: () => void
   /** Set for one render pass when a live price drop should celebrate. */
   celebrate: boolean
+  /** Dashboard-wide "Show hidden" (#250), forwarded to the panel untouched. */
+  showHidden: boolean
+  onShowHidden: () => void
 }
 
-export function ProductRow({ product, index, expanded, onToggle, celebrate }: ProductRowProps) {
+export function ProductRow({
+  product,
+  index,
+  expanded,
+  onToggle,
+  celebrate,
+  showHidden,
+  onShowHidden,
+}: ProductRowProps) {
   const reducedMotion = useReducedMotion()
   const nameId = useId()
   const panelId = useId()
@@ -112,7 +123,7 @@ export function ProductRow({ product, index, expanded, onToggle, celebrate }: Pr
             </button>
             <span className="block truncate text-xs text-ink-muted">
               {shopCount === 0 ? (
-                'No shops tracked'
+                'No visible shops'
               ) : (
                 <>
                   {shopCount} {shopCount === 1 ? 'shop' : 'shops'}
@@ -186,7 +197,13 @@ export function ProductRow({ product, index, expanded, onToggle, celebrate }: Pr
             transition={{ duration: 0.28, ease: 'easeInOut' }}
             className="overflow-hidden bg-[color-mix(in_srgb,var(--pa)_5%,var(--surface-2))]"
           >
-            <ListingPanel productId={product.id} open={expanded} bestTrackedItemId={product.bestTrackedItemId} />
+            <ListingPanel
+              productId={product.id}
+              open={expanded}
+              bestTrackedItemId={product.bestTrackedItemId}
+              showHidden={showHidden}
+              onShowHidden={onShowHidden}
+            />
           </motion.div>
         )}
       </AnimatePresence>

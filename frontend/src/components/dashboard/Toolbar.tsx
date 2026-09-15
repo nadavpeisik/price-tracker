@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Search } from 'lucide-react'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import {
@@ -39,9 +40,12 @@ interface ToolbarProps {
   update: (patch: Partial<DashboardUrlState>) => void
   /** Global shop facets; undefined while the first response is loading. */
   shops: string[] | undefined
+  /** Reveal hidden shops inside every panel (#250). Not URL state: it filters nothing server-side. */
+  showHidden: boolean
+  onShowHiddenChange: (showHidden: boolean) => void
 }
 
-export function Toolbar({ state, update, shops }: ToolbarProps) {
+export function Toolbar({ state, update, shops, showHidden, onShowHiddenChange }: ToolbarProps) {
   const [draft, setDraft] = useState(state.search)
 
   // External URL changes (back/forward, clear-filters) re-seed the draft —
@@ -122,6 +126,15 @@ export function Toolbar({ state, update, shops }: ToolbarProps) {
           ))}
         </SelectContent>
       </Select>
+
+      <label className="flex h-10 cursor-pointer items-center gap-2 text-[13px] font-medium text-ink-muted">
+        <Checkbox
+          id="show-hidden"
+          checked={showHidden}
+          onCheckedChange={(checked) => onShowHiddenChange(checked === true)}
+        />
+        Show hidden
+      </label>
     </div>
   )
 }

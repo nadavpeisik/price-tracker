@@ -16,6 +16,7 @@ import com.np.pricehunt.backend.config.PriceTrackingProperties;
 import com.np.pricehunt.backend.domain.AvailabilityStatus;
 import com.np.pricehunt.backend.dto.CreateProductRequest;
 import com.np.pricehunt.backend.dto.CreateProductResponse;
+import com.np.pricehunt.backend.dto.SetListingHiddenRequest;
 import com.np.pricehunt.backend.dto.TrackRequest;
 import com.np.pricehunt.backend.dto.TrackResponse;
 import com.np.pricehunt.backend.exception.NotFoundException;
@@ -266,5 +267,35 @@ class ProductTrackingServiceTest {
         when(userCatalog.stopTracking(USER_ID, 3L)).thenReturn(false);
 
         assertThatThrownBy(() -> service.stopTracking(3L)).isInstanceOf(NotFoundException.class);
+    }
+
+    // --- setListingHidden (#250) ---
+
+    @Test
+    void setListingHidden_writesThroughThePort_forTheCaller() {
+        when(currentUser.userId()).thenReturn(USER_ID);
+        when(userCatalog.setListingHidden(USER_ID, 3L, 7L, true)).thenReturn(true);
+
+        service.setListingHidden(3L, 7L, new SetListingHiddenRequest(true));
+
+        verify(userCatalog).setListingHidden(USER_ID, 3L, 7L, true);
+        verifyNoInteractions(sharedCatalog);
+    }
+
+    @Test
+    void setListingHidden_nullBodyOrMissingFlag_returns400_beforeResolvingTheCaller() {
+        assertThatThrownBy(() -> service.setListingHidden(3L, 7L, null)).isInstanceOf(ValidationException.class);
+        assertThatThrownBy(() -> service.setListingHidden(3L, 7L, new SetListingHiddenRequest(null)))
+                .isInstanceOf(ValidationException.class);
+        verifyNoInteractions(userCatalog, currentUser);
+    }
+
+    @Test
+    void setListingHidden_notTheCallersListing_throwsNotFound() {
+        when(currentUser.userId()).thenReturn(USER_ID);
+        when(userCatalog.setListingHidden(USER_ID, 3L, 7L, false)).thenReturn(false);
+
+        assertThatThrownBy(() -> service.setListingHidden(3L, 7L, new SetListingHiddenRequest(false)))
+                .isInstanceOf(NotFoundException.class);
     }
 }

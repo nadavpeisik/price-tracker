@@ -27,6 +27,32 @@ describe('createQueryClient', () => {
     expect(client.getQueryData(['me'])).toEqual({ status: 'signed-in', user: { name: 'x' } })
   })
 
+  it('flips ["me"] to anonymous when a mutation fails with 401, like a query would (#250)', async () => {
+    const client = createQueryClient()
+    client.setQueryData(['me'], { status: 'signed-in', user: { name: 'x' } })
+
+    await client
+      .getMutationCache()
+      .build(client, { mutationFn: () => Promise.reject(new ApiError(401, 'Unauthorized')) })
+      .execute(undefined)
+      .catch(() => undefined)
+
+    expect(client.getQueryData(['me'])).toEqual({ status: 'anonymous' })
+  })
+
+  it('leaves ["me"] alone when a mutation fails otherwise', async () => {
+    const client = createQueryClient()
+    client.setQueryData(['me'], { status: 'signed-in', user: { name: 'x' } })
+
+    await client
+      .getMutationCache()
+      .build(client, { mutationFn: () => Promise.reject(new ApiError(404, 'Not Found')) })
+      .execute(undefined)
+      .catch(() => undefined)
+
+    expect(client.getQueryData(['me'])).toEqual({ status: 'signed-in', user: { name: 'x' } })
+  })
+
   it('retry rule: 4xx is terminal at once, 5xx and network errors retry up to three times', () => {
     const retry = createQueryClient().getDefaultOptions().queries?.retry
     expect(typeof retry).toBe('function')

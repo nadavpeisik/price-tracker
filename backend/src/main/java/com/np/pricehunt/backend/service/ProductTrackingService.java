@@ -4,6 +4,7 @@ import com.np.pricehunt.backend.auth.CurrentUser;
 import com.np.pricehunt.backend.config.PriceTrackingProperties;
 import com.np.pricehunt.backend.dto.CreateProductRequest;
 import com.np.pricehunt.backend.dto.CreateProductResponse;
+import com.np.pricehunt.backend.dto.SetListingHiddenRequest;
 import com.np.pricehunt.backend.dto.TrackRequest;
 import com.np.pricehunt.backend.dto.TrackResponse;
 import com.np.pricehunt.backend.exception.NotFoundException;
@@ -101,6 +102,19 @@ public class ProductTrackingService {
     public void stopTracking(Long productId) {
         if (!userCatalog.stopTracking(currentUser.userId(), productId)) {
             throw new NotFoundException("Product not found");
+        }
+    }
+
+    /**
+     * Hides or shows one shop on the caller's own dashboard (#250). A preference on the membership,
+     * never a change to the shared listing; other users see nothing.
+     */
+    public void setListingHidden(Long productId, Long itemId, SetListingHiddenRequest request) {
+        if (request == null || request.hidden() == null) {
+            throw new ValidationException("Request body must carry 'hidden'");
+        }
+        if (!userCatalog.setListingHidden(currentUser.userId(), productId, itemId, request.hidden())) {
+            throw new NotFoundException("Tracked item not found");
         }
     }
 

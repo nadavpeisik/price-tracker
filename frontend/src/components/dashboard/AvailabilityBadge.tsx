@@ -6,7 +6,7 @@ import type { AvailabilityRollup, ListingAvailability } from '@/lib/types'
  * Product level renders the ROLLUP: all in → green "In stock"; MIXED →
  * amber "N of M in stock"; UNAVAILABLE (red) only when every listing is
  * out; UNKNOWN → amber. `total === 0` is a real state (product with zero
- * tracked items) → neutral "No shops tracked", never "0 of 0 in stock".
+ * tracked items) → neutral "No visible shops" — true for an empty product and for one whose every shop the user hid (#250) — never "0 of 0 in stock".
  */
 
 const DOT = 'inline-block size-1.5 rounded-full'
@@ -35,7 +35,7 @@ function StatusBadge({ tone, children }: { tone: Tone; children: React.ReactNode
 
 export function ProductAvailabilityBadge({ rollup }: { rollup: AvailabilityRollup }) {
   if (rollup.total === 0) {
-    return <StatusBadge tone="neutral">No shops tracked</StatusBadge>
+    return <StatusBadge tone="neutral">No visible shops</StatusBadge>
   }
   switch (rollup.status) {
     case 'AVAILABLE':
