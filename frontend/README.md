@@ -29,13 +29,14 @@ set -a; . ../.env; set +a; cd ../bff && ./mvnw spring-boot:run
 states — mixed currencies, out-of-stock, never-checked, gone-cold; see the
 root README.)
 
-**First sign-in on a fresh database is a "not set up yet" screen.** Until
-#249 there is no invitation flow: the database holds only the placeholder
-account, and the backend admits an identity only if an `app_user` row names
-it. Run the one-off relink `UPDATE` from the root `CLAUDE.md` ("Dev bootstrap
-until #249") once, then reload. The BFF's session store also needs its
-Postgres role once per volume (`create-bff-role.sh`, see the BFF section of
-`CLAUDE.md`).
+**First sign-in on a fresh database is a "not set up yet" screen.** The
+backend admits an identity only if an `app_user` row names it, and that row is
+created by redeeming an invitation for the account's verified email (#249): the
+account fetch tries it on every 403, so once an invitation exists a reload is
+enough. A fresh database has no admin to invite anyone, so insert the first
+invitation by hand (root `CLAUDE.md`, "Bootstrap on a fresh database"). The
+BFF's session store also needs its Postgres role once per volume
+(`create-bff-role.sh`, see the BFF section of `CLAUDE.md`).
 
 The session cookie is `__Host-` prefixed, which Chrome and Firefox accept on
 `http://localhost` and Safari does not — use one of the former for dev.

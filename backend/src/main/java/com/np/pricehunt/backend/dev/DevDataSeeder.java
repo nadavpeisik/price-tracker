@@ -170,8 +170,9 @@ public class DevDataSeeder implements CommandLineRunner {
      * The owner's account tracks every seeded product (#246): the dashboard reads through membership,
      * so a seeded catalog nobody tracks renders empty. Only the owner's — the seeder exists for the
      * owner's own feature testing, and other accounts (#249) must not wake up to demo data. That account
-     * is V15's bootstrap row, the lowest id. A migrated database always has it, so its absence means an
-     * unmigrated (H2 test) context: warn and seed no memberships rather than fail the boot.
+     * is the first one provisioned, the lowest id. Its absence means an unmigrated (H2 test) context or a
+     * fresh database seeded before its first invitation was redeemed: warn and seed no memberships
+     * rather than fail the boot — a later {@code seed} run recreates the fixtures and tracks them.
      * {@code added_at} follows the product's back-dated creation so the "recently added" order (#226) is
      * not a tie. Cleanup needs nothing: the product delete cascades.
      */

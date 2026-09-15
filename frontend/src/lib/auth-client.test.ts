@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fetchMe, fetchAccount, logout } from '@/lib/auth-client'
+import { fetchMe, ensureAccount, logout } from '@/lib/auth-client'
 import { ApiError } from '@/lib/api-error'
 
 /** A 200 carrying `body` as JSON — what every happy-path fetch stub returns. */
@@ -39,16 +39,52 @@ describe('auth-client', () => {
     await expect(fetchMe()).rejects.toBeInstanceOf(ApiError)
   })
 
-  it('fetchAccount: GET /bff/api/me → the display currency', async () => {
+  it('ensureAccount: GET /bff/api/me → the display currency', async () => {
     vi.mocked(fetch).mockResolvedValue(okJson({ displayCurrency: 'USD' }))
-    await expect(fetchAccount()).resolves.toEqual({ displayCurrency: 'USD' })
+    await expect(ensureAccount()).resolves.toEqual({ displayCurrency: 'USD' })
     expect(String(vi.mocked(fetch).mock.calls[0][0])).toBe('/bff/api/me')
   })
 
-  it('fetchAccount: 403 (not admitted) rejects with the status for the gate to read', async () => {
+  it('ensureAccount: 403 (not admitted) tries to create the account, and its 403 is what the gate reads', async () => {
     vi.mocked(fetch).mockResolvedValue(status(403))
-    const error = await fetchAccount().catch((e: unknown) => e)
+    const error = await ensureAccount().catch((e: unknown) => e)
     expect((error as ApiError).status).toBe(403)
+
+    // GET, then the one POST that redeems an invitation (CSRF-protected), then nothing more.
+    const calls = vi.mocked(fetch).mock.calls
+    expect(calls).toHaveLength(2)
+    expect(String(calls[1][0])).toBe('/bff/api/me')
+    expect((calls[1][1] as RequestInit).method).toBe('POST')
+    expect((calls[1][1] as RequestInit).headers).toMatchObject({ 'X-XSRF-TOKEN': 'csrf-1' })
+  })
+
+  it('ensureAccount: 403 → POST 201 (invited, account created) → GET again resolves', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(status(403))
+      .mockResolvedValueOnce(new Response(null, { status: 201 }))
+      .mockResolvedValueOnce(okJson({ displayCurrency: 'ILS' }))
+    await expect(ensureAccount()).resolves.toEqual({ displayCurrency: 'ILS' })
+    expect(vi.mocked(fetch).mock.calls).toHaveLength(3)
+  })
+
+  it('ensureAccount: 403 → POST 204 (already admitted) → GET again resolves', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(status(403))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(okJson({ displayCurrency: 'USD' }))
+    await expect(ensureAccount()).resolves.toEqual({ displayCurrency: 'USD' })
+  })
+
+  it('ensureAccount: a failed POST propagates its own status, so the gate offers Retry rather than "not invited"', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(status(403)).mockResolvedValueOnce(status(502))
+    const error = await ensureAccount().catch((e: unknown) => e)
+    expect((error as ApiError).status).toBe(502)
+  })
+
+  it('ensureAccount: a non-403 failure on the first GET does not try to create anything', async () => {
+    vi.mocked(fetch).mockResolvedValue(status(503))
+    await expect(ensureAccount()).rejects.toBeInstanceOf(ApiError)
+    expect(vi.mocked(fetch).mock.calls).toHaveLength(1)
   })
 
   it('logout: POSTs with the CSRF header and returns the Auth0 logout URL', async () => {

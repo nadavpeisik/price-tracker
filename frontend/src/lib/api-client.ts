@@ -53,14 +53,17 @@ export function toBackendParams(query: DashboardQuery): URLSearchParams {
  * exactly one CSRF rule, one credentials rule and one error shape. Takes a
  * ROOT-relative URL (`/bff/...`): the session cookie is first-party because
  * the SPA and the BFF share an origin through the proxy, so `same-origin` is
- * the whole credentials story. Non-2xx throws `ApiError` (status only).
+ * the whole credentials story. Non-2xx throws `ApiError` (status only). A 2xx
+ * with no body (the 201/204 of `POST /bff/api/me`, #249) resolves to
+ * `undefined`; the BFF forwards no `Content-Length`, so the body text, not a
+ * header, is what says whether there is JSON to parse.
  */
 export async function request<T>(url: string, init: { method?: 'GET' | 'POST' } = {}): Promise<T> {
   const method = init.method ?? 'GET'
   const headers: Record<string, string> = { Accept: 'application/json' }
   // The BFF checks CSRF on the methods it proxies as mutations; POST is the only
-  // one the SPA sends today (logout). A PATCH or DELETE caller adds its own method
-  // here, deliberately.
+  // one the SPA sends today (logout, account provisioning). A PATCH or DELETE
+  // caller adds its own method here, deliberately.
   if (method === 'POST') {
     const token = readXsrfToken()
     if (token !== null) headers['X-XSRF-TOKEN'] = token
@@ -69,7 +72,8 @@ export async function request<T>(url: string, init: { method?: 'GET' | 'POST' } 
   if (!response.ok) {
     throw new ApiError(response.status, response.statusText)
   }
-  return response.json() as Promise<T>
+  const text = await response.text()
+  return (text ? JSON.parse(text) : undefined) as T
 }
 
 export async function fetchDashboard(query: DashboardQuery): Promise<DashboardResponse> {

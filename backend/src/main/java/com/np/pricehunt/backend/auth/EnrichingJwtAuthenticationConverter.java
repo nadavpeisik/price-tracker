@@ -4,7 +4,6 @@ import com.np.pricehunt.backend.domain.AppUser;
 import com.np.pricehunt.backend.repository.AppUserRepository;
 import java.util.Optional;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.convert.converter.Converter;
 import org.springframework.dao.DataAccessException;
 import org.springframework.security.authentication.AbstractAuthenticationToken;
@@ -33,7 +32,6 @@ import org.springframework.transaction.TransactionException;
  * <p>Registered as a bean by {@code SecurityConfig} rather than component-scanned: a {@code @WebMvcTest}
  * slice includes every scanned {@code Converter}, and this one needs a repository the slice does not have.
  */
-@Slf4j
 @RequiredArgsConstructor
 public class EnrichingJwtAuthenticationConverter implements Converter<Jwt, AbstractAuthenticationToken> {
 
@@ -52,11 +50,8 @@ public class EnrichingJwtAuthenticationConverter implements Converter<Jwt, Abstr
         if (issuer == null || issuer.isBlank() || sub == null || sub.isBlank()) {
             return Optional.empty();
         }
-        Optional<AdmittedUser> admitted;
         try {
-            admitted = appUserRepository
-                    .findByIssuerAndSub(issuer, sub)
-                    .map(EnrichingJwtAuthenticationConverter::snapshot);
+            return appUserRepository.findByIssuerAndSub(issuer, sub).map(EnrichingJwtAuthenticationConverter::snapshot);
         } catch (DataAccessException | TransactionException e) {
             // Both types are the store being down: a query that fails is a DataAccessException, but a
             // connection the repository proxy cannot even acquire to open its read-only transaction is
@@ -64,14 +59,6 @@ public class EnrichingJwtAuthenticationConverter implements Converter<Jwt, Abstr
             // a stopped Postgres or an exhausted pool actually produces.
             throw new AuthenticationServiceException("Account store unavailable", e);
         }
-        if (admitted.isEmpty()) {
-            // Temporary bootstrap channel until #249: relinking V15's placeholder row needs this exact
-            // pair, and no other integrated path exposes it. Raw claims are not free just because they
-            // are not secret, since logs and the database have different readers and retention, so drop
-            // them once invitation redemption provisions accounts.
-            log.warn("No app_user for issuer={} sub={}", issuer, sub);
-        }
-        return admitted;
     }
 
     private static AdmittedUser snapshot(AppUser user) {

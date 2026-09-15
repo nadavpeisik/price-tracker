@@ -1,6 +1,6 @@
 import { keepPreviousData, queryOptions } from '@tanstack/react-query'
 import { fetchDashboard, fetchListings } from '@/lib/api-client'
-import { fetchMe, fetchAccount } from '@/lib/auth-client'
+import { fetchMe, ensureAccount } from '@/lib/auth-client'
 import type { DashboardQuery } from '@/lib/types'
 
 export const PAGE_SIZE = 20
@@ -69,7 +69,7 @@ export function meQueryOptions() {
 export function accountQueryOptions(enabled: boolean) {
   return queryOptions({
     queryKey: ['account'] as const,
-    queryFn: fetchAccount,
+    queryFn: ensureAccount,
     enabled,
     staleTime: Infinity,
     retry: false,

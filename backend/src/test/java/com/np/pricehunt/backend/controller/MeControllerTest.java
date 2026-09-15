@@ -3,11 +3,15 @@ package com.np.pricehunt.backend.controller;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.np.pricehunt.backend.config.CurrencyProperties;
+import com.np.pricehunt.backend.exception.ForbiddenException;
+import com.np.pricehunt.backend.service.AdmissionOutcome;
+import com.np.pricehunt.backend.service.InvitationService;
 import com.np.pricehunt.backend.service.UserPreferenceService;
 import com.np.pricehunt.backend.service.fx.ExchangeRateService;
 import java.util.Optional;
@@ -42,6 +46,9 @@ class MeControllerTest {
     @MockitoBean
     private UserPreferenceService preferences;
 
+    @MockitoBean
+    private InvitationService invitations;
+
     @BeforeEach
     void setUp() {
         when(rateService.isDefinitelyUnsupported(anyString())).thenReturn(false);
@@ -75,5 +82,27 @@ class MeControllerTest {
         mvc.perform(get("/api/me"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.detail").value("Display currency is not a 3-letter ISO 4217 code"));
+    }
+
+    @Test
+    void provision_is201WhenCreated_and204WhenAlreadyAdmitted() throws Exception {
+        when(invitations.provision()).thenReturn(AdmissionOutcome.PROVISIONED);
+        mvc.perform(post("/api/me"))
+                .andExpect(status().isCreated())
+                .andExpect(content().string(""));
+
+        when(invitations.provision()).thenReturn(AdmissionOutcome.ALREADY_ADMITTED);
+        mvc.perform(post("/api/me"))
+                .andExpect(status().isNoContent())
+                .andExpect(content().string(""));
+    }
+
+    @Test
+    void provision_refused_is403ProblemDetail() throws Exception {
+        when(invitations.provision()).thenThrow(new ForbiddenException("No valid invitation for this identity"));
+
+        mvc.perform(post("/api/me"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.detail").value("No valid invitation for this identity"));
     }
 }

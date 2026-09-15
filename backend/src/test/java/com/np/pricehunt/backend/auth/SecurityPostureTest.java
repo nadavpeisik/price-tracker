@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.reset;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -152,8 +153,15 @@ class SecurityPostureTest {
                         "POST /api/products",
                         "GET /api/tracked-products",
                         "GET /api/me",
+                        "POST /api/me",
+                        "POST /api/admin/invitations",
                         "GET /api/dev/scrape-attempts/1/fixture");
         return routes;
+    }
+
+    /** The one /api route that admits an identity with no account (#249): the admission loop skips it. */
+    private static boolean isRedemption(Route route) {
+        return route.method() == HttpMethod.POST && route.path().equals("/api/me");
     }
 
     @Test
@@ -169,10 +177,10 @@ class SecurityPostureTest {
 
     @Test
     void everyApiMapping_withAValidButUnknownIdentity_is403ProblemDetail() throws Exception {
-        // Admission: a valid token from the tenant is not an account. #249 adds its one exception
-        // (the invitation-redemption route) to this loop when it exists.
+        // Admission: a valid token from the tenant is not an account. The one exception is invitation
+        // redemption (#249), which admits such an identity and has its own case below.
         for (Route route : allRoutes()) {
-            if (!route.path().startsWith("/api/")) {
+            if (!route.path().startsWith("/api/") || isRedemption(route)) {
                 continue;
             }
             mvc.perform(route.request().header(HttpHeaders.AUTHORIZATION, bearer(IDP.adminToken(UNKNOWN_SUB))))
@@ -182,6 +190,20 @@ class SecurityPostureTest {
                                     HttpHeaders.WWW_AUTHENTICATE, startsWith("Bearer error=\"insufficient_scope\"")))
                     .andExpect(jsonPath("$.status").value(403));
         }
+    }
+
+    @Test
+    void redemption_withAValidButUnknownIdentity_isAServiceDecision_notAChainDenial() throws Exception {
+        // The chain lets an unadmitted identity through to POST /api/me; the refusal (no invitation)
+        // is the service's, so it is the advice's plain 403 without the chain's insufficient_scope
+        // challenge. InvitationRouteTest owns the admitted outcomes.
+        mvc.perform(post("/api/me").header(HttpHeaders.AUTHORIZATION, bearer(IDP.userToken(UNKNOWN_SUB))))
+                .andExpect(status().isForbidden())
+                .andExpect(content().contentTypeCompatibleWith(PROBLEM_JSON))
+                .andExpect(header().doesNotExist(HttpHeaders.WWW_AUTHENTICATE))
+                .andExpect(jsonPath("$.status").value(403));
+        assertThat(appUsers.findByIssuerAndSub(FakeIdentityProvider.ISSUER, UNKNOWN_SUB))
+                .isEmpty();
     }
 
     // --- the token validators are live: Boot's real decoder against the fixture's JWKS ---

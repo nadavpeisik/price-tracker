@@ -12,5 +12,7 @@ public enum ErrorCode {
     /** This URL is a listing of a different product; add it there, not here. */
     URL_TRACKED_BY_ANOTHER_PRODUCT,
     /** This product has its maximum number of listings; remove one first. */
-    PRODUCT_LISTING_LIMIT_REACHED
+    PRODUCT_LISTING_LIMIT_REACHED,
+    /** Another admin invited this email at the same moment; list the invitations and use theirs. */
+    INVITATION_ALREADY_PENDING
 }

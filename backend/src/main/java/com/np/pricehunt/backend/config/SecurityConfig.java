@@ -95,6 +95,12 @@ public class SecurityConfig {
             throws Exception {
         return configureBearerChain(http, router, jwtAuthenticationConverter)
                 .authorizeHttpRequests(authorize -> authorize
+                        // The one /api route that needs only authentication (#249): an identity with no
+                        // account creates one from its invitation here. GET /api/me stays admitted-only.
+                        .requestMatchers(HttpMethod.POST, "/api/me")
+                        .access(authenticated())
+                        .requestMatchers("/api/admin/**")
+                        .access(allOf(authenticated(), hasRole(ADMIN_ROLE), admission))
                         .requestMatchers("/api/dev/**")
                         .access(allOf(authenticated(), hasRole(ADMIN_ROLE), admission))
                         // Editing or hard-deleting a catalog row changes it for every user, so those

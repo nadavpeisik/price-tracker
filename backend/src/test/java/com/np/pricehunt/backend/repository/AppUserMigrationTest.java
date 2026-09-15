@@ -20,9 +20,9 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 
 /**
- * Real Postgres for V15: the (issuer, sub) unique constraint is the identity key's only enforcement
- * (first-login double-inserts race past any application check), and the backfill row is data only
- * the migration writes. Loading at all gates V1–V15 + ddl-auto=validate for the new entity.
+ * Real Postgres for V15 and V18's half of it: the (issuer, sub) unique constraint is the identity key's
+ * only enforcement (first-login double-inserts race past any application check), and the placeholder
+ * row V15 wrote is gone once V18 has run. Loading at all gates the full chain + ddl-auto=validate.
  */
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = Replace.NONE)
@@ -49,15 +49,13 @@ class AppUserMigrationTest {
     private JdbcTemplate jdbc;
 
     @Test
-    void backfillRowExists_underThePlaceholderIssuer() {
-        // The placeholder pair lives under .invalid, which no real IdP can issue. It is relinked
-        // out-of-band (a one-off UPDATE on the dev DB, see CLAUDE.md) until #249's invitation
-        // redemption becomes the durable path; a migration cannot carry a per-tenant value. Email
-        // stays NULL until #249 records the verified-email claim at redemption.
+    void placeholderRowIsGone_afterV18_soAFreshDatabaseHasNoAccounts() {
+        // V15's .invalid placeholder was the pre-#249 bootstrap target, relinked by hand on the dev DB.
+        // V18 deletes it where that never happened; on a fresh database it was the only row, so the
+        // first account now arrives through an invitation.
         assertThat(repository.findByIssuerAndSub("https://auth0-tenant-pending.invalid/", "nadav"))
-                .get()
-                .extracting(AppUser::getEmail)
-                .isNull();
+                .isEmpty();
+        assertThat(repository.count()).isZero();
     }
 
     @Test
@@ -79,8 +77,13 @@ class AppUserMigrationTest {
 
     @Test
     void createdAtIsImmutableAtTheDatabase() {
-        assertThatThrownBy(() ->
-                        jdbc.update("UPDATE app_user SET created_at = now() + interval '1 day' WHERE sub = 'nadav'"))
+        AppUser saved = repository.saveAndFlush(AppUser.builder()
+                .issuer("https://idp.example.com/")
+                .sub("auth0|immutable")
+                .build());
+
+        assertThatThrownBy(() -> jdbc.update(
+                        "UPDATE app_user SET created_at = now() + interval '1 day' WHERE id = ?", saved.getId()))
                 .hasMessageContaining("created_at is immutable");
     }
 }

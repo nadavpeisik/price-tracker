@@ -107,6 +107,16 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
+    void openInvitationUniqueViolation_mapsTo409WithCode() {
+        var response = handler.handleUniqueViolation(integrityViolation("uq_invitation_open_email", "23505"));
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().getProperties())
+                .containsEntry(GlobalExceptionHandler.ERROR_CODE_MEMBER, "INVITATION_ALREADY_PENDING");
+    }
+
+    @Test
     void unlistedUniqueConstraint_isRethrown_soAServerBugStays500() {
         DataIntegrityViolationException ex = integrityViolation("some_internal_unique_idx", "23505");
         assertThatThrownBy(() -> handler.handleUniqueViolation(ex)).isSameAs(ex);

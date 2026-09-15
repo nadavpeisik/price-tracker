@@ -42,6 +42,8 @@ public final class FakeIdentityProvider {
 
     static final String AUDIENCE = "pricehunt-api";
     static final String ROLES_CLAIM = "https://pricehunt.app/roles";
+    static final String EMAIL_CLAIM = "https://pricehunt.app/email";
+    static final String EMAIL_VERIFIED_CLAIM = "https://pricehunt.app/email_verified";
     public static final String DEFAULT_SUB = "auth0|test-user";
     static final String KEY_ID = "test-key";
 
@@ -137,6 +139,12 @@ public final class FakeIdentityProvider {
 
     public String userToken(String sub) {
         return token(claims -> claims.subject(sub));
+    }
+
+    /** A token carrying the email claims the post-login Action writes (#249). */
+    public String userToken(String sub, String email, boolean emailVerified) {
+        return token(
+                claims -> claims.subject(sub).claim(EMAIL_CLAIM, email).claim(EMAIL_VERIFIED_CLAIM, emailVerified));
     }
 
     String adminToken() {

@@ -239,7 +239,8 @@ The scraper response carries an `extractionSource` enum (`STRUCTURED | SNIPPET |
 - `TrackedItem` — belongs to a `Product`, has a `url` + `shopName`, has many `PriceRecord`s
 - Both `Product` and `TrackedItem` carry `createdAt` (V12, #225): stamped by `@PrePersist` when null, `updatable = false`, not exposed on the wire yet. It is an audit column, not the key for the per-user "most recently added" sort (#226 — that lives on the tenancy join table).
 - `AppUser` — application identity keyed on `(issuer, sub)` (V15, #243); `id` is what the schema references.
-- `UserProduct` — the tenancy membership row (V17, #246; supersedes V16's per-listing `user_tracked_item`, dropped): "user U tracks product P". Unique on `(user_id, product_id)`, both FKs `ON DELETE CASCADE` at the database (mirrored by Hibernate `@OnDelete` so the H2 suites generate the same DDL), lazy non-optional `@ManyToOne`s, **no JPA cascade into the catalog**. `addedAt` is the per-user "recently added" key (#226). Written only through `UserScopedCatalog.track()` (idempotent) and removed by `stopTracking()`; the dev seeder is the one other writer (it tracks its fixtures for the owner — the lowest-id, V15 bootstrap account — only).
+- `UserProduct` — the tenancy membership row (V17, #246; supersedes V16's per-listing `user_tracked_item`, dropped): "user U tracks product P". Unique on `(user_id, product_id)`, both FKs `ON DELETE CASCADE` at the database (mirrored by Hibernate `@OnDelete` so the H2 suites generate the same DDL), lazy non-optional `@ManyToOne`s, **no JPA cascade into the catalog**. `addedAt` is the per-user "recently added" key (#226). Written only through `UserScopedCatalog.track()` (idempotent) and removed by `stopTracking()`; the dev seeder is the one other writer (it tracks its fixtures for the owner — the first account provisioned, found as the lowest id — only).
+- `Invitation` — invite-only registration (V18, #249): "this normalized email may hold an account". `email` is the match key here and only here (never an identity), `invited_by` / `redeemed_by` are plain id columns (NULL inviter = the hand-inserted bootstrap row), `expires_at` is creation + 7 days, `revoked_at` / `redeemed_at` are the outcomes. One OPEN row per email (`uq_invitation_open_email`, partial); re-inviting supersedes the open row; `ck_invitation_email_normalized` rejects a hand-typed mixed-case address. Written only through `RegistrationService`.
 - `PriceRecord` — immutable price snapshot (BigDecimal, LocalDateTime set via `@PrePersist`, availability flag, `extractionSource`)
 - `PriceInfo` — Java record DTO carrying `price`, `currency`, `available`, and `extractionSource`
 - `ExtractionSource` — shared enum (`STRUCTURED | SNIPPET | FULLTEXT`) used across `ScrapeResponse`, `PriceInfo`, and `PriceRecord`
@@ -314,6 +315,8 @@ The authorization ladder is the whole policy, top rule wins:
 /actuator/**  (incl. root)    ROLE_ADMIN                       (role from the token; no app_user row needed)
 --- API chain (@Order(2), matches everything else) ---
 /.well-known/oauth-protected-resource           anonymous (filter-provided, see below)
+POST /api/me                  authenticated                     (#249: creates the account from an invitation)
+/api/admin/**                 authenticated + ROLE_ADMIN + admitted
 /api/dev/**                   authenticated + ROLE_ADMIN + admitted
 /api/**                       authenticated + admitted          (403 without an app_user row)
 anything else                 authenticated
@@ -343,8 +346,15 @@ request, at authentication**: `auth/EnrichingJwtAuthenticationConverter` wraps B
 is a presence check on that principal and cannot throw; a database failure during the lookup is rethrown as
 `AuthenticationServiceException` and reaches the advice as the same 503 an Auth0 outage does. There is **no
 just-in-time account creation** — an unknown identity is a 403 — and no cross-request identity cache (the
-principal lives exactly as long as the request). Only #249's invitation redemption may create or relink rows;
-it will be the one `authenticated()`-only `/api` route, placed above the admission rule. `CurrentUser.userId()`
+principal lives exactly as long as the request). The one writer of `app_user` rows is invitation redemption
+(#249): `POST /api/me`, the one `authenticated()`-only `/api` route, placed above the admission rule.
+`RegistrationService.provision` reads `CurrentUser.identity()` — the token's `(iss, sub)` plus the email claims the
+Action writes (`pricehunt.auth.claims.*`) — and provisions the row only for a **verified** email that an open,
+unexpired invitation names (or any verified email once `pricehunt.registration.invite-only=false`; a matching
+invitation is still consumed, so invitations keep working as a mechanism). The SPA calls it itself: its
+account fetch is GET /me → on 403, POST /me → GET /me, so an invited user lands on the dashboard on first
+sign-in. Admins manage invitations at `/api/admin/invitations` (create supersedes an open one for the same
+email; revoke is idempotent; list derives PENDING / REDEEMED / REVOKED / EXPIRED). `CurrentUser.userId()`
 and `CurrentUser.displayCurrencyPreference()` are what services call (#246, #248); they run no query, throw
 `ForbiddenException` (403) for an unknown identity and `IllegalStateException` when there is no authentication
 at all — that is a wiring bug (a scheduler or the seeder reaching a user-scoped service), never a client
@@ -378,16 +388,30 @@ builds MockMvc *without* `springSecurity()` instead mocks `CurrentUser` (`@Mocki
 caller + memberships with `tenancy.TestTenants` — the route matrix is the one place decoding, admission and
 tenancy are proven together.
 
-**Dev bootstrap until #249:** the V15 placeholder row (`https://auth0-tenant-pending.invalid/`, `nadav`)
-must be relinked to your real identity, which differs per tenant — so no migration. The first request
-with a valid token is a 403 whose WARN line shows `issuer=... sub=...`; run once on the dev DB:
+**Bootstrap on a fresh database (#249):** V18 deleted V15's placeholder account, so a fresh database has no
+accounts and nobody who can call the admin routes. Insert the first invitation by hand (inviter NULL), then
+sign in — the SPA redeems it and the account exists:
 ```sql
-UPDATE app_user SET issuer = '<iss>', sub = '<sub>'
-WHERE issuer = 'https://auth0-tenant-pending.invalid/' AND sub = 'nadav';   -- expect UPDATE 1
+INSERT INTO invitation (email, created_at, expires_at)
+VALUES (lower(btrim('<your email>')), now(), now() + interval '7 days');
 ```
+Do this **before** `--spring.profiles.active=seed`, or re-run `seed` afterwards: the seeder recreates its
+fixtures on every run and tracks them for the first account (lowest id), so seeding an empty `app_user`
+table leaves them tracked by nobody. A dev database that was relinked by hand before #249 keeps working
+unchanged; its row has no email (set one with a hand `UPDATE app_user SET email = lower(btrim('<your
+email>')) WHERE id = <id>` if something ever reads it). Further invitations go through the admin routes
+from a signed-in admin session, e.g. from the browser console with the CSRF cookie's value:
+`fetch('/bff/api/admin/invitations', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-XSRF-TOKEN': '<cookie>'}, body: JSON.stringify({email: 'friend@example.com'})})`.
 Auth0 dev tenant checklist: an API with identifier `pricehunt-api` (RS256, access-token lifetime 300 s,
-RBAC on), a role `ADMIN`, and a post-login Action
-`api.accessToken.setCustomClaim("https://pricehunt.app/roles", event.authorization?.roles ?? [])`. For a
+RBAC on), a role `ADMIN`, and a post-login Action writing three access-token claims:
+```js
+api.accessToken.setCustomClaim("https://pricehunt.app/roles", event.authorization?.roles ?? []);
+api.accessToken.setCustomClaim("https://pricehunt.app/email", event.user.email);
+api.accessToken.setCustomClaim("https://pricehunt.app/email_verified", event.user.email_verified === true);
+```
+(the email pair is #249's: Auth0 puts neither in an API access token by itself, the backend matches
+invitations on the verified one, and the claim names are `pricehunt.auth.claims.*` for another provider; a
+token minted before the address was verified stays unverified until the next login or refresh). For a
 manual smoke token without going through the browser, a machine-to-machine application authorized for the
 API (its `sub` is `<clientId>@clients`). For the BFF (#247): a **Regular Web Application** (confidential) with callback URLs
 `http://localhost:8082/bff/login/oauth2/code/auth0` and `http://localhost:5173/bff/login/oauth2/code/auth0`
@@ -416,8 +440,8 @@ Free also allows **one tenant**, so the epic's separate dev and production tenan
 
 The whole flow was verified against the real tenant on 2026-09-13: login with PKCE, tokens stored
 server-side with no client secret in the session bytes, anonymous requests creating no session rows,
-admission 403 then 200 after relinking, one real Auth0 refresh with rotation, and logout clearing the row
-and cookie.
+admission 403 then 200 after the (pre-#249) hand relink, one real Auth0 refresh with rotation, and logout
+clearing the row and cookie.
 
 **BFF (issue #247 — epic #241):** `bff/` is the browser's only counterpart. It is a confidential OAuth2
 client (Authorization Code + PKCE + Auth0's `audience` parameter) that keeps the Auth0 access and refresh

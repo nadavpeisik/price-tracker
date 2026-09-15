@@ -32,11 +32,25 @@ export async function fetchMe(): Promise<Me> {
   }
 }
 
-/** `GET /bff/api/me`: the backend's view of the account — the effective display currency. */
-export async function fetchAccount(): Promise<Account> {
+/**
+ * The backend's view of the account — the effective display currency — making
+ * sure there is one first. `GET /bff/api/me` answers 403 while the identity has
+ * no account, so this creates one from its invitation (`POST /bff/api/me`,
+ * #249) and asks again: an invited user lands on the dashboard on their first
+ * sign-in with no click. Not named `fetch`, because that 403 path writes. The
+ * POST's own failure propagates as-is — its 403 is "not invited" (or an
+ * unverified email), which the gate renders from the status alone.
+ */
+export async function ensureAccount(): Promise<Account> {
   if (import.meta.env.DEV && import.meta.env.VITE_USE_MOCK === 'true') {
     return { displayCurrency: 'ILS' }
   }
+  try {
+    return await request<Account>(`${API_BASE}/me`)
+  } catch (error) {
+    if (!(isApiError(error) && error.status === 403)) throw error
+  }
+  await request<void>(`${API_BASE}/me`, { method: 'POST' })
   return request<Account>(`${API_BASE}/me`)
 }
 

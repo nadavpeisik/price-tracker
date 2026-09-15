@@ -97,8 +97,8 @@ class DevDataSeederIdempotencyTest {
     void clean() {
         productRepository.deleteAll();
         exchangeRateRepository.deleteAll();
-        // H2 runs no migrations, so the V15 bootstrap account — what the seeder tracks its fixtures
-        // for — is seeded by hand; a second account proves the seeder leaves it alone.
+        // H2 runs no migrations, so the owner account (the first one provisioned — what the seeder
+        // tracks its fixtures for) is seeded by hand; a second account proves the seeder leaves it alone.
         appUserRepository.deleteAll();
         appUserRepository.save(
                 AppUser.builder().issuer("https://t.invalid/").sub("owner").build());
