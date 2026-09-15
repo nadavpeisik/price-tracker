@@ -49,7 +49,8 @@ public class RegistrationService {
 
     /**
      * Gives the identity an account, redeeming its open invitation on the way. Idempotent: an identity
-     * that already has one leaves without touching an invitation.
+     * that already has an account leaves without touching an invitation, including one a concurrent
+     * call provisioned while this one waited for the lock.
      *
      * @throws ForbiddenException when the token's email is missing or unverified, or when registration
      *     is invite-only and no open, unexpired invitation names that email
@@ -70,8 +71,19 @@ public class RegistrationService {
         Instant now = clock.instant();
         Optional<Invitation> invitation =
                 locked.filter(open -> open.getExpiresAt().isAfter(now));
-        if (invitation.isEmpty() && registrationProperties.inviteOnly()) {
-            throw new ForbiddenException("No valid invitation for this identity");
+        if (invitation.isEmpty()) {
+            // The lookup at the top is stale by now: a concurrent request for this identity — two
+            // tabs restored together is enough — may have provisioned the account and consumed the
+            // invitation while this one waited on the lock. Refusing here would deny an admitted user.
+            if (appUsers.findByIssuerAndSub(identity.issuer(), identity.sub()).isPresent()) {
+                return AdmissionOutcome.ALREADY_ADMITTED;
+            }
+            if (registrationProperties.inviteOnly()) {
+                throw new ForbiddenException("No valid invitation for this identity");
+            }
+            // Open registration locks nothing, so the re-check narrows that race without closing it:
+            // two inserts can still collide on uq_app_user_identity and the loser is a 500. Closing it
+            // needs a new transaction around the duplicate insert, not worth it while the flag is off.
         }
         AppUser user = appUsers.saveAndFlush(AppUser.builder()
                 .issuer(identity.issuer())
