@@ -14,6 +14,7 @@ of a working symlink; verify with `cat AGENTS.md` after checkout if in doubt.
 ```text
 price-tracker/
 ├── compose.yaml      ← orchestrates postgres, scraper, and grafana (the LLM is hosted; local Ollama runs natively)
+├── .mcp.json         ← MCP servers an agent gets in this repo (read-only Postgres, #261)
 ├── backend/          ← Spring Boot backend (bearer-only resource server)
 ├── bff/              ← Spring Boot BFF: Auth0 login, cookie session in Postgres, /bff/api proxy (#247)
 ├── scraper/          ← Python FastAPI + Playwright scraper
@@ -204,6 +205,30 @@ Guardrails (same model as the diff review and issue #81):
 - **Surface BOTH raw reviews** to the user every time; **the human breaks ties** when Gemini and Codex disagree with Claude or with each other.
 - **Bounded rounds:** stop re-reviewing once a round yields no accepted findings from either tool (don't ping-pong).
 - **Advisory, not a gate** — the human approves the plan via `ExitPlanMode`, not Gemini or Codex.
+
+## MCP servers (`.mcp.json`)
+
+`.mcp.json` at the repo root declares one server, `postgres` (#261), launched by
+`scripts/postgres-mcp.sh`. It gives an agent read-only SQL against the **dev** database, so
+schema and row state can be read directly instead of inferred from migration files or a
+`docker exec` psql session. Project-scoped, so each person approves it once on first launch
+(`claude mcp list` shows `Pending approval` until they do).
+
+Dev-only, and read-only by construction: it connects as `grafana_reader` (#242's SELECT-only
+role) and passes `--access-mode=restricted`, which also runs every statement in a `READ ONLY`
+transaction. Never point it at anything but a dev database. Queries are capped at 30s, so one
+aborting at exactly that is the cap, not a hung database.
+
+```bash
+scripts/postgres-mcp.sh --check     # config, connectivity, and "holds no table write privilege"
+scripts/postgres-mcp.sh --help      # the environment-variable reference
+```
+
+On a `postgres_data` volume created before #242 the role does not exist and `--check` fails to
+authenticate; create it once with
+`docker compose exec postgres bash /docker-entrypoint-initdb.d/create-grafana-role.sh`.
+
+Threat model, the pinned CVE, and the measurements behind all of the above are in the PR for #261.
 
 ## Architecture
 
