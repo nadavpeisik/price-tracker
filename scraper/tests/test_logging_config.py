@@ -5,6 +5,7 @@ The `probe_run` tests drive a real `uvicorn` process because nothing inside the 
 uvicorn's own logging config or its access line.
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -20,6 +21,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+from starlette.datastructures import Headers
 
 import main
 from logging_config import (
@@ -104,6 +106,86 @@ def test_main_is_wrapped_in_the_correlation_id_middleware():
     # What keeps the probe app a stand-in for main rather than a divergent second wiring.
     assert isinstance(main.app, main.CorrelationIdMiddleware)
     assert main.app.app is main.api
+
+
+# The subprocess tests below prove the middleware end to end, but they run it in another process,
+# where nothing in-process can observe it. These drive it directly instead.
+
+
+def _http_scope(headers=()) -> dict:
+    return {"type": "http", "headers": [(k.lower().encode(), v.encode()) for k, v in headers]}
+
+
+async def _receive() -> dict:
+    return {"type": "http.request"}
+
+
+async def _drive(app, scope) -> list[dict]:
+    """Runs one request through the middleware, returning the ASGI messages it sent."""
+    sent = []
+
+    async def send(message):
+        sent.append(message)
+
+    await main.CorrelationIdMiddleware(app)(scope, _receive, send)
+    return sent
+
+
+async def _respond_ok(scope, receive, send):
+    # Both messages, as a real app sends them: only the first carries headers to stamp.
+    await send({"type": "http.response.start", "status": 200, "headers": []})
+    await send({"type": "http.response.body", "body": b"{}"})
+
+
+async def test_middleware_binds_the_callers_id_and_echoes_it_back():
+    bound = {}
+
+    async def app(scope, receive, send):
+        bound["during_request"] = correlation_id.get()
+        await _respond_ok(scope, receive, send)
+
+    sent = await _drive(app, _http_scope([("X-Correlation-ID", "from-the-caller")]))
+
+    assert bound["during_request"] == "from-the-caller"
+    assert Headers(scope=sent[0])["X-Correlation-ID"] == "from-the-caller"
+
+
+async def test_middleware_generates_an_id_when_the_caller_sends_none():
+    sent = await _drive(_respond_ok, _http_scope())
+
+    assert re.fullmatch(r"[0-9a-f-]{36}", Headers(scope=sent[0])["X-Correlation-ID"])
+
+
+async def test_middleware_passes_non_http_scopes_straight_through():
+    seen = {}
+
+    async def app(scope, receive, send):
+        seen["type"] = scope["type"]
+        seen["bound"] = correlation_id.get()
+
+    assert await _drive(app, {"type": "lifespan"}) == []
+    assert seen == {"type": "lifespan", "bound": UNSET_CORRELATION_ID}
+
+
+async def test_the_id_outlives_an_exception_but_not_the_request():
+    async def app(scope, receive, send):
+        raise RuntimeError("boom")
+
+    bound = {}
+
+    async def one_request_cycle():
+        with pytest.raises(RuntimeError):
+            await _drive(app, _http_scope([("X-Correlation-ID", "id-of-the-failure")]))
+        # Where uvicorn logs "Exception in ASGI application": after the exception left the
+        # middleware, so the id has to still be bound.
+        bound["after_the_exception"] = correlation_id.get()
+
+    # A task of its own, as uvicorn gives each request cycle — which is what bounds the leak.
+    await asyncio.create_task(one_request_cycle())
+
+    assert bound["after_the_exception"] == "id-of-the-failure"
+    # ...and the value that was never reset stayed inside that task.
+    assert correlation_id.get() == UNSET_CORRELATION_ID
 
 
 def _free_port() -> int:
