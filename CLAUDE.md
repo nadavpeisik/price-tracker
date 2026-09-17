@@ -254,7 +254,11 @@ The scraper response carries an `extractionSource` enum (`STRUCTURED | SNIPPET |
 - **Logs are JSON, ECS field names, on stdout (#276)** — `logging_config.py` owns the layout:
   `@timestamp`, `log.level`, `log.logger`, `message`, `service.name=pricehunt-scraper`, `error.*` on
   an exception, and `correlationId` (the Java MDC key, renamed from the Python attribute at emit
-  time, not in Alloy). Three things are load-bearing and easy to undo: `configure_logging()` runs at
+  time, not in Alloy). **Namespaces nest and MDC-equivalent keys stay flat** —
+  `{"log":{"level":..},"service":{"name":..},"message":..,"correlationId":..}` — because that is the
+  shape Boot's ECS formatter emits on the two Spring apps (#275, pinned by its
+  `EcsStructuredLoggingTest` asserting `json.at("/log/level")`); the dotted spellings above are how
+  ECS *names* the fields, not how they serialize. Three more things are load-bearing and easy to undo: `configure_logging()` runs at
   `main` **import** (last write after uvicorn's own `dictConfig`); it names `uvicorn` /
   `uvicorn.error` / `uvicorn.access` explicitly; and `app = CorrelationIdMiddleware(api)` wraps from
   **outside**, never `api.add_middleware(...)` or `@api.middleware("http")`, resetting the

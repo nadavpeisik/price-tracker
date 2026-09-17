@@ -53,10 +53,12 @@ def _record(msg: str = "hello", *, exc_info=None, args=()) -> logging.LogRecord:
 def test_formatter_emits_ecs_field_names():
     line = _format(_record())
 
-    assert line["log.level"] == "INFO"
-    assert line["log.logger"] == "some.logger"
+    # Nested namespaces, flat `message` — the shape #275's EcsStructuredLoggingTest pins for the
+    # Spring apps, asserted there as `json.at("/log/level")`.
+    assert line["log"]["level"] == "INFO"
+    assert line["log"]["logger"] == "some.logger"
     assert line["message"] == "hello"
-    assert line["service.name"] == SERVICE_NAME
+    assert line["service"]["name"] == SERVICE_NAME
     assert datetime.fromisoformat(line["@timestamp"]).tzinfo is not None
 
 
@@ -95,9 +97,9 @@ def test_exception_becomes_ecs_error_fields():
     except ValueError:
         line = _format(_record("ksp handler failed", exc_info=sys.exc_info()))
 
-    assert line["error.type"] == "ValueError"
-    assert line["error.message"] == "boom"
-    assert "ValueError: boom" in line["error.stack_trace"]
+    assert line["error"]["type"] == "ValueError"
+    assert line["error"]["message"] == "boom"
+    assert "ValueError: boom" in line["error"]["stack_trace"]
     # python-json-logger's own key for the traceback, which an ECS consumer does not know.
     assert "exc_info" not in line
 
@@ -288,7 +290,7 @@ def probe_run(tmp_path_factory):
 def _request_lines_by_logger(run, request_correlation_id: str) -> dict:
     """The request's lines, keyed by logger — one line per logger is all these requests emit."""
     return {
-        line["log.logger"]: line
+        line["log"]["logger"]: line
         for line in run.lines
         if line["correlationId"] == request_correlation_id
     }
@@ -296,7 +298,7 @@ def _request_lines_by_logger(run, request_correlation_id: str) -> dict:
 
 def test_uvicorn_access_line_carries_the_callers_correlation_id(probe_run):
     assert probe_run.lines, "uvicorn printed nothing"
-    assert {line["service.name"] for line in probe_run.lines} == {SERVICE_NAME}
+    assert {line["service"]["name"] for line in probe_run.lines} == {SERVICE_NAME}
     assert probe_run.echoed_correlation_id == "cid-under-test"
 
     by_logger = _request_lines_by_logger(probe_run, "cid-under-test")
@@ -304,7 +306,7 @@ def test_uvicorn_access_line_carries_the_callers_correlation_id(probe_run):
     # The point of the issue: uvicorn's access line, written from the ASGI send callback after the
     # handler has returned, carries the same id as the handler's own line.
     assert "GET /probe" in by_logger["uvicorn.access"]["message"]
-    assert by_logger["uvicorn.access"]["log.level"] == "INFO"
+    assert by_logger["uvicorn.access"]["log"]["level"] == "INFO"
 
 
 def test_a_caller_without_a_correlation_id_header_gets_one_generated(probe_run):
@@ -327,14 +329,15 @@ def test_the_500_response_is_correlated_too(probe_run):
     assert "GET /boom" in by_logger["uvicorn.access"]["message"]
     assert " 500" in by_logger["uvicorn.access"]["message"]
     # The traceback uvicorn logs for the failed request is correlated and ECS-shaped as well.
-    assert by_logger["uvicorn.error"]["error.type"] == "RuntimeError"
-    assert by_logger["uvicorn.error"]["error.message"] == "probe blew up"
+    assert by_logger["uvicorn.error"]["error"]["type"] == "RuntimeError"
+    assert by_logger["uvicorn.error"]["error"]["message"] == "probe blew up"
 
 
 def test_lines_outside_any_request_carry_the_unset_marker(probe_run):
     startup = [
         line
         for line in probe_run.lines
-        if line["log.logger"].startswith("uvicorn") and "Started server process" in line["message"]
+        if line["log"]["logger"].startswith("uvicorn")
+        and "Started server process" in line["message"]
     ]
     assert startup and all(line["correlationId"] == UNSET_CORRELATION_ID for line in startup)

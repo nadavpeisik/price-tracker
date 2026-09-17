@@ -1,6 +1,12 @@
 """JSON logging for the scraper, in ECS field names, so Loki can query it next to the Spring
 apps' output (issue #276).
 
+The Java side (#275, merged 91ec203) emits ECS namespaces **nested** and MDC keys flat —
+`{"log":{"level":..},"service":{"name":..},"message":..,"correlationId":..}`, pinned by its
+`EcsStructuredLoggingTest`. `_FIELD_RENAMES` below spells the ECS dotted names, which is how ECS
+documents them, and `process_log_record` turns them into that nested shape; keys without a dot
+(`message`, `correlationId`, `@timestamp`) stay top level, as they do there.
+
 Two facts about uvicorn that this file is shaped around and the code cannot state:
 
   1. uvicorn applies `dictConfig(uvicorn.config.LOGGING_CONFIG)` while building its `Config`,
@@ -75,6 +81,18 @@ class EcsJsonFormatter(JsonFormatter):
             json_ensure_ascii=False,
             **kwargs,
         )
+
+    def process_log_record(self, log_data):
+        # Dotted ECS name -> nested object, to match the shape the Spring apps emit. One level is
+        # all ECS uses here (`log.level`, `service.name`, `error.stack_trace`).
+        nested = {}
+        for key, value in log_data.items():
+            namespace, dot, field = key.partition(".")
+            if dot:
+                nested.setdefault(namespace, {})[field] = value
+            else:
+                nested[key] = value
+        return nested
 
     def add_fields(self, log_data, record, message_dict):
         # The traceback is a rename of `exc_info`, but the type and message are on no attribute —
