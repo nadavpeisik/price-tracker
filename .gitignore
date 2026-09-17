@@ -23,6 +23,9 @@ coverage.xml
 # Env
 .env
 *.log
+# ECS log files the backend and BFF write (issue #275). Anchored: only the repo-root output
+# dir. *.log above misses the rotated archives (pricehunt-backend.log.2026-09-17.0.gz).
+/logs/
 
 # Claude Code per-project config (plugin enablement, local permission allowlist)
 .claude/
