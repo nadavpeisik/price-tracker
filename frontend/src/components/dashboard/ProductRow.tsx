@@ -37,10 +37,7 @@ interface ProductRowProps {
   onToggle: () => void
   /** Set for one render pass when a live price drop should celebrate. */
   celebrate: boolean
-  /** Dashboard-wide "Show hidden" (#250), forwarded to the panel untouched. */
-  showHidden: boolean
-  onShowHidden: () => void
-  /** The panel hid or showed a shop: the reorder that follows is wanted, not a background one. */
+  /** The panel hid or restored a shop: the reorder that follows is wanted, not a background one. */
   onListingsChanged: () => void
 }
 
@@ -50,8 +47,6 @@ export function ProductRow({
   expanded,
   onToggle,
   celebrate,
-  showHidden,
-  onShowHidden,
   onListingsChanged,
 }: ProductRowProps) {
   const reducedMotion = useReducedMotion()
@@ -204,8 +199,6 @@ export function ProductRow({
               productId={product.id}
               open={expanded}
               bestTrackedItemId={product.bestTrackedItemId}
-              showHidden={showHidden}
-              onShowHidden={onShowHidden}
               onListingsChanged={onListingsChanged}
             />
           </motion.div>

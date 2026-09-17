@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { type QueryClient, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { dashboardQueryOptions, PAGE_SIZE } from '@/lib/queries'
@@ -23,6 +23,17 @@ const CELEBRATION_RESET_MS = 1600
 interface Committed {
   key: string
   data: DashboardResponse
+}
+
+/**
+ * How many times the dashboard query has settled, success or failure. TanStack
+ * keeps these counters on the query STATE rather than the hook result, so they
+ * come from the cache; reading during render is sound because the state is
+ * written before observers are notified.
+ */
+function dashboardFetchCount(client: QueryClient, query: DashboardQuery): number {
+  const state = client.getQueryState(dashboardQueryOptions(query).queryKey)
+  return (state?.dataUpdateCount ?? 0) + (state?.errorUpdateCount ?? 0)
 }
 
 function sameIdOrder(a: DashboardResponse, b: DashboardResponse): boolean {
@@ -49,6 +60,7 @@ export function Dashboard() {
     [state],
   )
   const queryKey = useMemo(() => JSON.stringify(query), [query])
+  const queryClient = useQueryClient()
   const result = useQuery(dashboardQueryOptions(query))
 
   /*
@@ -61,36 +73,65 @@ export function Dashboard() {
    * someone who just hid a shop is asking for the reorder they get.
    *
    * Implemented as the guarded adjust-state-during-render pattern (not an
-   * effect): TanStack's structural sharing keeps `result.data` reference-
-   * stable when nothing changed, so the guards below settle immediately.
-   * `commitNextUpdate` is state rather than a ref for the same reason — under
-   * StrictMode a ref cleared in the first render pass would be gone by the
-   * second, and the update would park after all.
+   * effect): TanStack's structural sharing keeps `result.data` reference-stable
+   * when nothing changed, so the guards below settle immediately.
+   * `commitAfterUpdate` holds TanStack's fetch counter as it stood when a panel
+   * reported a hide, so the next response is committed once that counter
+   * advances — monotonic and query-scoped, it answers "has a fetch landed since
+   * the user acted" exactly. The query key is part of the mark: changing filter,
+   * sort or page mid-mutation swaps the query underneath, and a bare number
+   * would then be compared against a different query's counter.
+   *
+   * Three simpler shapes do NOT work. A per-mutation COUNT leaks when TanStack
+   * coalesces two invalidations into one fetch, and a leaked count disables the
+   * guard for good. A wall-clock THRESHOLD cannot tell the response it awaits
+   * from one landing in the same millisecond. A plain FLAG is consumed by the
+   * very render that arms it, while `incoming` still holds the cached response.
+   *
+   * State rather than a ref because under StrictMode a ref cleared in the first
+   * render pass would be gone by the second.
    */
   const [committed, setCommitted] = useState<Committed | null>(null)
   const [pending, setPending] = useState<DashboardResponse | null>(null)
-  const [commitNextUpdate, setCommitNextUpdate] = useState(false)
+  const [commitAfterUpdate, setCommitAfterUpdate] = useState<{ key: string; count: number } | null>(null)
   const [celebrating, setCelebrating] = useState<ReadonlySet<number>>(new Set())
   const celebrationRef = useRef(createCelebrationState())
 
   const incoming = result.isPlaceholderData ? undefined : result.data
+  // TanStack keeps these on the query STATE rather than the hook result, so they
+  // come from the cache. Read during render on purpose: the state is written
+  // before observers are notified, so the render caused by a settled fetch
+  // already sees the advanced count. Success and failure each advance one, and
+  // either settles the question of whether a fetch has landed.
+  const fetchCount = dashboardFetchCount(queryClient, query)
+  const answersUserAction =
+    commitAfterUpdate !== null && commitAfterUpdate.key === queryKey && fetchCount > commitAfterUpdate.count
   if (incoming !== undefined) {
     if (committed === null || committed.key !== queryKey) {
       // Fresh view (first load or user-initiated param change) → commit now.
       setCommitted({ key: queryKey, data: incoming })
       if (pending !== null) setPending(null)
     } else if (committed.data !== incoming) {
-      if (commitNextUpdate || sameIdOrder(committed.data, incoming)) {
+      if (answersUserAction || sameIdOrder(committed.data, incoming)) {
         // In-place update (prices moved, order intact), or the answer to a
-        // hide/show the user just made → commit silently.
+        // hide/restore the user just made → commit silently.
         setCommitted({ key: queryKey, data: incoming })
         if (pending !== null) setPending(null)
-        if (commitNextUpdate) setCommitNextUpdate(false)
       } else if (pending !== incoming) {
         // Background reorder for the same view — park it, don't yank rows.
         setPending(incoming)
       }
     }
+  }
+  // Consumed once a fetch has LANDED, not once one has been committed: structural
+  // sharing keeps `incoming` reference-identical when a response changed nothing,
+  // so the branches above are skipped entirely — and a marker left standing would
+  // wave the next background reorder through unparked. An error advances the
+  // counter too, so a failed refetch cannot leave it armed for a later poll.
+  // A mark for a view the reader has since left is dead: drop it rather than
+  // leave it to be compared against another query's counter.
+  if (answersUserAction || (commitAfterUpdate !== null && commitAfterUpdate.key !== queryKey)) {
+    setCommitAfterUpdate(null)
   }
 
   // Live price-drop celebrations, driven by every commit. The bookkeeping
@@ -138,7 +179,6 @@ export function Dashboard() {
   // Only MOUNTED (expanded) listing queries actually refetch on invalidation.
   // In an effect, never in the render-phase commit above — invalidation
   // notifies other components' observers, which is a side effect.
-  const queryClient = useQueryClient()
   const dashboardFetchedAt = result.isPlaceholderData ? 0 : result.dataUpdatedAt
   useEffect(() => {
     if (dashboardFetchedAt === 0) return
@@ -172,10 +212,6 @@ export function Dashboard() {
   }
 
   const [expandedId, setExpandedId] = useState<number | null>(null)
-  // "Show hidden" (#250) is presentation only: the panel already holds every
-  // listing, so toggling it refetches nothing. Component state, not URL state —
-  // panels collapse on reload, so a persisted toggle would outlive what it shows.
-  const [showHidden, setShowHidden] = useState(false)
 
   // Whether the committed data still describes the CURRENT query. When the
   // user changes search/filter/sort/page, `queryKey` changes immediately but
@@ -210,9 +246,11 @@ export function Dashboard() {
         expanded={expandedId === product.id}
         onToggle={() => setExpandedId((cur) => (cur === product.id ? null : product.id))}
         celebrate={celebrating.has(product.id)}
-        showHidden={showHidden}
-        onShowHidden={() => setShowHidden(true)}
-        onListingsChanged={() => setCommitNextUpdate(true)}
+        // Sampled when the callback RUNS, not when this render closed over it:
+        // a mutation can settle well after the render that created the handler.
+        onListingsChanged={() =>
+          setCommitAfterUpdate({ key: queryKey, count: dashboardFetchCount(queryClient, query) })
+        }
       />
     ))
   }
@@ -234,13 +272,7 @@ export function Dashboard() {
 
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <Toolbar
-            state={state}
-            update={update}
-            shops={data?.facets.shops}
-            showHidden={showHidden}
-            onShowHiddenChange={setShowHidden}
-          />
+          <Toolbar state={state} update={update} shops={data?.facets.shops} />
         </div>
         {/* Add-product flow is out of scope this issue — visual stub. A page action, not chrome (#248). */}
         <Button className="rounded-[10px] font-semibold">+ Track a product</Button>

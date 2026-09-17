@@ -6,7 +6,8 @@ import type { AvailabilityRollup, ListingAvailability } from '@/lib/types'
  * Product level renders the ROLLUP: all in → green "In stock"; MIXED →
  * amber "N of M in stock"; UNAVAILABLE (red) only when every listing is
  * out; UNKNOWN → amber. `total === 0` is a real state (product with zero
- * tracked items) → neutral "No visible shops" — true for an empty product and for one whose every shop the user hid (#250) — never "0 of 0 in stock".
+ * tracked items, or every shop hidden by the caller — #250) → neutral
+ * "No visible shops", never "0 of 0 in stock".
  */
 
 const DOT = 'inline-block size-1.5 rounded-full'
