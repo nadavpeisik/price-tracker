@@ -566,6 +566,36 @@ All three methods are `@Transactional(propagation = REQUIRES_NEW)` so audit rows
 
 New scheduler? Wire the recorder the same way `PriceCheckScheduler.refreshAll()` does: start at the top, per-item record inside the loop, complete in a finally, outer try/catch routes catastrophic failure into a final `complete(..., JobStatus.FAILED, ...)`.
 
+## Structured logging
+
+Both Spring apps log **ECS JSON to a file and plain text to the console** (#275, epic #274):
+`logging.structured.format.file=ecs` + `logging.file.name` in each `application.properties`, native to
+Boot 3.4+ (no `logstash-logback-encoder`, no `logback-spring.xml`). MDC keys become top-level JSON
+fields, so `correlationId` -- the request id, or a scheduler's `sched-` / `fx-` / `purge-` id -- is
+queryable without a custom parser, and `spring.application.name` (`pricehunt-backend` /
+`pricehunt-bff`) becomes ECS `service.name`. The file is what Alloy will tail (#277): backend and BFF
+run on the host until #263, so Docker stdout would ship the scraper and nothing else.
+
+- **Where:** `logs/pricehunt-backend.log` and `logs/pricehunt-bff.log` at the checkout root,
+  gitignored. Caps are **per app**: 10 MB per file and a 100 MB `total-size-cap` over that app's
+  archives, so the directory holds up to ~220 MB with both running (Boot's default cap is
+  *unlimited*, which is what these lines exist to close). `../logs` is resolved against the **working
+  directory**, which is right for both documented dev loops; launching from the repo root instead
+  puts it outside the checkout, and Boot's own `LOGGING_FILE_NAME` is the override.
+- **Console:** the correlation id lives in `logging.pattern.correlation=%esb(%X{correlationId:-})`,
+  Boot's own slot. `%esb` supplies its own trailing separator and collapses to nothing when the MDC
+  key is absent, so never add a space to that value.
+- **Container profile** (`application-container.properties`, the rest arrives with #263): console
+  becomes ECS because Docker captures stdout, and an **empty** `logging.file.name` switches the file
+  appender off (`LogFile.get` returns null, so none is built).
+- **Tests never write that file**, via `src/test/resources/logback-test.xml` in each module rather
+  than a property. Boot's `LogbackLoggingSystem.initialize()` returns early once the JVM's
+  `LoggerContext` is marked initialized, so **the first Spring context in a surefire fork configures
+  logging for the whole run** and no per-test `logging.file.name` can move the appender; 21
+  context-booting test classes also activate no profile. Worth knowing before trying to assert on log
+  output from a `@SpringBootTest` -- `EcsStructuredLoggingTest` drives `StructuredLogEncoder`
+  directly for that reason.
+
 ## Key Conventions
 
 - Constructor injection via Lombok `@RequiredArgsConstructor` (all injected fields are `final`)
