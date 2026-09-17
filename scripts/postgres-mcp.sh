@@ -110,20 +110,21 @@ with open(os.environ["ENV_FILE"], encoding="utf-8-sig") as handle:
             if remainder and not remainder.startswith("#"):
                 sys.exit(f"postgres-mcp.sh: unexpected text after the closing {quote_char} "
                          f"in {key}")
-            value, quoted = value[1:closing], quote_char
+            value = value[1:closing]
         else:
             value = re.split(r"\s+#", value, maxsplit=1)[0].rstrip()
-            quoted = ""
 
-        # Refused rather than guessed at: these are the only two forms where this parser
-        # and `docker compose config` disagree, and a silent disagreement reads later as
-        # "password authentication failed".
+        # Refused rather than guessed at, because a silent disagreement over either
+        # character reads later as "password authentication failed" somewhere else.
         if "\\" in value:
             sys.exit(f"postgres-mcp.sh: {key} contains a backslash, which Compose and this "
                      "parser read differently -- use a value without one")
-        if "$" in value and quoted != "'":
-            sys.exit(f"postgres-mcp.sh: {key} contains '$' outside single quotes, which "
-                     f"Compose interpolates -- single-quote it: {key}='...'")
+        if "$" in value:
+            # Both keys read here are also Grafana provisioning values, and Grafana expands
+            # ${...} a second time -- so single-quoting, which is enough for Compose, still
+            # reaches the datasource truncated.
+            sys.exit(f"postgres-mcp.sh: {key} must not contain '$' -- Compose interpolates "
+                     "it unquoted and Grafana's provisioning expands it even when quoted")
         values[key] = value
 
 missing = [k for k in WANTED if not values.get(k)]
