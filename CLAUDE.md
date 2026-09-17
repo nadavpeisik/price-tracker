@@ -245,8 +245,8 @@ Claude Code's browser flow fails with *"Incompatible auth server"*. Export it be
 Claude Code reads the process environment, not `.env`:
 
 ```bash
-export GITHUB_MCP_PAT='github_pat_...'   # fine-grained, this repo only,
-                                         # Metadata + Issues + Pull requests = Read-only
+export GITHUB_MCP_PAT='github_pat_...'   # fine-grained, this repo only, Read-only on
+                                         # Metadata + Issues + Pull requests + Commit statuses
 ```
 
 ## Architecture
