@@ -8,7 +8,6 @@ uvicorn's own logging config or its access line.
 import asyncio
 import json
 import logging
-import re
 import socket
 import subprocess
 import sys
@@ -16,6 +15,7 @@ import time
 import types
 import urllib.error
 import urllib.request
+import uuid
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -153,7 +153,9 @@ async def test_middleware_binds_the_callers_id_and_echoes_it_back():
 async def test_middleware_generates_an_id_when_the_caller_sends_none():
     sent = await _drive(_respond_ok, _http_scope())
 
-    assert re.fullmatch(r"[0-9a-f-]{36}", Headers(scope=sent[0])["X-Correlation-ID"])
+    # `.version`, not a shape check: it is what distinguishes a generated id from any other
+    # 36-character string a future generator might produce. Raises if it is not a UUID at all.
+    assert uuid.UUID(Headers(scope=sent[0])["X-Correlation-ID"]).version == 4
 
 
 async def test_middleware_passes_non_http_scopes_straight_through():
@@ -308,7 +310,7 @@ def test_uvicorn_access_line_carries_the_callers_correlation_id(probe_run):
 def test_a_caller_without_a_correlation_id_header_gets_one_generated(probe_run):
     # The backend always sends the header; anything else reaching the scraper (curl, a future
     # caller) still has to be followable, which is what the generated id is for.
-    assert re.fullmatch(r"[0-9a-f-]{36}", probe_run.generated_correlation_id)
+    assert uuid.UUID(probe_run.generated_correlation_id).version == 4
 
     by_logger = _request_lines_by_logger(probe_run, probe_run.generated_correlation_id)
     assert by_logger["probe"]["message"] == HANDLER_LOG_MESSAGE
