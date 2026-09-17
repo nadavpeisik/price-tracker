@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "postgres": {
-      "command": "bash",
-      "args": ["${CLAUDE_PROJECT_DIR:-.}/scripts/postgres-mcp.sh"],
-      "env": {}
-    }
-  }
-}
