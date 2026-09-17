@@ -554,7 +554,7 @@ describe('Dashboard', () => {
     await waitFor(() => expect(fetchListingsMock.mock.calls.length).toBeGreaterThan(1))
     expect(within(region).getByRole('button', { name: /^Undo hiding/ })).toBeInTheDocument()
     // And it is NOT also listed in the hidden section — that would show it twice.
-    expect(within(region).queryByRole('button', { name: /Hidden shops/ })).not.toBeInTheDocument()
+    expect(within(region).queryByRole('button', { name: /^Hidden shops? \(/ })).not.toBeInTheDocument()
   })
 
   it('Undo restores the shop', async () => {
