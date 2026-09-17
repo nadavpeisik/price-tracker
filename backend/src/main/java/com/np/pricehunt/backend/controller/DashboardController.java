@@ -4,6 +4,7 @@ import com.np.pricehunt.backend.config.DashboardProperties;
 import com.np.pricehunt.backend.dto.DashboardQueryRequest;
 import com.np.pricehunt.backend.dto.DashboardResponse;
 import com.np.pricehunt.backend.dto.DashboardSortKey;
+import com.np.pricehunt.backend.dto.SetListingHiddenRequest;
 import com.np.pricehunt.backend.exception.ValidationException;
 import com.np.pricehunt.backend.service.ProductTrackingService;
 import com.np.pricehunt.backend.service.dashboard.DashboardQueryService;
@@ -17,7 +18,9 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -86,6 +89,18 @@ public class DashboardController {
     @DeleteMapping("/{productId}")
     public ResponseEntity<Void> stopTracking(@PathVariable Long productId) {
         trackingService.stopTracking(productId);
+        return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * Hide or show one shop on the caller's dashboard (#250): 204, or 404 when the product is not the
+     * caller's or the listing is not under it. Idempotent. Under {@code /api/tracked-products} because
+     * it writes the caller's own state; {@code PATCH /api/products/**} edits the shared row and is admin.
+     */
+    @PatchMapping("/{productId}/listings/{itemId}")
+    public ResponseEntity<Void> setListingHidden(
+            @PathVariable Long productId, @PathVariable Long itemId, @RequestBody SetListingHiddenRequest request) {
+        trackingService.setListingHidden(productId, itemId, request);
         return ResponseEntity.noContent().build();
     }
 

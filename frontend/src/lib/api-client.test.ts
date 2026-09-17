@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { fetchDashboard, fetchListings, request, toBackendParams } from '@/lib/api-client'
+import { fetchDashboard, fetchListings, request, setListingHidden, toBackendParams } from '@/lib/api-client'
 import { ApiError } from '@/lib/api-error'
 import type { DashboardQuery } from '@/lib/types'
 
@@ -125,5 +125,42 @@ describe('request', () => {
     vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 204 }))
 
     await expect(request('/bff/api/me', { method: 'POST' })).resolves.toBeUndefined()
+  })
+})
+
+/** The first data mutation (#250): PATCH with a JSON body, CSRF on any non-GET, nothing to parse on 204. */
+describe('setListingHidden', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn())
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it('PATCHes the listing under the tracked product with a JSON body and the CSRF header, and resolves on 204', async () => {
+    vi.spyOn(document, 'cookie', 'get').mockReturnValue('__Host-XSRF-TOKEN=abc-123')
+    vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 204 }))
+
+    await expect(setListingHidden(7, 42, true)).resolves.toBeUndefined()
+
+    const [url, init] = vi.mocked(fetch).mock.calls[0]
+    expect(String(url)).toBe('/bff/api/tracked-products/7/listings/42')
+    expect((init as RequestInit).method).toBe('PATCH')
+    expect((init as RequestInit).body).toBe('{"hidden":true}')
+    expect((init as RequestInit).headers).toEqual({
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      'X-XSRF-TOKEN': 'abc-123',
+    })
+  })
+
+  it("rejects with the status on a 404 (not the caller's product or listing)", async () => {
+    vi.mocked(fetch).mockResolvedValue(new Response('', { status: 404, statusText: 'Not Found' }))
+
+    const error = await setListingHidden(7, 42, false).catch((e: unknown) => e)
+
+    expect(error).toBeInstanceOf(ApiError)
+    expect((error as ApiError).status).toBe(404)
   })
 })

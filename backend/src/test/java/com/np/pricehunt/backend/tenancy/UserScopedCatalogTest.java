@@ -33,8 +33,9 @@ import org.testcontainers.utility.DockerImageName;
 
 /**
  * The port's Postgres-only paths (#246): the {@code ON CONFLICT} membership insert, the native
- * latest-observation join, and that every read answers empty for the wrong user. Real Postgres like
- * {@code ShopNameMappingRepositoryTest}, and Flyway with {@code validate} so this doubles as a V17 gate.
+ * latest-observation join, the hide/show statements and their cascades (#250), and that every read
+ * answers empty for the wrong user. Real Postgres like {@code ShopNameMappingRepositoryTest}, and Flyway
+ * with {@code validate} so this doubles as a V17–V19 gate.
  */
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = Replace.NONE)
@@ -179,6 +180,95 @@ class UserScopedCatalogTest {
         assertThat(catalog.trackedProduct(alice, shared.getId())).isEmpty();
         assertThat(catalog.trackedProduct(bob, shared.getId())).isPresent();
         assertThat(em.find(Product.class, shared.getId())).isNotNull();
+    }
+
+    // --- hide / show (#250) ---
+
+    @Test
+    void hidingAListing_removesItFromBothFeeds_butThePerShopFeedStillReturnsItFlagged() {
+        catalog.track(alice, shared.getId());
+        catalog.track(bob, shared.getId());
+
+        assertThat(catalog.setListingHidden(alice, shared.getId(), sharedKsp.getId(), true))
+                .isTrue();
+
+        assertThat(catalog.listingsOfTrackedProducts(alice)).isEmpty();
+        assertThat(catalog.listings(alice, shared.getId())).isEmpty();
+        assertThat(catalog.listingsWithLatestObservation(alice, shared.getId(), NOW))
+                .singleElement()
+                .satisfies(row -> assertThat(row.getHidden()).isTrue());
+        // Still addressable by id: refresh, history and showing again all go through here.
+        assertThat(catalog.listing(alice, shared.getId(), sharedKsp.getId())).isPresent();
+        // Bob's view of the same shared listing is untouched.
+        assertThat(catalog.listings(bob, shared.getId())).hasSize(1);
+        assertThat(catalog.listingsWithLatestObservation(bob, shared.getId(), NOW))
+                .singleElement()
+                .satisfies(row -> assertThat(row.getHidden()).isFalse());
+    }
+
+    @Test
+    void hideAndShow_areIdempotent_andShowingRestoresTheFeeds() {
+        catalog.track(alice, shared.getId());
+
+        catalog.setListingHidden(alice, shared.getId(), sharedKsp.getId(), true);
+        catalog.setListingHidden(alice, shared.getId(), sharedKsp.getId(), true);
+        assertThat(hiddenRows()).isEqualTo(1);
+
+        assertThat(catalog.setListingHidden(alice, shared.getId(), sharedKsp.getId(), false))
+                .isTrue();
+        assertThat(catalog.setListingHidden(alice, shared.getId(), sharedKsp.getId(), false))
+                .isTrue();
+        assertThat(hiddenRows()).isZero();
+        assertThat(catalog.listings(alice, shared.getId())).hasSize(1);
+    }
+
+    @Test
+    void hiding_needsTheCallersMembership_andTheListingUnderThatProduct() {
+        catalog.track(alice, shared.getId());
+        Product other =
+                em.persist(Product.builder().name("Other " + System.nanoTime()).build());
+        catalog.track(alice, other.getId());
+        em.flush();
+
+        // Not a member.
+        assertThat(catalog.setListingHidden(bob, shared.getId(), sharedKsp.getId(), true))
+                .isFalse();
+        // A member of both products, but the listing is under the other one.
+        assertThat(catalog.setListingHidden(alice, other.getId(), sharedKsp.getId(), true))
+                .isFalse();
+        assertThat(hiddenRows()).isZero();
+    }
+
+    @Test
+    void hides_cascadeFromBothParents() {
+        catalog.track(alice, shared.getId());
+        catalog.setListingHidden(alice, shared.getId(), sharedKsp.getId(), true);
+        assertThat(hiddenRows()).isEqualTo(1);
+
+        // Stop tracking: the membership goes, and every hide under it with it.
+        catalog.stopTracking(alice, shared.getId());
+        assertThat(hiddenRows()).isZero();
+
+        // Catalog delete of the listing: same. (The admin path deletes through JPA, which removes the
+        // price records first; here the point is the database cascade on hidden_listing alone.)
+        catalog.track(alice, shared.getId());
+        catalog.setListingHidden(alice, shared.getId(), sharedKsp.getId(), true);
+        em.getEntityManager()
+                .createNativeQuery("DELETE FROM price_record WHERE tracked_item_id = :id")
+                .setParameter("id", sharedKsp.getId())
+                .executeUpdate();
+        em.getEntityManager()
+                .createNativeQuery("DELETE FROM tracked_item WHERE id = :id")
+                .setParameter("id", sharedKsp.getId())
+                .executeUpdate();
+        assertThat(hiddenRows()).isZero();
+    }
+
+    private int hiddenRows() {
+        return ((Number) em.getEntityManager()
+                        .createNativeQuery("SELECT COUNT(*) FROM hidden_listing")
+                        .getSingleResult())
+                .intValue();
     }
 
     private Instant addedAt(long userId) {

@@ -598,6 +598,12 @@ class TrackedProductQueryServiceTest {
             return lastChecked;
         }
 
+        /** Never hidden in this fixture: visibility is the panel feed's business, proven on Postgres. */
+        @Override
+        public boolean getHidden() {
+            return false;
+        }
+
         @Override
         public BigDecimal getPrice() {
             return price;

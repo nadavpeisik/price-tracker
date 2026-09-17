@@ -1,23 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { dispatchMatchMediaChange, resetMatchMedia, setMatchMediaMatches } from '@/test/setup'
 import { Dashboard } from '@/components/dashboard/Dashboard'
+import { UNDO_WINDOW_MS } from '@/components/dashboard/ListingPanel'
 import type { DashboardResponse, Listing, TrackedProduct } from '@/lib/types'
 
 /* ── api-client mock (the Dashboard's only IO boundary) ─────────────── */
 
-const { fetchDashboardMock, fetchListingsMock } = vi.hoisted(() => ({
+const { fetchDashboardMock, fetchListingsMock, setListingHiddenMock } = vi.hoisted(() => ({
   fetchDashboardMock: vi.fn(),
   fetchListingsMock: vi.fn(),
+  setListingHiddenMock: vi.fn(),
 }))
 
 vi.mock('@/lib/api-client', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api-client')>()),
   fetchDashboard: fetchDashboardMock,
   fetchListings: fetchListingsMock,
+  setListingHidden: setListingHiddenMock,
 }))
 
 /* ── fixtures ────────────────────────────────────────────────────────── */
@@ -101,6 +104,7 @@ const LISTINGS: Listing[] = [
     priceConverted: '120.00',
     priceConvertedCurrency: 'ILS',
     conversionStale: false,
+    hidden: false,
     availability: 'UNKNOWN',
     lastChecked: null,
   },
@@ -113,6 +117,7 @@ const LISTINGS: Listing[] = [
     priceConverted: '100.00',
     priceConvertedCurrency: 'ILS',
     conversionStale: false,
+    hidden: false,
     availability: 'AVAILABLE',
     lastChecked: new Date(Date.now() - 2 * HOUR).toISOString(),
     // 2 hours ago → "checked 2h ago"
@@ -356,6 +361,7 @@ describe('Dashboard', () => {
         priceConverted: '382.00',
         priceConvertedCurrency: 'ILS',
         conversionStale: true,
+        hidden: false,
         availability: 'AVAILABLE',
         lastChecked: new Date(Date.now() - 2 * HOUR).toISOString(),
       },
@@ -368,6 +374,7 @@ describe('Dashboard', () => {
         priceConverted: null, // no rate → unconvertible
         priceConvertedCurrency: null,
         conversionStale: false,
+        hidden: false,
         availability: 'UNKNOWN',
         lastChecked: new Date(Date.now() - 3 * HOUR).toISOString(),
       },
@@ -380,6 +387,7 @@ describe('Dashboard', () => {
         priceConverted: null,
         priceConvertedCurrency: null,
         conversionStale: false,
+        hidden: false,
         availability: 'UNKNOWN',
         lastChecked: new Date(Date.now() - 9 * 24 * HOUR).toISOString(),
       },
@@ -503,5 +511,431 @@ describe('Dashboard', () => {
     await waitFor(() =>
       expect(within(screen.getByLabelText('Tracking summary')).getByText('4')).toBeInTheDocument(),
     )
+  })
+
+  /* ── hide / show listings (#250) ───────────────────────────────────── */
+
+  const withHiddenBug = (): Listing[] => [{ ...LISTINGS[0], hidden: true }, LISTINGS[1]]
+
+  async function openSonyPanel(user: ReturnType<typeof userEvent.setup>) {
+    await screen.findByRole('button', { name: 'Sony WH-1000XM5' })
+    await user.click(screen.getByRole('button', { name: 'Sony WH-1000XM5' }))
+    const region = await screen.findByRole('region', { name: 'Sony WH-1000XM5' })
+    await within(region).findByText('KSP')
+    return region
+  }
+
+  it('hiding a shop removes its row at once and leaves an undo line in its slot', async () => {
+    setListingHiddenMock.mockResolvedValue(undefined)
+    const user = userEvent.setup()
+    renderDashboard()
+    const region = await openSonyPanel(user)
+
+    await user.click(within(region).getByRole('button', { name: 'Hide KSP' }))
+
+    expect(setListingHiddenMock).toHaveBeenCalledWith(1, 11, true)
+    expect(await within(region).findByRole('button', { name: /^Undo hiding/ })).toBeInTheDocument()
+    expect(within(region).queryByRole('button', { name: 'Hide KSP' })).not.toBeInTheDocument()
+    // The row's own slot, not appended at the end: Bug is still handed first on the wire.
+    expect(within(region).getByText('Bug')).toBeInTheDocument()
+  })
+
+  it('the undo line survives the refetch that flags the row hidden', async () => {
+    // The trap: the refetch returns the row as hidden, and the filter that hides
+    // rows would drop the undo line with it before its window is up.
+    setListingHiddenMock.mockResolvedValue(undefined)
+    const user = userEvent.setup()
+    renderDashboard()
+    const region = await openSonyPanel(user)
+    fetchListingsMock.mockResolvedValue([LISTINGS[0], { ...LISTINGS[1], hidden: true }])
+
+    await user.click(within(region).getByRole('button', { name: 'Hide KSP' }))
+
+    await waitFor(() => expect(fetchListingsMock.mock.calls.length).toBeGreaterThan(1))
+    expect(within(region).getByRole('button', { name: /^Undo hiding/ })).toBeInTheDocument()
+    // And it is NOT also listed in the hidden section — that would show it twice.
+    expect(within(region).queryByRole('button', { name: /^Hidden shops? \(/ })).not.toBeInTheDocument()
+  })
+
+  it('Undo restores the shop', async () => {
+    setListingHiddenMock.mockResolvedValue(undefined)
+    const user = userEvent.setup()
+    renderDashboard()
+    const region = await openSonyPanel(user)
+    await user.click(within(region).getByRole('button', { name: 'Hide KSP' }))
+    const undo = await within(region).findByRole('button', { name: /^Undo hiding/ })
+
+    await user.click(undo)
+
+    expect(setListingHiddenMock).toHaveBeenLastCalledWith(1, 11, false)
+  })
+
+  it('moves focus to Undo after a KEYBOARD hide, since the button pressed no longer exists', async () => {
+    setListingHiddenMock.mockResolvedValue(undefined)
+    const user = userEvent.setup()
+    renderDashboard()
+    const region = await openSonyPanel(user)
+    within(region).getByRole('button', { name: 'Hide KSP' }).focus()
+
+    await user.keyboard('{Enter}')
+
+    const undo = await within(region).findByRole('button', { name: /^Undo hiding/ })
+    await waitFor(() => expect(undo).toHaveFocus())
+  })
+
+  it('leaves focus alone after a POINTER hide, so the window is not held open by it', async () => {
+    setListingHiddenMock.mockResolvedValue(undefined)
+    const user = userEvent.setup()
+    renderDashboard()
+    const region = await openSonyPanel(user)
+
+    await user.click(within(region).getByRole('button', { name: 'Hide KSP' }))
+
+    expect(await within(region).findByRole('button', { name: /^Undo hiding/ })).not.toHaveFocus()
+  })
+
+  it('holds the window open while Undo has focus, and lets it close once focus leaves', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      setListingHiddenMock.mockResolvedValue(undefined)
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      renderDashboard()
+      const region = await openSonyPanel(user)
+      within(region).getByRole('button', { name: 'Hide KSP' }).focus()
+      await user.keyboard('{Enter}')
+      const undo = await within(region).findByRole('button', { name: /^Undo hiding/ })
+      await waitFor(() => expect(undo).toHaveFocus())
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(UNDO_WINDOW_MS * 3)
+      })
+      // Parked on the control: the window cannot expire under the user.
+      expect(within(region).getByRole('button', { name: /^Undo hiding/ })).toBeInTheDocument()
+
+      await act(async () => {
+        undo.blur()
+        await vi.advanceTimersByTimeAsync(100)
+      })
+
+      expect(within(region).queryByRole('button', { name: /^Undo hiding/ })).not.toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('announces the hide politely, because a visual swap says nothing to a screen reader', async () => {
+    setListingHiddenMock.mockResolvedValue(undefined)
+    const user = userEvent.setup()
+    renderDashboard()
+    const region = await openSonyPanel(user)
+
+    await user.click(within(region).getByRole('button', { name: 'Hide KSP' }))
+
+    const status = await within(region).findByRole('status')
+    expect(status).toHaveTextContent('KSP hidden')
+  })
+
+  it('the undo line expires after its window and the shop joins the hidden section', async () => {
+    // `shouldAdvanceTime` keeps findBy*/waitFor working on wall clock while still
+    // letting the 6s window be jumped; plain fake timers would hang both.
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      setListingHiddenMock.mockResolvedValue(undefined)
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      renderDashboard()
+      const region = await openSonyPanel(user)
+      fetchListingsMock.mockResolvedValue([LISTINGS[0], { ...LISTINGS[1], hidden: true }])
+      await user.click(within(region).getByRole('button', { name: 'Hide KSP' }))
+      await within(region).findByRole('button', { name: /^Undo hiding/ })
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(UNDO_WINDOW_MS + 100)
+      })
+
+      expect(within(region).queryByRole('button', { name: /^Undo hiding/ })).not.toBeInTheDocument()
+      expect(within(region).getByRole('button', { name: /Hidden shop \(1\)/ })).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a failed Undo keeps the row in place saying so, never silently in the collapsed section', async () => {
+    setListingHiddenMock.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('boom'))
+    const user = userEvent.setup()
+    renderDashboard()
+    const region = await openSonyPanel(user)
+    await user.click(within(region).getByRole('button', { name: 'Hide KSP' }))
+
+    await user.click(await within(region).findByRole('button', { name: /^Undo hiding/ }))
+
+    // The alert sits in the row's own slot, and the control now offers a RETRY of
+    // the restore — calling it "Undo hiding" would name the wrong operation.
+    expect(await within(region).findByRole('alert')).toHaveTextContent("Couldn't restore KSP.")
+    expect(within(region).getByRole('button', { name: 'Retry restoring KSP' })).toBeInTheDocument()
+    expect(within(region).queryByRole('button', { name: /^Undo hiding/ })).not.toBeInTheDocument()
+  })
+
+  it('a failed keyboard Undo lands focus on the Retry that replaced it', async () => {
+    setListingHiddenMock.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('boom'))
+    const user = userEvent.setup()
+    renderDashboard()
+    const region = await openSonyPanel(user)
+    within(region).getByRole('button', { name: 'Hide KSP' }).focus()
+    await user.keyboard('{Enter}')
+    const undo = await within(region).findByRole('button', { name: 'Undo hiding KSP' })
+    await waitFor(() => expect(undo).toHaveFocus())
+
+    // Enter on the focused Undo: the control unmounts for the restoring phase,
+    // so focus must land on the Retry rather than falling to the document.
+    await user.keyboard('{Enter}')
+
+    const retry = await within(region).findByRole('button', { name: 'Retry restoring KSP' })
+    await waitFor(() => expect(retry).toHaveFocus())
+  })
+
+  it('lists already-hidden shops in a collapsed section that says they are excluded', async () => {
+    fetchListingsMock.mockResolvedValue(withHiddenBug())
+    const user = userEvent.setup()
+    renderDashboard()
+    const region = await openSonyPanel(user)
+
+    // Not rendered as a row…
+    expect(within(region).queryByText('Bug')).not.toBeInTheDocument()
+    // …and the section names the count and the consequence.
+    const toggle = within(region).getByRole('button', { name: /Hidden shop \(1\)/ })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(within(region).getByText('excluded from price comparisons')).toBeInTheDocument()
+
+    await user.click(toggle)
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(within(region).getByText('Bug')).toBeInTheDocument()
+    // Best stays on the visible KSP row and never appears on the hidden one; the
+    // hidden row's control is Restore, not a second Hide.
+    expect(within(region).getAllByText('Best')).toHaveLength(1)
+    expect(within(region).getByText('Best').closest('.shop-color')).toHaveTextContent('KSP')
+    expect(within(region).getByRole('button', { name: /^Restore/ })).toBeInTheDocument()
+    expect(within(region).queryByRole('button', { name: 'Hide Bug' })).not.toBeInTheDocument()
+  })
+
+  it('Restore from the hidden section brings the shop back', async () => {
+    fetchListingsMock.mockResolvedValue(withHiddenBug())
+    setListingHiddenMock.mockResolvedValue(undefined)
+    const user = userEvent.setup()
+    renderDashboard()
+    const region = await openSonyPanel(user)
+    await user.click(within(region).getByRole('button', { name: /Hidden shop \(1\)/ }))
+
+    await user.click(within(region).getByRole('button', { name: /^Restore/ }))
+
+    expect(setListingHiddenMock).toHaveBeenCalledWith(1, 12, false)
+  })
+
+  it('shows hidden shops directly when none are left visible, rather than behind a toggle', async () => {
+    fetchListingsMock.mockResolvedValue(LISTINGS.map((l) => ({ ...l, hidden: true })))
+    const user = userEvent.setup()
+    renderDashboard()
+    await screen.findByRole('button', { name: 'Sony WH-1000XM5' })
+    await user.click(screen.getByRole('button', { name: 'Sony WH-1000XM5' }))
+    const region = await screen.findByRole('region', { name: 'Sony WH-1000XM5' })
+
+    expect(await within(region).findByText(/All shops are hidden/)).toBeInTheDocument()
+    expect(within(region).queryByRole('button', { name: /Hidden shops/ })).not.toBeInTheDocument()
+    expect(within(region).getAllByRole('button', { name: /^Restore/ })).toHaveLength(2)
+    // Distinct from a product the catalogue has no listings for at all.
+    expect(within(region).queryByText(/No shops tracked for this product yet/)).not.toBeInTheDocument()
+  })
+
+  it('a reorder caused by a hide lands at once, not behind "Prices updated"', async () => {
+    // The background-reorder guard exists to stop rows moving under a READER; someone who
+    // just hid a shop asked for the reorder, so it must commit without a second click.
+    const [sony, airpods] = PRODUCTS
+    fetchDashboardMock.mockResolvedValue(response([sony, airpods]))
+    setListingHiddenMock.mockResolvedValue(undefined)
+    const user = userEvent.setup()
+    renderDashboard()
+    const region = await openSonyPanel(user)
+    fetchDashboardMock.mockResolvedValue(response([airpods, sony]))
+
+    await user.click(within(region).getByRole('button', { name: 'Hide KSP' }))
+
+    await waitFor(() => {
+      const names = screen.getAllByRole('button', { name: /Sony WH-1000XM5|Apple AirPods Pro 2/ })
+      expect(names.map((n) => n.textContent)).toEqual(['Apple AirPods Pro 2', 'Sony WH-1000XM5'])
+    })
+    expect(screen.queryByRole('button', { name: /Prices updated/ })).not.toBeInTheDocument()
+  })
+
+  it('two overlapping hides both commit their reorder, with no owed commit left behind', async () => {
+    // A count would assume one dashboard response per mutation, which coalescing
+    // breaks; a leaked count would then let a LATER background reorder through.
+    const [sony, airpods] = PRODUCTS
+    fetchDashboardMock.mockResolvedValue(response([sony, airpods]))
+    // Both hides are held IN FLIGHT and released together, so their
+    // invalidations can coalesce into one refetch — the case a per-mutation
+    // count got wrong. Resolving each click in turn would serialise them and
+    // test nothing.
+    const release: Array<() => void> = []
+    setListingHiddenMock.mockImplementation(
+      () => new Promise<void>((resolve) => release.push(() => resolve())),
+    )
+    const user = userEvent.setup()
+    const { client } = renderDashboard()
+    const region = await openSonyPanel(user)
+    fetchDashboardMock.mockResolvedValue(response([airpods, sony]))
+
+    await user.click(within(region).getByRole('button', { name: 'Hide KSP' }))
+    await user.click(within(region).getByRole('button', { name: 'Hide Bug' }))
+    expect(release).toHaveLength(2)
+    await act(async () => {
+      release.forEach((resolve) => resolve())
+    })
+
+    await waitFor(() => {
+      const names = screen.getAllByRole('button', { name: /Sony WH-1000XM5|Apple AirPods Pro 2/ })
+      expect(names.map((n) => n.textContent)).toEqual(['Apple AirPods Pro 2', 'Sony WH-1000XM5'])
+    })
+    expect(screen.queryByRole('button', { name: /Prices updated/ })).not.toBeInTheDocument()
+
+    // Nothing owed: a genuine BACKGROUND reorder now parks, as it must.
+    fetchDashboardMock.mockResolvedValue(response([sony, airpods]))
+    await act(async () => {
+      await client.refetchQueries({ queryKey: ['dashboard'] })
+    })
+    expect(await screen.findByRole('button', { name: /Prices updated/ })).toBeInTheDocument()
+  })
+
+  it('commits a hide-driven reorder whose response arrives LATER, not in the same batch', async () => {
+    // The case instant mocks cannot show. With a deferred response the render
+    // that arms the marker still holds the cached data, so anything consumed by
+    // "a render happened" is gone before the refetch lands and the reorder parks.
+    const [sony, airpods] = PRODUCTS
+    fetchDashboardMock.mockResolvedValue(response([sony, airpods]))
+    setListingHiddenMock.mockResolvedValue(undefined)
+    const user = userEvent.setup()
+    renderDashboard()
+    const region = await openSonyPanel(user)
+
+    let releaseDashboard: (() => void) | undefined
+    fetchDashboardMock.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releaseDashboard = () => resolve(response([airpods, sony]))
+        }),
+    )
+
+    await user.click(within(region).getByRole('button', { name: 'Hide KSP' }))
+    await waitFor(() => expect(releaseDashboard).toBeDefined())
+    await act(async () => {
+      releaseDashboard?.()
+    })
+
+    await waitFor(() => {
+      const names = screen.getAllByRole('button', { name: /Sony WH-1000XM5|Apple AirPods Pro 2/ })
+      expect(names.map((n) => n.textContent)).toEqual(['Apple AirPods Pro 2', 'Sony WH-1000XM5'])
+    })
+    expect(screen.queryByRole('button', { name: /Prices updated/ })).not.toBeInTheDocument()
+  })
+
+  it('a commit mark does not survive a view change, so the new view still parks background reorders', async () => {
+    // Filtering mid-mutation swaps the query underneath. A mark that was just a
+    // number would be compared against the NEW query's counter and could wave an
+    // unrelated reorder through.
+    const [sony, airpods] = PRODUCTS
+    fetchDashboardMock.mockResolvedValue(response([sony, airpods]))
+    setListingHiddenMock.mockResolvedValue(undefined)
+    const user = userEvent.setup()
+    const { client } = renderDashboard()
+    const region = await openSonyPanel(user)
+
+    // Warm the filtered view's counter ABOVE the unfiltered one's, which is what
+    // makes an unbound mark dangerous: a stale count from a freshly-loaded view
+    // is satisfied by any response in a view that has been fetched more often.
+    const chips = screen.getByRole('toolbar', { name: 'Filter by shop' })
+    for (let visit = 0; visit < 3; visit += 1) {
+      await user.click(within(chips).getByRole('button', { name: /KSP/ }))
+      await waitFor(() => expect(window.location.search).toBe('?shop=KSP'))
+      await user.click(within(chips).getByRole('button', { name: /KSP/ }))
+      await waitFor(() => expect(window.location.search).toBe(''))
+    }
+
+    // Hold the UNFILTERED refetch open so the mark is still armed when the view
+    // changes; the filtered view keeps resolving, so only its counter advances.
+    fetchDashboardMock.mockImplementation((q: { shops?: string[] }) =>
+      q.shops === undefined
+        ? new Promise(() => undefined)
+        : Promise.resolve(response([sony, airpods])),
+    )
+    await user.click(within(region).getByRole('button', { name: 'Hide KSP' }))
+    await user.click(within(chips).getByRole('button', { name: /KSP/ }))
+    await waitFor(() => expect(window.location.search).toBe('?shop=KSP'))
+    await screen.findByRole('button', { name: 'Sony WH-1000XM5' })
+
+    // A genuine background reorder in the NEW view must still park.
+    fetchDashboardMock.mockResolvedValue(response([airpods, sony]))
+    await act(async () => {
+      await client.refetchQueries({ queryKey: ['dashboard'] })
+    })
+
+    expect(await screen.findByRole('button', { name: /Prices updated/ })).toBeInTheDocument()
+  })
+
+  it('each undo window runs on its own clock; focusing one does not hold the others open', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      setListingHiddenMock.mockResolvedValue(undefined)
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      renderDashboard()
+      const region = await openSonyPanel(user)
+
+      // Both by pointer, so neither takes focus on its own; then park on one.
+      // (Clicking a second control would blur the first, which correctly ends
+      // its protection — the hold has to be tested without an intervening click.)
+      await user.click(within(region).getByRole('button', { name: 'Hide Bug' }))
+      await within(region).findByRole('button', { name: 'Undo hiding Bug' })
+      await user.click(within(region).getByRole('button', { name: 'Hide KSP' }))
+      await within(region).findByRole('button', { name: 'Undo hiding KSP' })
+
+      await act(async () => {
+        within(region).getByRole('button', { name: 'Undo hiding Bug' }).focus()
+        await vi.advanceTimersByTimeAsync(UNDO_WINDOW_MS + 100)
+      })
+
+      // The focused row is held open; the unfocused one expired on its own clock.
+      expect(within(region).getByRole('button', { name: 'Undo hiding Bug' })).toBeInTheDocument()
+      expect(within(region).queryByRole('button', { name: 'Undo hiding KSP' })).not.toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a failed hide surfaces an alert under the row and leaves the panel usable', async () => {
+    setListingHiddenMock.mockRejectedValue(new Error('boom'))
+    const user = userEvent.setup()
+    renderDashboard()
+    const region = await openSonyPanel(user)
+
+    await user.click(within(region).getByRole('button', { name: 'Hide KSP' }))
+
+    expect(await within(region).findByRole('alert')).toHaveTextContent("Couldn't hide KSP")
+    expect(within(region).getByRole('button', { name: 'Hide KSP' })).toBeEnabled()
+  })
+
+  it('a product with every shop hidden reads "No visible shops", never "0 of 0 in stock"', async () => {
+    fetchDashboardMock.mockResolvedValue(
+      response([
+        product({
+          id: 5,
+          name: 'Hidden-only lamp',
+          bestPriceConverted: null,
+          bestPriceShop: null,
+          bestTrackedItemId: null,
+          availability: { status: 'UNKNOWN', availableCount: 0, total: 0 },
+        }),
+      ]),
+    )
+    renderDashboard()
+    await screen.findByRole('button', { name: 'Hidden-only lamp' })
+    expect(screen.getAllByText('No visible shops')).toHaveLength(2)
   })
 })

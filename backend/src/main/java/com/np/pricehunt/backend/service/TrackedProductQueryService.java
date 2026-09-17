@@ -210,7 +210,8 @@ public class TrackedProductQueryService {
             String priceConvertedCurrency,
             boolean conversionStale,
             AvailabilityStatus availability,
-            Instant lastChecked) {
+            Instant lastChecked,
+            boolean hidden) {
 
         ProductListingResponse toResponse() {
             return new ProductListingResponse(
@@ -223,7 +224,8 @@ public class TrackedProductQueryService {
                     priceConvertedCurrency,
                     conversionStale,
                     availability,
-                    lastChecked);
+                    lastChecked,
+                    hidden);
         }
     }
 
@@ -239,7 +241,8 @@ public class TrackedProductQueryService {
                     null,
                     false,
                     AvailabilityStatus.UNKNOWN,
-                    row.getLastChecked());
+                    row.getLastChecked(),
+                    row.getHidden());
         }
 
         AvailabilityStatus availability =
@@ -258,6 +261,7 @@ public class TrackedProductQueryService {
                 converted == null ? null : displayCurrency,
                 converted != null && converted.stale(),
                 availability,
-                row.getLastChecked());
+                row.getLastChecked(),
+                row.getHidden());
     }
 }
