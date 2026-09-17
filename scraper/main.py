@@ -1,4 +1,3 @@
-import contextvars
 import logging
 import platform
 import re
@@ -7,10 +6,12 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import NamedTuple
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from playwright.async_api import Browser, async_playwright
+from starlette.datastructures import Headers, MutableHeaders
 
 from browser_scripts import load_script
+from logging_config import configure_logging, correlation_id
 
 # Re-exported for `from main import ...` consumers (tests). DTOs live in models.py so site
 # handlers (sites/ksp.py) can import them without a circular import back to main.
@@ -28,23 +29,7 @@ browser: Browser | None = None
 
 logger = logging.getLogger(__name__)
 
-_correlation_id: contextvars.ContextVar[str] = contextvars.ContextVar("correlation_id", default="-")
-
-_original_log_record_factory = logging.getLogRecordFactory()
-
-
-def _log_record_factory(*args, **kwargs):
-    record = _original_log_record_factory(*args, **kwargs)
-    record.correlation_id = _correlation_id.get()
-    return record
-
-
-logging.setLogRecordFactory(_log_record_factory)
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(correlation_id)s] %(levelname)s %(name)s - %(message)s",
-)
+configure_logging()  # must stay at import — see logging_config's module docstring
 
 # JavaScript run via page.evaluate() to strip noise from the DOM before extraction
 # `<style>` is intentionally NOT pruned: stylesheets contain the display:none rules
@@ -168,19 +153,48 @@ async def lifespan(app: FastAPI):
                 await to_close.close()
 
 
-app = FastAPI(lifespan=lifespan)
+api = FastAPI(lifespan=lifespan)
 
 
-@app.middleware("http")
-async def correlation_id_middleware(request: Request, call_next):
-    cid = request.headers.get("X-Correlation-ID") or str(uuid.uuid4())
-    token = _correlation_id.set(cid)
-    try:
-        response = await call_next(request)
-        response.headers["X-Correlation-ID"] = cid
-        return response
-    finally:
-        _correlation_id.reset(token)
+class CorrelationIdMiddleware:
+    """Binds the caller's `X-Correlation-ID` to the request context, and echoes it back.
+
+    Raw ASGI, not `@api.middleware("http")`: `BaseHTTPMiddleware` hands the response back to the
+    ASGI layer before it is sent, so the context would already be gone when uvicorn writes
+    `http.response.start` — which is where uvicorn emits its access line.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request_correlation_id = Headers(scope=scope).get("X-Correlation-ID") or str(uuid.uuid4())
+        token = correlation_id.set(request_correlation_id)
+
+        async def send_with_correlation_id(message):
+            if message["type"] == "http.response.start":
+                MutableHeaders(scope=message)["X-Correlation-ID"] = request_correlation_id
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_with_correlation_id)
+        except BaseException:
+            # No reset: uvicorn logs the "Exception in ASGI application" traceback after this
+            # propagates out. Safe because each request cycle is its own asyncio task, so the
+            # context dies with it. Pinned by test_the_500_response_is_correlated_too.
+            raise
+        else:
+            correlation_id.reset(token)
+
+
+# Wrapped from outside, not `api.add_middleware(...)`: Starlette builds its stack as
+# ServerErrorMiddleware -> user middleware -> routes, so the normal way would leave this inside the
+# 500 handler. Pinned by test_the_500_response_is_correlated_too.
+app = CorrelationIdMiddleware(api)
 
 
 async def _extract_snippet(page) -> str | None:
@@ -466,7 +480,7 @@ def _snippet_has_useful_content(snippet: str) -> bool:
     return len(snippet) >= 15 and any(c.isalpha() for c in snippet)
 
 
-@app.post("/scrape", response_model=ScrapeResponse)
+@api.post("/scrape", response_model=ScrapeResponse)
 async def scrape(request: ScrapeRequest):
     if not request.url.startswith(("http://", "https://")):
         raise HTTPException(status_code=400, detail="URL must use http or https scheme")
@@ -624,6 +638,6 @@ async def scrape(request: ScrapeRequest):
         await context.close()
 
 
-@app.get("/health")
+@api.get("/health")
 async def health():
     return {"status": "ok"}
