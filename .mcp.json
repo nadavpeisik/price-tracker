@@ -4,6 +4,15 @@
       "command": "bash",
       "args": ["${CLAUDE_PROJECT_DIR:-.}/scripts/postgres-mcp.sh"],
       "env": {}
+    },
+    "github": {
+      "type": "http",
+      "url": "https://api.githubcopilot.com/mcp/readonly",
+      "headers": {
+        "Authorization": "Bearer ${GITHUB_MCP_PAT}",
+        "X-MCP-Readonly": "true",
+        "X-MCP-Toolsets": "issues,pull_requests"
+      }
     }
   }
 }

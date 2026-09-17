@@ -14,7 +14,7 @@ of a working symlink; verify with `cat AGENTS.md` after checkout if in doubt.
 ```text
 price-tracker/
 ├── compose.yaml      ← orchestrates postgres, scraper, and grafana (the LLM is hosted; local Ollama runs natively)
-├── .mcp.json         ← MCP servers an agent gets in this repo (read-only Postgres, #261)
+├── .mcp.json         ← MCP servers an agent gets in this repo (read-only Postgres + GitHub)
 ├── backend/          ← Spring Boot backend (bearer-only resource server)
 ├── bff/              ← Spring Boot BFF: Auth0 login, cookie session in Postgres, /bff/api proxy (#247)
 ├── scraper/          ← Python FastAPI + Playwright scraper
@@ -208,11 +208,13 @@ Guardrails (same model as the diff review and issue #81):
 
 ## MCP servers (`.mcp.json`)
 
-`.mcp.json` at the repo root declares one server, `postgres` (#261), launched by
-`scripts/postgres-mcp.sh`. It gives an agent read-only SQL against the **dev** database, so
-schema and row state can be read directly instead of inferred from migration files or a
-`docker exec` psql session. Project-scoped, so each person approves it once on first launch
-(`claude mcp list` shows `Pending approval` until they do).
+`.mcp.json` at the repo root declares two servers, `postgres` (#261) and `github` (#262). Both are
+project-scoped, so each person approves them once on first launch (`claude mcp list` shows
+`Pending approval` until they do).
+
+**`postgres`** is launched by `scripts/postgres-mcp.sh`. It gives an agent read-only SQL against the
+**dev** database, so schema and row state can be read directly instead of inferred from migration
+files or a `docker exec` psql session.
 
 Dev-only, and read-only by construction: it connects as `grafana_reader` (#242's SELECT-only
 role) and passes `--access-mode=restricted`, which also runs every statement in a `READ ONLY`
@@ -229,6 +231,23 @@ authenticate; create it once with
 `docker compose exec postgres bash /docker-entrypoint-initdb.d/create-grafana-role.sh`.
 
 Threat model, the pinned CVE, and the measurements behind all of the above are in the PR for #261.
+
+**`github`** is the remote, GitHub-hosted server, so nothing runs locally for it. Use it to read
+issue / PR / review-thread state (`pull_request_read` returns threads with `is_resolved`); `gh`
+stays the tool for every write, and `scripts/get-review-diff.sh` is untouched. Read-only by URL,
+scoped to `issues,pull_requests`.
+
+**Do not turn on `X-MCP-Lockdown`** — it drops comments from users without push access, which here
+silently removes CodeRabbit's review threads while the call still looks like it worked.
+
+Auth is a PAT, not OAuth: GitHub's authorization server has no dynamic client registration, so
+Claude Code's browser flow fails with *"Incompatible auth server"*. Export it before launching —
+Claude Code reads the process environment, not `.env`:
+
+```bash
+export GITHUB_MCP_PAT='github_pat_...'   # fine-grained, this repo only,
+                                         # Metadata + Issues + Pull requests = Read-only
+```
 
 ## Architecture
 
