@@ -905,7 +905,7 @@ class _LaunchedBrowser:
 # never builds scraper/Dockerfile). Re-check that resolution when bumping playwright.
 async def test_lifespan_launches_and_closes_browser():
     assert main.browser is None
-    async with main.lifespan(main.app):
+    async with main.lifespan(main.api):
         assert main.browser is not None
         assert main.browser.is_connected() is True
     assert main.browser is None
@@ -933,7 +933,7 @@ async def test_lifespan_launches_with_full_chromium_channel(monkeypatch):
             return False
 
     monkeypatch.setattr(main, "async_playwright", _RecordingPlaywright)
-    async with main.lifespan(main.app):
+    async with main.lifespan(main.api):
         pass
 
     assert recorded["channel"] == "chromium"

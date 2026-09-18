@@ -24,7 +24,7 @@ RUN pip install --no-cache-dir --require-hashes --only-binary=:all: -r requireme
 # NOT pip-installed: uvicorn puts /app first on sys.path, so these files are imported directly.
 # (This replaced a placeholder-file trick whose only purpose was to make `pip install .` resolve
 # dependencies; installing the lock directly does that, so the trick and its build backend are gone.)
-COPY main.py models.py ./
+COPY main.py models.py logging_config.py ./
 COPY sites ./sites
 COPY browser_scripts ./browser_scripts
 
