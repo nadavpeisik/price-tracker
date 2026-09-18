@@ -288,12 +288,20 @@ def probe_run(tmp_path_factory):
 
 
 def _request_lines_by_logger(run, request_correlation_id: str) -> dict:
-    """The request's lines, keyed by logger — one line per logger is all these requests emit."""
-    return {
-        line["log"]["logger"]: line
-        for line in run.lines
-        if line["correlationId"] == request_correlation_id
-    }
+    """The request's lines, keyed by logger.
+
+    Asserts one line per logger rather than letting a later line overwrite an earlier one: a
+    `propagate: True` slip would emit each uvicorn line twice, once through its own handler and
+    once through root's, and every assertion below would still pass.
+    """
+    by_logger = {}
+    for line in run.lines:
+        if line["correlationId"] != request_correlation_id:
+            continue
+        logger = line["log"]["logger"]
+        assert logger not in by_logger, f"{logger} logged twice for {request_correlation_id}"
+        by_logger[logger] = line
+    return by_logger
 
 
 def test_uvicorn_access_line_carries_the_callers_correlation_id(probe_run):
