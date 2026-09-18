@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Console only: tests must never write the ECS file that application.properties configures, because a
+  running dev app owns it and Alloy will tail it (#277).
+
+  Why a file and not a test property. Boot's LogbackLoggingSystem.initialize() returns early once the
+  JVM's LoggerContext is marked initialized, so the FIRST Spring context in a surefire fork configures
+  logging for the whole run and no later context can move the appender. logback-test.xml is honoured
+  by every runner, including an IDE JUnit run that never sees surefire configuration, and it is
+  test-scope, so production logging is untouched. Boot still applies logging.level.* on top.
+-->
+<configuration>
+	<include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+	<include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+	<root level="INFO">
+		<appender-ref ref="CONSOLE"/>
+	</root>
+</configuration>

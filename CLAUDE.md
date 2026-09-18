@@ -223,7 +223,7 @@ Guardrails (same model as the diff review and issue #81):
 - **ArchUnit (`architecture/TenancyBoundaryTest`) enforces it**: a class that depends on `CurrentUser` may not depend on any `Repository` (whoever knows the caller talks to data only through the port); only `..tenancy..`/`..repository..`/`..dev..` may touch `UserProductRepository`; `..scheduler..` never reaches `CurrentUser`, even transitively; controllers depend on neither repositories nor `CurrentUser`; only `..auth..` reads `SecurityContextHolder`. So: user-facing services (`DashboardQueryService`, `TrackedProductQueryService`, `ProductTrackingService`) hold `CurrentUser` + the port; engines (`PriceCheckPipeline`, `DashboardSnapshotService`, `PriceTrendService`) hold repositories and take ids/refs the port produced; `ProductCatalogService` is the catalog half (create, admit listing, edit, hard delete) and knows no user.
 - Routes: every read and every user mutation resolves through membership. `PATCH`/`DELETE /api/products/**` change the shared row for everyone and are **admin-only** in `SecurityConfig` (ahead of the `/api/**` rule); a user's own removal is `DELETE /api/tracked-products/{productId}` = delete one `user_product` row, catalog untouched. Creating a product (`POST /api/products`) also tracks it for the creator, or they would 404 on their own row.
 - Proof: `tenancy/TenancyRouteMatrixTest` (two users, real chain + Postgres, DB-state assertions after every mutation) and `scheduler/SchedulerRunsWithoutPrincipalTest` (security context cleared; the whole catalog, including listings nobody tracks, still refreshes — "unlinked items keep being scraped" is the settled epic decision).
-- Per-listing state (hide one shop) is a sparse child of `user_product` that arrives with its first writer (#250); `added_at` is stored now and projected when #226 reads it; notification grain is Phase 3's.
+- Per-listing state is `hidden_listing` (V19, #250): a **presence-only** child of `user_product` — a row means "this membership hides this listing", no flag column — with both FKs `ON DELETE CASCADE`, so stop-tracking takes every hide with it and a catalog delete takes its hides along. The two feeds that drive calculations (`findListingsOfTrackedProducts` for the dashboard, `findListings` for the price-trend endpoint) outer-join it and keep `h.id IS NULL` **unconditionally** — there is no `includeHidden` anywhere: rollups, facets, sparklines and summaries never see a hidden shop, so a hidden listing can never be "Best". The per-shop panel feed (`findListingsWithLatestObservation`) returns every row with a `hidden` flag and the SPA decides presentation: hiding a shop **removes its row at once** and leaves an "<shop> hidden / Undo" line in its slot for 6s (`ListingPanel.UNDO_WINDOW_MS`, a deadline PER row so a second hide cannot extend the first; paused while that row's Undo holds focus, and focus only moves there when Hide was activated by keyboard — `event.detail === 0` — because exempting programmatic focus from the pause once let the timer unmount a focused button), and already-hidden shops live in a collapsed "Hidden shops (N) / excluded from price comparisons" section at the foot of that panel, shown directly when nothing visible is left. There is deliberately **no reveal toggle**: a dashboard-wide "Show hidden" checkbox shipped first and made Hide look broken, because in that mode the row stayed put. The just-acted-on rows are local phase state (`hiding` / `undoable`) keyed by listing id, never derived from the query — a hide triggers two refetches and the row returns flagged `hidden`, which would otherwise drop the undo line early and list the shop twice. Single-listing lookups (`listing()`, `priceHistory()`) stay unfiltered so a hidden listing is still refreshable and un-hideable by id. The one writer is `PATCH /api/tracked-products/{productId}/listings/{itemId}` `{"hidden": bool}` → 204, on `DashboardController` next to the user's own delete (under `/api/products/**` it would be admin-only); `UserScopedCatalog.setListingHidden` proves membership with `listing()` first (404 `"Tracked item not found"`), then runs one idempotent statement on `UserProductRepository` (`hideListing` = `INSERT … ON CONFLICT DO NOTHING`, `showListing` = membership-scoped `DELETE`). `added_at` is stored now and projected when #226 reads it; notification grain is Phase 3's.
 
 **Price extraction waterfall** (each tier attempted in order; first success short-circuits):
 ```
@@ -241,6 +241,7 @@ The scraper response carries an `extractionSource` enum (`STRUCTURED | SNIPPET |
 - `AppUser` — application identity keyed on `(issuer, sub)` (V15, #243); `id` is what the schema references.
 - `UserProduct` — the tenancy membership row (V17, #246; supersedes V16's per-listing `user_tracked_item`, dropped): "user U tracks product P". Unique on `(user_id, product_id)`, both FKs `ON DELETE CASCADE` at the database (mirrored by Hibernate `@OnDelete` so the H2 suites generate the same DDL), lazy non-optional `@ManyToOne`s, **no JPA cascade into the catalog**. `addedAt` is the per-user "recently added" key (#226). Written only through `UserScopedCatalog.track()` (idempotent) and removed by `stopTracking()`; the dev seeder is the one other writer (it tracks its fixtures for the owner — the first account provisioned, found as the lowest id — only).
 - `Invitation` — invite-only registration (V18, #249): "this normalized email may hold an account". `email` is the match key here and only here (never an identity), `invited_by` / `redeemed_by` are plain id columns (NULL inviter = the hand-inserted bootstrap row), `expires_at` is creation + 7 days, `revoked_at` / `redeemed_at` are the outcomes. One OPEN row per email (`uq_invitation_open_email`, partial); re-inviting supersedes the open row; `ck_invitation_email_normalized` rejects a hand-typed mixed-case address. Written only through `RegistrationService`.
+- `HiddenListing` — one membership hiding one shop (V19, #250): `user_product_id` + `tracked_item_id`, unique on the pair, both FKs cascade at the database (mirrored by `@OnDelete`), no other column — presence is the state. No repository of its own: read through the outer joins on `UserProductRepository`, written by its two native statements.
 - `PriceRecord` — immutable price snapshot (BigDecimal, LocalDateTime set via `@PrePersist`, availability flag, `extractionSource`)
 - `PriceInfo` — Java record DTO carrying `price`, `currency`, `available`, and `extractionSource`
 - `ExtractionSource` — shared enum (`STRUCTURED | SNIPPET | FULLTEXT`) used across `ScrapeResponse`, `PriceInfo`, and `PriceRecord`
@@ -553,6 +554,36 @@ All three methods are `@Transactional(propagation = REQUIRES_NEW)` so audit rows
 **Hard rule:** scheduler methods themselves must stay non-`@Transactional`. They make outbound HTTP calls (scraper, ECB) and holding a DB connection across that I/O starves the pool. Wiring the recorder in does not change that — only the recorder methods carry `@Transactional`.
 
 New scheduler? Wire the recorder the same way `PriceCheckScheduler.refreshAll()` does: start at the top, per-item record inside the loop, complete in a finally, outer try/catch routes catastrophic failure into a final `complete(..., JobStatus.FAILED, ...)`.
+
+## Structured logging
+
+Both Spring apps log **ECS JSON to a file and plain text to the console** (#275, epic #274):
+`logging.structured.format.file=ecs` + `logging.file.name` in each `application.properties`, native to
+Boot 3.4+ (no `logstash-logback-encoder`, no `logback-spring.xml`). MDC keys become top-level JSON
+fields, so `correlationId` -- the request id, or a scheduler's `sched-` / `fx-` / `purge-` id -- is
+queryable without a custom parser, and `spring.application.name` (`pricehunt-backend` /
+`pricehunt-bff`) becomes ECS `service.name`. The file is what Alloy will tail (#277): backend and BFF
+run on the host until #263, so Docker stdout would ship the scraper and nothing else.
+
+- **Where:** `logs/pricehunt-backend.log` and `logs/pricehunt-bff.log` at the checkout root,
+  gitignored. Caps are **per app**: 10 MB per file and a 100 MB `total-size-cap` over that app's
+  archives, so the directory holds up to ~220 MB with both running (Boot's default cap is
+  *unlimited*, which is what these lines exist to close). `../logs` is resolved against the **working
+  directory**, which is right for both documented dev loops; launching from the repo root instead
+  puts it outside the checkout, and Boot's own `LOGGING_FILE_NAME` is the override.
+- **Console:** the correlation id lives in `logging.pattern.correlation=%esb(%X{correlationId:-})`,
+  Boot's own slot. `%esb` supplies its own trailing separator and collapses to nothing when the MDC
+  key is absent, so never add a space to that value.
+- **Container profile** (`application-container.properties`, the rest arrives with #263): console
+  becomes ECS because Docker captures stdout, and an **empty** `logging.file.name` switches the file
+  appender off (`LogFile.get` returns null, so none is built).
+- **Tests never write that file**, via `src/test/resources/logback-test.xml` in each module rather
+  than a property. Boot's `LogbackLoggingSystem.initialize()` returns early once the JVM's
+  `LoggerContext` is marked initialized, so **the first Spring context in a surefire fork configures
+  logging for the whole run** and no per-test `logging.file.name` can move the appender; 21
+  context-booting test classes also activate no profile. Worth knowing before trying to assert on log
+  output from a `@SpringBootTest` -- `EcsStructuredLoggingTest` drives `StructuredLogEncoder`
+  directly for that reason.
 
 ## Key Conventions
 

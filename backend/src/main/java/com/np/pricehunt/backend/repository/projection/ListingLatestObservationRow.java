@@ -38,4 +38,7 @@ public interface ListingLatestObservationRow {
     AvailabilityStatus getAvailability();
 
     Instant getObservedAt();
+
+    /** Whether the caller hid this listing (#250): {@code (h.id IS NOT NULL)}, so never null unlike the observation columns. */
+    boolean getHidden();
 }

@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.np.pricehunt.backend.domain.AppUser;
+import com.np.pricehunt.backend.domain.HiddenListing;
 import com.np.pricehunt.backend.domain.Product;
 import com.np.pricehunt.backend.domain.TrackedItem;
 import com.np.pricehunt.backend.domain.UserProduct;
@@ -108,6 +109,33 @@ class UserProductRepositoryTest {
                 .containsExactly(
                         org.assertj.core.groups.Tuple.tuple(sharedKsp.getId(), shared.getId(), "KSP"),
                         org.assertj.core.groups.Tuple.tuple(sharedBug.getId(), shared.getId(), "Bug"));
+    }
+
+    @Test
+    void listingFeeds_excludeAListingTheCallerHid_forThatCallerOnly() {
+        // The only H2 run of the HiddenListing outer join (#250); the writes are native, see the Postgres suite.
+        UserProduct alicesMembership = em.getEntityManager()
+                .createQuery(
+                        "SELECT up FROM UserProduct up WHERE up.user.id = :u AND up.product.id = :p", UserProduct.class)
+                .setParameter("u", alice.getId())
+                .setParameter("p", shared.getId())
+                .getSingleResult();
+        em.persist(HiddenListing.builder()
+                .userProduct(alicesMembership)
+                .trackedItem(em.find(TrackedItem.class, sharedKsp.getId()))
+                .build());
+        em.flush();
+        em.clear();
+
+        assertThat(repository.findListingsOfTrackedProducts(alice.getId()))
+                .extracting(DashboardListingRef::shopName)
+                .containsExactly("Bug");
+        assertThat(repository.findListings(alice.getId(), shared.getId()))
+                .extracting(DashboardListingRef::shopName)
+                .containsExactly("Bug");
+        assertThat(repository.findListings(bob.getId(), shared.getId()))
+                .extracting(DashboardListingRef::shopName)
+                .containsExactly("KSP", "Bug");
     }
 
     @Test

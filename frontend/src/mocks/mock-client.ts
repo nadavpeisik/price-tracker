@@ -43,7 +43,7 @@ function matches(entry: MockDbEntry, query: DashboardQuery): boolean {
     // Fold BOTH sides, like the backend: a canonicalized "KSP" chip must still
     // match a listing spelled "ksp" (and vice versa).
     const shops = new Set(query.shops.map(foldShop))
-    if (!entry.listings.some((l) => shops.has(foldShop(l.shopName)))) return false
+    if (!entry.listings.some((l) => !l.hidden && shops.has(foldShop(l.shopName)))) return false
   }
   return true
 }
@@ -124,6 +124,7 @@ function facetShops(all: MockDbEntry[]): string[] {
   const labelByKey = new Map<string, string>()
   for (const entry of all) {
     for (const l of entry.listings) {
+      if (l.hidden) continue
       const key = foldShop(l.shopName)
       if (key !== null && !labelByKey.has(key)) labelByKey.set(key, l.shopName!)
     }
@@ -150,4 +151,18 @@ export async function mockFetchListings(productId: number): Promise<Listing[]> {
     const byPrice = Number(a.priceConverted) - Number(b.priceConverted)
     return byPrice !== 0 ? byPrice : a.trackedItemId - b.trackedItemId
   })
+}
+
+/**
+ * Hide/show one listing (#250). Flips the flag on the listing only: the entry's
+ * precomputed product rollups (best price, availability, sparkline) stay as
+ * built, so in mock mode the row does not move when its best shop is hidden.
+ * The panel, the shop chips and shop matching do follow the flag.
+ */
+export async function mockSetListingHidden(productId: number, trackedItemId: number, hidden: boolean): Promise<void> {
+  await sleep(LATENCY_MS)
+  const entry = getDb().find((e) => e.product.id === productId)
+  const listing = entry?.listings.find((l) => l.trackedItemId === trackedItemId)
+  if (!listing) throw new Error(`Unknown listing ${trackedItemId} under product ${productId}`)
+  listing.hidden = hidden
 }
