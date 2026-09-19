@@ -25,7 +25,10 @@ coverage.xml
 *.log
 # ECS log files the backend and BFF write (issue #275). Anchored: only the repo-root output
 # dir. *.log above misses the rotated archives (pricehunt-backend.log.2026-09-17.0.gz).
-/logs/
+# The directory itself is kept (#277): Alloy bind-mounts it, and on Linux a missing bind source is
+# created root-owned by the daemon, which the host-run apps then cannot write into.
+/logs/*
+!/logs/.gitkeep
 
 # Claude Code per-project config (plugin enablement, local permission allowlist)
 .claude/

@@ -112,6 +112,13 @@ public class BackendProxyHandler {
                     fromBackend.getHeaders().getFirst(HttpHeaders.WWW_AUTHENTICATE));
             throw new BackendRejectedGatewayTokenException("The backend rejected the gateway's token");
         }
+        // The BFF's one line per proxied request (#277): without it a successful call leaves no BFF
+        // line under its correlation id, and the three-service Loki query cannot show this hop.
+        log.info(
+                "Proxied {} {} -> {}",
+                method,
+                request.getRequestURI(),
+                fromBackend.getStatusCode().value());
         writeResponse(response, fromBackend);
     }
 
