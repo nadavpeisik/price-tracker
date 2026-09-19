@@ -195,7 +195,7 @@ Base path: `/api/products`
 
 ## Logs
 
-Every service's logs land in one Loki store (#277), queryable from Grafana at http://localhost:3000
+Backend, BFF and scraper logs land in one Loki store (#277), queryable from Grafana at http://localhost:3000
 → **Explore** → **PriceHuntLoki**. Alloy collects from two places: the ECS JSON files the host-run
 backend and BFF write to `logs/`, and the scraper container's stdout. Every request carries one
 `correlationId` across all three hops (the `X-Correlation-ID` response header, or a scheduler's
