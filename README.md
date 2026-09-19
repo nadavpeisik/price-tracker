@@ -56,7 +56,8 @@ price-tracker/
 ├── backend/          Spring Boot 4 — REST API, JPA, price-extraction orchestration
 ├── bff/              Spring Boot 4 — browser session gateway: Auth0 login, cookie session, API proxy
 ├── scraper/          Python FastAPI + Playwright — DOM pruning + tier 1/2 extraction
-├── compose.yaml      Docker Compose — postgres + scraper (auto-started by Spring Boot)
+├── compose.yaml      Docker Compose — postgres, scraper, grafana, loki, alloy (auto-started by Spring Boot)
+├── infra/            Grafana dashboards + datasources, Loki and Alloy config, Postgres init scripts
 └── .github/workflows/
     ├── ci.yml          Backend + BFF + scraper tests on every PR
     └── e2e-nightly.yml Canary scrapes against real sites, nightly + on-demand
@@ -80,7 +81,7 @@ export GROQ_API_KEY='gsk_your_key_here'
 # tenant issuer. Trailing slash mandatory. AUTH0_AUDIENCE defaults to pricehunt-api.
 export AUTH0_ISSUER_URI='https://your-tenant.eu.auth0.com/'
 
-# Start the backend — Spring Boot auto-starts postgres + scraper via Docker Compose
+# Start the backend — Spring Boot auto-starts postgres, scraper, grafana, loki and alloy via Docker Compose
 cd backend
 ./mvnw spring-boot:run
 
@@ -192,13 +193,42 @@ Base path: `/api/products`
 | `DELETE` | `/{id}/tracked-items/{itemId}` | Remove a tracked URL from the catalog — **admin only**; users stop tracking the product instead |
 | `GET` | `/{id}/tracked-items/{itemId}/price-history` | Price history with optional `?from`/`?to` ISO timestamps (404 unless the caller tracks the product) |
 
+## Logs
+
+Every service's logs land in one Loki store (#277), queryable from Grafana at http://localhost:3000
+→ **Explore** → **PriceHuntLoki**. Alloy collects from two places: the ECS JSON files the host-run
+backend and BFF write to `logs/`, and the scraper container's stdout. Every request carries one
+`correlationId` across all three hops (the `X-Correlation-ID` response header, or a scheduler's
+`sched-` / `fx-` / `purge-` id), so one query follows a request end to end:
+
+```logql
+{env="dev"} | correlationId="<id>"
+```
+
+A tracked refresh comes back as three lines: the scraper's `POST /scrape`, the backend's `Tracked
+itemId=…`, and the BFF's `Proxied POST … -> 200`. `correlationId` is structured metadata, not a label,
+so the filter needs no parser. Errors are one label away (`{service="pricehunt-backend", level="ERROR"}`);
+for any other JSON field add a parser, which flattens the nesting with underscores, e.g.
+`{service="pricehunt-backend"} | json | log_logger=~".*PriceCheckPipeline"`.
+
+| label | values |
+|---|---|
+| `service` | `pricehunt-backend`, `pricehunt-bff`, `pricehunt-scraper` |
+| `level` | the ECS `log.level` (`INFO`, `WARN`, `ERROR`, …) |
+| `env` | `dev` |
+
+Retention is 14 days. Loki answers directly on `127.0.0.1:3100`, and Alloy's pipeline UI is at
+http://127.0.0.1:12345 (the first place to look when lines are missing). Postgres and Grafana are
+not collected yet (#263); use `docker compose logs` for them.
+
 ## Tech stack
 
 - **Backend:** Java 21, Spring Boot 4.0.3, Spring AI 2.0.0-M2, Spring Data JPA, Lombok
 - **Scraper:** Python 3.12, FastAPI 0.135, Playwright 1.58 (chromium), pytest
 - **Storage:** PostgreSQL 17
 - **LLM:** Groq Cloud (`openai/gpt-oss-20b` / `-120b`, strict schema-enforced JSON); local Ollama fallback under the `ollama` profile. Tier 1 keeps most requests off the LLM entirely
-- **Orchestration:** Docker Compose (postgres + scraper); Spring Boot's `spring-boot-docker-compose` starts them on `./mvnw spring-boot:run`
+- **Logs:** Loki + Grafana Alloy, queried from Grafana — see [Logs](#logs)
+- **Orchestration:** Docker Compose (postgres, scraper, grafana, loki, alloy); Spring Boot's `spring-boot-docker-compose` starts them on `./mvnw spring-boot:run`
 - **CI:** GitHub Actions
 
 ## Status & roadmap

@@ -1,6 +1,15 @@
+# Docker's own copy of every container's stdout, capped (#277). Loki ingesting a container's logs does
+# not stop this file growing, so this is the disk floor whatever happens to the pipeline.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: '10m'
+    max-file: '3'
+
 services:
   postgres:
     image: 'postgres:17'
+    logging: *default-logging
     environment:
       - 'POSTGRES_DB=${POSTGRES_DB:?POSTGRES_DB not set — copy .env.example to .env}'
       - 'POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD not set — copy .env.example to .env}'
@@ -18,6 +27,7 @@ services:
   scraper:
     build:
       context: ./scraper
+    logging: *default-logging
     ports:
       - '127.0.0.1:8001:8001'
     volumes:
@@ -28,6 +38,7 @@ services:
     command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001", "--reload", "--reload-include", "*.js"]
   grafana:
     image: 'grafana/grafana:11.4.0'
+    logging: *default-logging
     environment:
       # Seeds the admin only on first boot of grafana_data — an existing volume keeps its
       # old login (possibly the pre-#242 admin/admin) and ignores later changes here. Reset in place:
@@ -46,7 +57,37 @@ services:
       - grafana_data:/var/lib/grafana
     depends_on:
       - postgres
+  # Log store (#277); retention lives in infra/loki/config.yaml.
+  loki:
+    image: 'grafana/loki:3.7.8'
+    logging: *default-logging
+    command: ['-config.file=/etc/loki/config.yaml']
+    ports:
+      - '127.0.0.1:3100:3100'
+    volumes:
+      - ./infra/loki/config.yaml:/etc/loki/config.yaml:ro
+      - loki_data:/loki
+  # Collector (#277); pipeline in infra/alloy/config.alloy, debug UI on 127.0.0.1:12345.
+  alloy:
+    image: 'grafana/alloy:v1.19.2'
+    logging: *default-logging
+    command: ['run', '--server.http.listen-addr=0.0.0.0:12345', '--storage.path=/var/lib/alloy/data', '/etc/alloy/config.alloy']
+    ports:
+      - '127.0.0.1:12345:12345'
+    volumes:
+      - ./infra/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - ./logs:/var/log/pricehunt:ro
+      # ':ro' protects the socket file, not the Docker API: this is effectively root on the host.
+      # Accepted for dev only (loopback binds, our own config, pinned image); an allow-listed socket
+      # proxy replaces it at #263.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Tail positions, so a restart does not ship every file again.
+      - alloy_data:/var/lib/alloy/data
+    depends_on:
+      - loki
 
 volumes:
   postgres_data:
   grafana_data:
+  loki_data:
+  alloy_data:

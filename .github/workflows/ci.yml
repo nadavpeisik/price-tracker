@@ -88,6 +88,28 @@ jobs:
           fi
           echo "Mock-mode production build failed via the gate, as intended."
 
+  observability-config:
+    # Config-as-code nothing else loads before `docker compose up` (#277). Schema-level only: Alloy's
+    # validate catches an unknown stage or argument, not what a pipeline does to a line. Image tags
+    # match compose.yaml.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate Loki config
+        run: >-
+          docker run --rm
+          -v "$PWD/infra/loki/config.yaml:/etc/loki/config.yaml:ro"
+          grafana/loki:3.7.8 -config.file=/etc/loki/config.yaml -verify-config
+      - name: Validate Alloy config
+        run: >-
+          docker run --rm
+          -v "$PWD/infra/alloy/config.alloy:/etc/alloy/config.alloy:ro"
+          grafana/alloy:v1.19.2 validate /etc/alloy/config.alloy
+      - name: Validate compose.yaml
+        run: docker compose --env-file .env.example config -q
+
   build-test-scan:
     runs-on: ubuntu-latest
     # Capability marker, NOT the token. GitHub withholds repository secrets from Dependabot-triggered

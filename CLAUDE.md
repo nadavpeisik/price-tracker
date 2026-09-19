@@ -13,11 +13,12 @@ of a working symlink; verify with `cat AGENTS.md` after checkout if in doubt.
 
 ```text
 price-tracker/
-├── compose.yaml      ← orchestrates postgres, scraper, and grafana (the LLM is hosted; local Ollama runs natively)
+├── compose.yaml      ← orchestrates postgres, scraper, grafana, loki and alloy (the LLM is hosted; local Ollama runs natively)
 ├── backend/          ← Spring Boot backend (bearer-only resource server)
 ├── bff/              ← Spring Boot BFF: Auth0 login, cookie session in Postgres, /bff/api proxy (#247)
 ├── scraper/          ← Python FastAPI + Playwright scraper
-└── infra/grafana/    ← provisioned Grafana datasource + dashboards
+├── infra/grafana/    ← provisioned Grafana datasources (Postgres + Loki) + dashboards
+└── infra/{loki,alloy}/ ← log store + collector config (#277)
 ```
 
 The BFF is a second Maven build with the backend's layout (`auth/`, `config/`, `controller/`, `exception/`, plus
@@ -38,7 +39,7 @@ Compose integration of its own on purpose (the backend owns compose auto-start),
 ./mvnw package                # Create JAR
 ```
 
-`compose.yaml` lives at the repo root (`../compose.yaml`). Spring Boot finds it via `spring.docker.compose.file=../compose.yaml` in `application.properties`. It spins up PostgreSQL (5432), the Python scraper (8001), and Grafana (3000) automatically — no manual `docker-compose up` needed. Price extraction calls **Groq Cloud**, so a `GROQ_API_KEY` must be exported (issue #121); the app fails fast at boot without it. To work offline instead, run `ollama serve` natively (11434, never via Compose) and start with `--spring.profiles.active=ollama`.
+`compose.yaml` lives at the repo root (`../compose.yaml`). Spring Boot finds it via `spring.docker.compose.file=../compose.yaml` in `application.properties`. It spins up PostgreSQL (5432), the Python scraper (8001), Grafana (3000), Loki (3100) and Alloy (12345) automatically — no manual `docker-compose up` needed. Price extraction calls **Groq Cloud**, so a `GROQ_API_KEY` must be exported (issue #121); the app fails fast at boot without it. To work offline instead, run `ollama serve` natively (11434, never via Compose) and start with `--spring.profiles.active=ollama`.
 
 **The backend has no `spring.datasource.url` of its own — Boot's Compose integration supplies it.** So
 `SPRING_DOCKER_COMPOSE_ENABLED=false` does not just skip starting containers, it removes the JDBC URL, and
@@ -675,8 +676,9 @@ Design notes (decided in discussion, revisit when the work starts):
 ## Infrastructure
 
 - **Database:** PostgreSQL — credentials come from the git-ignored `.env` (`.env.example` documents the names; do not commit credentials to git)
-- **LLM:** Groq Cloud (hosted; `GROQ_API_KEY` required). Local fallback = Ollama under the `ollama` profile, run **natively** — never via Docker Compose; `compose.yaml` orchestrates only `postgres`, `scraper`, and `grafana`
+- **LLM:** Groq Cloud (hosted; `GROQ_API_KEY` required). Local fallback = Ollama under the `ollama` profile, run **natively** — never via Docker Compose; `compose.yaml` orchestrates only `postgres`, `scraper`, `grafana`, `loki` and `alloy`
 - **Scraper:** Python FastAPI + Playwright at `localhost:8001` (built from `scraper/Dockerfile` by Docker Compose)
 - **Kafka** — in `pom.xml`, wired up in Phase 2
 - **Dashboards:** Grafana 11.4.0 at `localhost:3000` (login from `GRAFANA_ADMIN_USER`/`GRAFANA_ADMIN_PASSWORD` in `.env` — seeded only when `grafana_data` is first initialized; an existing volume keeps its old login until `docker compose exec grafana grafana cli admin reset-admin-password <new>`; the datasource connects as `grafana_reader`, a SELECT-only Postgres role created by `infra/postgres/init/create-grafana-role.sh` — #242. That script only auto-runs when Postgres initializes an empty volume; on a pre-#242 `postgres_data` volume run it once by hand: `docker compose exec postgres bash /docker-entrypoint-initdb.d/create-grafana-role.sh`). Provisioned datasource + dashboards under `infra/grafana/`. All time-scoped Postgres panels MUST use the Grafana `$__timeFilter(column)` macro — hardcoded `WHERE x > NOW() - INTERVAL ...` makes the dashboard's time picker inert. New dashboards: drop a JSON into `infra/grafana/dashboards/`; the file provider picks it up every 30s.
+- **Logs (#277):** Loki + Grafana Alloy, config in `infra/loki/` and `infra/alloy/` (whose comments carry the load-bearing choices; CI only schema-validates them), queried from Grafana's `PriceHuntLoki` datasource as the README's *Logs* section describes. The Docker socket mount on `alloy` is root-equivalent, accepted for dev; a socket proxy is #263's. Compose `up` does **not** rebuild the scraper image: after a scraper dependency change, `docker compose build scraper` (a stale image crash-loops on the missing module). From a worktree, run compose with `-p price-tracker --env-file <main checkout>/.env`, and afterwards `docker compose up -d` from the main checkout, or the shared containers keep mounting worktree paths.
 - Spring Boot version: **4.0.3** | Spring AI version: **2.0.0-M2** | Java: **21** | Scraper Python: **3.12** (`scraper/.python-version` pins dev; `pyproject.toml` requires `>=3.12`; `Dockerfile` runs `python:3.12-slim`)

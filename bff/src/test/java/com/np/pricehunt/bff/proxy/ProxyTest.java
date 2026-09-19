@@ -10,6 +10,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.np.pricehunt.bff.config.CorrelationIdFilter;
 import com.np.pricehunt.bff.config.SecurityConfig;
 import com.np.pricehunt.bff.controller.MeController;
@@ -18,6 +21,7 @@ import com.np.pricehunt.bff.testsupport.FakeBackend;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MvcResult;
@@ -48,6 +52,31 @@ class ProxyTest extends BffIntegrationTest {
         assertThat(received.header("Cookie")).isNull();
         assertThat(received.header(CSRF_HEADER)).isNull();
         assertThat(received.body()).isEmpty();
+    }
+
+    /**
+     * The one BFF line a successful call leaves (#277), and the correlation id it must carry for the
+     * three-service Loki query to find it. A ListAppender on the class logger, not a log file: logback
+     * is configured once per test JVM, so a file assertion would depend on test order (#275).
+     */
+    @Test
+    void proxiedRequest_logsOnce_withCorrelationId() throws Exception {
+        Browser browser = login();
+        Logger logger = (Logger) LoggerFactory.getLogger(BackendProxyHandler.class);
+        ListAppender<ILoggingEvent> captured = new ListAppender<>();
+        captured.start();
+        logger.addAppender(captured);
+        try {
+            browser.perform(get("/bff/api/tracked-products?page=2").header(CorrelationIdFilter.HEADER, "corr-277"))
+                    .andExpect(status().isOk());
+        } finally {
+            logger.detachAppender(captured);
+        }
+
+        assertThat(captured.list).singleElement().satisfies(event -> {
+            assertThat(event.getFormattedMessage()).isEqualTo("Proxied GET /bff/api/tracked-products -> 200");
+            assertThat(event.getMDCPropertyMap()).containsEntry(CorrelationIdFilter.MDC_KEY, "corr-277");
+        });
     }
 
     @Test

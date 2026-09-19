@@ -1,0 +1,92 @@
+// --- Host-run apps: logs/pricehunt-{backend,bff}.log -------------------------------------------
+// *.log only: the rotated *.gz archives are skipped, so a file compressed while Alloy was down is
+// never read. The local file stays the source of truth for that window.
+loki.source.file "host_apps" {
+  targets    = [{"__path__" = "/var/log/pricehunt/*.log"}]
+  forward_to = [loki.process.ecs.receiver]
+
+  // Expands the glob and picks up files created later (the apps create theirs on first boot).
+  file_match {
+    enabled = true
+  }
+}
+
+// --- Containers: the scraper now, everything else under #263 -----------------------------------
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+// No compose-project filter, deliberately (#277 subtraction round): a second stack's scraper cannot run
+// beside this one, since it would collide on the published port 8001.
+discovery.relabel "scraper_only" {
+  targets = []
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    regex         = "scraper"
+    action        = "keep"
+  }
+}
+
+// Fed discovery.docker's targets directly, with the rules passed separately: discovery.relabel's
+// output targets have already lost __meta_docker_container_id, which this source tails by.
+loki.source.docker "scraper" {
+  host          = "unix:///var/run/docker.sock"
+  targets       = discovery.docker.containers.targets
+  // Fallback for lines that are not ECS JSON (uvicorn's reloader banner, a traceback from before
+  // logging is configured); the parsed service.name overrides it on every other line.
+  labels        = {service = "pricehunt-scraper"}
+  relabel_rules = discovery.relabel.scraper_only.rules
+  forward_to    = [loki.process.ecs.receiver]
+}
+
+// --- One pipeline for every source ---------------------------------------------------------------
+loki.process "ecs" {
+  forward_to = [loki.write.local.receiver]
+
+  // JMESPath: the dots walk the nesting ({"log":{"level":..},"service":{"name":..}}); correlationId
+  // is a flat top-level key on all three services.
+  stage.json {
+    expressions = {
+      service       = "service.name",
+      level         = "log.level",
+      correlationId = "correlationId",
+      ts            = "\"@timestamp\"",
+    }
+  }
+
+  // RFC3339Nano reads both Boot's millis + Z and the scraper's micros + +00:00. "skip", not the
+  // default "fudge": fudge stamps a line without @timestamp (uvicorn's plain reloader banner) with the
+  // previous JSON line's time + 1ns instead of leaving the time it was read.
+  stage.timestamp {
+    source            = "ts"
+    format            = "RFC3339Nano"
+    action_on_failure = "skip"
+  }
+
+  stage.labels {
+    values = {
+      service = "",
+      level   = "",
+    }
+  }
+
+  // One value per request: as a label it would create a stream per request (epic #274).
+  stage.structured_metadata {
+    values = {
+      correlationId = "",
+    }
+  }
+
+  stage.static_labels {
+    values = {
+      env = "dev",
+    }
+  }
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}
